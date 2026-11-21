@@ -7,7 +7,7 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.26** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.27** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
 rooms stable, M6-7b, #179, which added `resumed: "loaded"`, M6-7c, #235, which added
 `DELETE /rooms/:id`, M8-1, #265, which added a message's `from`, M8-2, #266, which
@@ -20,7 +20,8 @@ M8-7, #271, which added the orchestrator's turn cap; #371, which tightened the
 `daemon.json` lifecycle; M9-8, #307, which made the `/harnesses` routes stable; and
 M10-5, #494, which added `GET /config` and `PATCH /config`; M9-9, #501, which added
 an agent's thinking level; #511, which distinguishes a deleted room; M11-1, #475,
-which added the hall; and M11-2, #476, which added an agent's own `cwd`).
+which added the hall; M11-2, #476, which added an agent's own `cwd`; and #524,
+which added the hall scratch list and cleanup routes).
 
 ## Contents
 
@@ -371,6 +372,8 @@ the `GET` routes take none.
 | `GET /rooms/:id/agents/:agentId` | One participant. |
 | `PATCH /rooms/:id/agents/:agentId` | Rename a participant, or change its mode, role, model or thinking level. |
 | `DELETE /rooms/:id/agents/:agentId` | Remove a participant. |
+| `GET /rooms/:id/scratch` | List the hall's kept scratch folders and what each holds. |
+| `POST /rooms/:id/scratch/clean` | Remove the named stale hall scratch folders. |
 | `POST /rooms/:id/agents/:agentId/messages` | Send a message to one participant. |
 | `GET /rooms/:id/agents/:agentId/events` | One participant's lines of the room's stream. |
 | `POST /rooms/:id/agents/:agentId/turns/current/cancel` | Cancel a participant's turn and drop its queue. |
@@ -1265,9 +1268,11 @@ repair by hand is #518.
 - Since 1.26, an agent added to the hall with no `cwd` gets an empty folder of its own,
   under `scratch/hall/` in the daemon's state folder, with no branch. When the agent is
   removed, the folder goes with it while it is still empty; a folder the agent wrote into
-  is kept, and a notice says where. The daemon never removes a kept scratch folder
-  later; delete it by hand. An agent with a `cwd` works there, as in any room.
-  An agent added before 1.26 keeps working in the hall's folder, which it shares.
+  is kept, and a notice says where. Since 1.27, `kapelle chat scratch` lists the kept
+  folders and their contents, `kapelle chat scratch clean` previews them without deleting,
+  and `kapelle chat scratch clean --yes` removes only the folders no live hall agent owns.
+  An agent with a `cwd` works there, as in any room. An agent added before 1.26 keeps
+  working in the hall's folder, which it shares.
 - The hall has no orchestrator. An agent added to it, or changed, with
   `role: "orchestrator"` is refused `400` `invalid_request`. A message with no `@name`
   is refused: see [Addressing](#addressing).
@@ -1710,6 +1715,64 @@ is free again.
 
 **Reply `200`:** the room, without that participant. **Refusals:** `404`
 `room_not_found` or `participant_not_found`; `409` `room_dismissed`.
+
+### `GET /rooms/:id/scratch`
+
+Lists the entries under the hall's scratch root, `<stateDir>/scratch/hall` (since 1.27).
+Only the hall has scratch folders: another room id is `400` `invalid_request`. The live
+roster decides `inUse`: a participant's folder is protected even when it is empty.
+
+**Reply `200`:** an array of `ScratchFolder`:
+
+```json
+{
+  "id": "p-0k3x9a2b",
+  "path": "/home/me/.local/state/kapelle/scratch/hall/p-0k3x9a2b",
+  "inUse": false,
+  "kind": "directory",
+  "files": 2,
+  "bytes": 19,
+  "entries": ["notes.md", "src/"]
+}
+```
+
+`kind` is `directory` for a folder the clean route may remove, or `symlink` or `other`
+for an entry it reports but never follows. `entries` lists only the immediate children;
+a directory ends in `/` and a symlink in `@`. `files` and `bytes` count regular files
+below the folder without following symlinks; an unreadable folder carries `problem`.
+When `inUse` is true, `participant` names the live participant.
+
+A missing scratch root is an empty list, not an error. **Refusals:** `404`
+`room_not_found`; `400` `invalid_request` when the id is not the hall; `500` `internal`
+when the scratch root exists but is not a real folder or cannot be read.
+
+### `POST /rooms/:id/scratch/clean`
+
+Removes the named stale scratch folders (since 1.27). The daemon lists and removes under
+the same lock as hall adds and removes, so the live roster cannot change during the
+clean. A live participant's folder is never removed. Symlinks and other non-folders are
+reported and left untouched. Results are per folder, so one failure does not stop the
+rest; repeated ids run once. A missing scratch root answers `200` with one error result
+per id.
+
+**Request:** `{ "ids": ["p-0k3x9a2b"] }`.
+
+**Reply `200`:** every requested id, in request order:
+
+```json
+{
+  "results": [
+    { "id": "p-0k3x9a2b", "path": "...", "removed": true },
+    { "id": "p-live0000", "path": "...", "removed": false, "protected": true, "error": "the folder is in use by @ann" }
+  ]
+}
+```
+
+`protected: true` means the live roster kept the folder. It is not a removal failure.
+
+**Refusals:** `404` `room_not_found`; `400` `invalid_request` for another room or an
+`ids` value that is not an array of non-empty strings; `500` `internal` when the scratch
+root exists but is not a real folder or cannot be read.
 
 ### `POST /rooms/:id/agents/:agentId/messages`
 

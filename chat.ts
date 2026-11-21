@@ -6,8 +6,9 @@
  * This screen is not an API: its keys and lines may change. `kapelle chat`
  * runs this file (S7a).
  *
- * **The entry only** (M4-7): the arguments, the `new`, `attach`, `list` and
- * `dismiss` verbs, and which screen to open. The screens are in `chat/`:
+ * **The entry only** (M4-7): the arguments, the `new`, `attach`, `list`,
+ * `dismiss` and `scratch` verbs, and which screen to open. The screens are in
+ * `chat/`:
  * `chat/tui.ts` on a terminal, `chat/piped.ts` on a pipe, and what both use
  * in `chat/common.ts`.
  *
@@ -45,10 +46,16 @@ import { address } from "./chat/common.ts";
 import { chatPiped } from "./chat/piped.ts";
 import { chatTui } from "./chat/tui.ts";
 import { HALL_ID, HELP, NO_HALL } from "./client/command.ts";
-import type { RoomDto, RoomListEntry } from "./client/contract.ts";
+import type {
+  RoomDto,
+  RoomListEntry,
+  ScratchCleanReply,
+  ScratchFolder,
+} from "./client/contract.ts";
 import { call, checkVersion, type DaemonAddress } from "./client/daemon.ts";
 import { absoluteFolder, FOLDER_GONE } from "./client/folder.ts";
 import { fold } from "./client/mention.ts";
+import { printable } from "./client/room.ts";
 
 const USAGE = `usage:
   node chat.ts                                              every room and chat, on a terminal
@@ -57,6 +64,8 @@ const USAGE = `usage:
   node chat.ts attach <roomId|@name> [--no-setup]           rejoin a room; a pipe can open a hall chat
   node chat.ts list                                         every room, then every chat
   node chat.ts dismiss <roomId>                             stop a room's harness
+  node chat.ts scratch [clean [--yes]]                      kept hall scratch folders;
+                                                             clean previews, --yes removes
 
 --no-setup keeps the setup list closed at start; kapelle demo uses it.
 
@@ -148,6 +157,98 @@ async function attachTarget(
   return r.ok ? { room: r.body, participantId } : { error: r.error.message };
 }
 
+/** A folder's size for the scratch list, short enough for one line. */
+function size(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+/** Print one scratch folder. `entries` is what the operator is deciding on. */
+function printScratch(folder: ScratchFolder): void {
+  let state: string;
+  if (folder.inUse) {
+    state = `in use by @${printable(folder.participant ?? folder.id)} (protected)`;
+  } else if (folder.kind === "directory") {
+    state = "stale";
+  } else if (folder.kind === "symlink") {
+    state = "symbolic link (not removable)";
+  } else {
+    state = "not a folder (not removable)";
+  }
+  console.log(`${printable(folder.id)}  ${state}  ${printable(folder.path)}`);
+  if (folder.kind === "directory") {
+    const entries = folder.entries.length
+      ? folder.entries.map(printable).join(", ")
+      : "empty";
+    console.log(`  ${folder.files} file(s), ${size(folder.bytes)}: ${entries}`);
+  }
+  if (folder.problem !== undefined) {
+    console.log(`  ! ${printable(folder.problem)}`);
+  }
+}
+
+/** `kapelle chat scratch [clean [--yes]]` — list, preview, or remove stale
+ *  hall scratch folders. The daemon's live roster decides which are stale. */
+async function runScratch(
+  d: DaemonAddress,
+  clean: boolean,
+  yes: boolean,
+): Promise<number> {
+  const r = await call<ScratchFolder[]>(d, `/rooms/${HALL_ID}/scratch`);
+  if (!r.ok) {
+    console.error(`error: ${r.error.message}`);
+    return 1;
+  }
+  for (const folder of r.body) printScratch(folder);
+  if (!clean) return 0;
+
+  const stale = r.body.filter(
+    (folder) => !folder.inUse && folder.kind === "directory",
+  );
+  if (!yes) {
+    console.log(
+      stale.length
+        ? `nothing was deleted; run kapelle chat scratch clean --yes to remove ${stale.length} stale folder(s)`
+        : "nothing to remove",
+    );
+    return 0;
+  }
+  if (stale.length === 0) {
+    console.log("nothing to remove");
+    return 0;
+  }
+
+  const cleaned = await call<ScratchCleanReply>(
+    d,
+    `/rooms/${HALL_ID}/scratch/clean`,
+    {
+      method: "POST",
+      body: { ids: stale.map((folder) => folder.id) },
+    },
+  );
+  if (!cleaned.ok) {
+    console.error(`error: ${cleaned.error.message}`);
+    return 1;
+  }
+  let failed = 0;
+  for (const result of cleaned.body.results) {
+    if (result.removed) {
+      console.log(`removed ${printable(result.path)}`);
+    } else if (result.protected) {
+      console.log(
+        `kept ${printable(result.path)}: ${printable(result.error ?? "in use")}`,
+      );
+    } else {
+      failed++;
+      console.error(
+        `! could not remove ${printable(result.path)}: ${printable(result.error ?? "unknown error")}`,
+      );
+    }
+  }
+  return failed > 0 ? 1 : 0;
+}
+
 async function main(): Promise<number> {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
@@ -157,6 +258,7 @@ async function main(): Promise<number> {
       name: { type: "string" },
       cwd: { type: "string" },
       "no-setup": { type: "boolean" },
+      yes: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -215,6 +317,18 @@ async function main(): Promise<number> {
       return 1;
     }
     return chat(d, found.room, !values["no-setup"], found.participantId);
+  }
+
+  if (verb === "scratch") {
+    if (
+      positionals.length > 2 ||
+      (arg !== undefined && arg !== "clean") ||
+      (values.yes && arg !== "clean")
+    ) {
+      console.error(USAGE);
+      return 1;
+    }
+    return runScratch(d, arg === "clean", values.yes === true);
   }
 
   if (verb === "list") {

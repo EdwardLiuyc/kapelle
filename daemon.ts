@@ -78,6 +78,8 @@ import {
   type RunDto,
   type RunListEntry,
   type RunStatus,
+  type ScratchCleanReply,
+  type ScratchFolder,
   type VersionReply,
 } from "./client/contract.ts";
 import {
@@ -175,6 +177,7 @@ import {
 } from "./daemon/http.ts";
 import { createRooms, type RoomEntry } from "./daemon/rooms.ts";
 import { cancelRun } from "./daemon/run.ts";
+import { cleanScratch, listScratch } from "./daemon/scratch.ts";
 import { streamLog } from "./daemon/sse.ts";
 import { AGENTS } from "./protocol/registry.ts";
 
@@ -1282,7 +1285,7 @@ async function openHall(): Promise<void> {
       bus,
       permissions,
       noteSession,
-      scratchDir: join(stateDir(), "scratch", HALL_ID),
+      scratchDir: hallScratchDir(),
       openPlace: placeOpener(HALL_ID),
     };
     const path = roomFile(cwd, HALL_ID);
@@ -1328,6 +1331,11 @@ async function openHall(): Promise<void> {
 /** The hall's own folder. A declaration: the boot sweep needs it first. */
 function hallDir(): string {
   return join(stateDir(), "hall");
+}
+
+/** Where the hall keeps each participant's scratch folder. */
+function hallScratchDir(): string {
+  return join(stateDir(), "scratch", HALL_ID);
 }
 
 /**
@@ -1618,7 +1626,8 @@ async function postAgent(
   if (stopping) throw shuttingDown();
   let participant: Awaited<ReturnType<Room["add"]>>;
   try {
-    participant = await entry.room.add(request);
+    const add = () => entry.room.add(request);
+    participant = id === HALL_ID ? await withScratchChange(add) : await add();
   } catch (err) {
     // A shutdown pauses the room under the add, which then reads as
     // dismissed; the daemon's own reason is the true one.
@@ -1730,13 +1739,119 @@ async function patchRoom(
   send(res, 200, toRoomDto(entry.state, entry.room) satisfies RoomDto);
 }
 
+/** The live hall roster keyed by participant id, for the scratch routes. */
+function liveScratch(room: Room): Map<string, string> {
+  return new Map(room.participants.map((p) => [p.id, p.name] as const));
+}
+
+/** Hall adds and removes are readers of the scratch tree; listing and
+ *  cleaning are writers. Readers may run together, but a writer waits for
+ *  every in-flight reader and keeps new readers out until it finishes. An add
+ *  makes a folder before its participant joins the roster, so a scratch
+ *  snapshot must not run beside it. */
+let scratchReaders = 0;
+let scratchWriting = false;
+let scratchWriters: Promise<void> = Promise.resolve();
+const scratchDrain: (() => void)[] = [];
+
+async function afterScratchWriter(
+  previous: Promise<void>,
+  mine: Promise<void>,
+): Promise<void> {
+  await previous;
+  await mine;
+}
+
+async function withScratchChange<T>(work: () => Promise<T>): Promise<T> {
+  while (scratchWriting) await scratchWriters;
+  scratchReaders++;
+  try {
+    return await work();
+  } finally {
+    scratchReaders--;
+    if (scratchReaders === 0) {
+      for (const wake of scratchDrain.splice(0)) wake();
+    }
+  }
+}
+
+async function withScratchSnapshot<T>(work: () => Promise<T>): Promise<T> {
+  const previous = scratchWriters;
+  let finish!: () => void;
+  const mine = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  scratchWriters = afterScratchWriter(previous, mine);
+  await previous;
+  scratchWriting = true;
+  try {
+    if (scratchReaders > 0) {
+      await new Promise<void>((resolve) => scratchDrain.push(resolve));
+    }
+    return await work();
+  } finally {
+    scratchWriting = false;
+    finish();
+  }
+}
+
+/** `GET /rooms/:id/scratch` — every entry under the hall's scratch root,
+ *  with its live owner when it has one. Only the hall has scratch folders. */
+async function getScratch(id: string, res: ServerResponse) {
+  const entry = await roomEntry(id);
+  if (id !== HALL_ID) {
+    throw refusal(400, "invalid_request", "only the hall has scratch folders");
+  }
+  const folders = await withScratchSnapshot(() =>
+    listScratch(hallScratchDir(), liveScratch(entry.room)),
+  );
+  send(res, 200, folders satisfies ScratchFolder[]);
+}
+
+/** `POST /rooms/:id/scratch/clean {"ids": [...]}` — remove the named stale
+ *  folders. Each id gets its own result, so one failure does not stop the
+ *  others. The snapshot is taken under the scratch lock, so the roster cannot
+ *  change while the clean runs. */
+async function postScratchClean(
+  id: string,
+  req: IncomingMessage,
+  res: ServerResponse,
+) {
+  const entry = await roomEntry(id);
+  if (id !== HALL_ID) {
+    throw refusal(400, "invalid_request", "only the hall has scratch folders");
+  }
+  const body = await readBody(req, ["ids"]);
+  const ids = body.ids;
+  if (
+    !Array.isArray(ids) ||
+    ids.some((value) => typeof value !== "string" || value === "")
+  ) {
+    throw refusal(
+      400,
+      "invalid_request",
+      '"ids" must be an array of non-empty strings',
+    );
+  }
+  const results = await withScratchSnapshot(() =>
+    cleanScratch(
+      hallScratchDir(),
+      [...new Set(ids as string[])],
+      liveScratch(entry.room),
+    ),
+  );
+  send(res, 200, { results } satisfies ScratchCleanReply);
+}
+
 /** `DELETE /rooms/:id/agents/:agentId` — cancels the participant's turn,
  *  stops its harness and keeps its work, as a dismiss does (R37). Answers
  *  the room, without it. */
 async function deleteAgent(id: string, agentId: string, res: ServerResponse) {
   const entry = await roomEntry(id);
   try {
-    await entry.room.remove(agentId);
+    const remove = () => entry.room.remove(agentId);
+    if (id === HALL_ID) await withScratchChange(remove);
+    else await remove();
   } catch (err) {
     throw changeRefused(err);
   }
@@ -2361,9 +2476,10 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   const decision = /^\/permissions\/([^/]+)$/.exec(pathname);
   const room = /^\/rooms\/([^/]+)$/.exec(pathname);
   const roomSub =
-    /^\/rooms\/([^/]+)\/(events|messages|dismiss|agents|delete-preview)$/.exec(
+    /^\/rooms\/([^/]+)\/(events|messages|dismiss|agents|delete-preview|scratch)$/.exec(
       pathname,
     );
+  const scratchClean = /^\/rooms\/([^/]+)\/scratch\/clean$/.exec(pathname);
   const agentOne = /^\/rooms\/([^/]+)\/agents\/([^/]+)$/.exec(pathname);
   const agentSub =
     /^\/rooms\/([^/]+)\/agents\/([^/]+)\/(messages|events|diff|fast-forward|turns\/current\/cancel)$/.exec(
@@ -2453,6 +2569,10 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     agentSub?.[3] === "turns/current/cancel"
   ) {
     await cancelTurn(agentSub[1] as string, agentSub[2] as string, res);
+  } else if (req.method === "GET" && roomSub?.[2] === "scratch") {
+    await getScratch(roomSub[1] as string, res);
+  } else if (req.method === "POST" && scratchClean) {
+    await postScratchClean(scratchClean[1] as string, req, res);
   } else if (req.method === "POST" && roomSub?.[2] === "agents") {
     await postAgent(roomSub[1] as string, req, res);
   } else if (req.method === "GET" && roomSub?.[2] === "agents") {
