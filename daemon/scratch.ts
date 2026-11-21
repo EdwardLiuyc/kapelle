@@ -23,6 +23,7 @@ const missing = (err: unknown) =>
   (err as NodeJS.ErrnoException).code === "ENOENT";
 
 type Live = ReadonlyMap<string, string>;
+type ScanResult = Pick<ScratchFolder, "entries" | "files" | "bytes">;
 
 /** A child name in the scratch root, without letting a request name another
  *  folder through `..` or a path separator. */
@@ -33,9 +34,7 @@ function scratchPath(root: string, id: string): string | undefined {
   return join(root, id);
 }
 
-async function scan(
-  dir: string,
-): Promise<Pick<ScratchFolder, "entries" | "files" | "bytes">> {
+async function scan(dir: string): Promise<ScanResult> {
   const rows = await readdir(dir, { withFileTypes: true });
   rows.sort((a, b) => a.name.localeCompare(b.name));
   const entries: string[] = [];
@@ -91,6 +90,9 @@ async function rootIsFolder(root: string): Promise<boolean> {
 export async function listScratch(
   root: string,
   live: Live,
+  // Test seam: a folder can vanish between its `lstat` and its scan, and a
+  // real filesystem cannot be told to stage that race. Nothing passes it.
+  scanFolder: (dir: string) => Promise<ScanResult> = scan,
 ): Promise<ScratchFolder[]> {
   if (!(await rootIsFolder(root))) return [];
   const names = await readdir(root);
@@ -118,7 +120,7 @@ export async function listScratch(
         folder.kind = "other";
         folder.problem = "it is not a folder";
       } else {
-        Object.assign(folder, await scan(path));
+        Object.assign(folder, await scanFolder(path));
       }
     } catch (err) {
       if (missing(err)) continue;

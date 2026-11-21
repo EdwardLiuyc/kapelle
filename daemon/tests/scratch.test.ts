@@ -123,3 +123,27 @@ test("a scratch root that is a symlink is refused, and a missing one is empty", 
   assert.match(cleaned[0]?.error ?? "", /does not exist/);
   await rm(real, { recursive: true });
 });
+
+test("listScratch skips a folder that vanishes before its scan", async (t) => {
+  const base = await tempDir(t);
+  const root = join(base, "scratch", "hall");
+  await mkdir(root, { recursive: true });
+  const goneId = "p-gone0000";
+  const stayId = "p-stay0000";
+  await mkdir(join(root, goneId));
+  await writeFile(join(root, goneId, "lost.txt"), "lost\n");
+  await mkdir(join(root, stayId));
+
+  const gone = join(root, goneId);
+  const folders = await listScratch(root, new Map(), async (dir) => {
+    if (dir === gone) {
+      throw Object.assign(new Error("gone"), { code: "ENOENT" });
+    }
+    return { entries: [], files: 0, bytes: 0 };
+  });
+  assert.deepEqual(
+    folders.map((folder) => folder.id),
+    [stayId],
+    "the folder that vanished before its scan is not listed",
+  );
+});
