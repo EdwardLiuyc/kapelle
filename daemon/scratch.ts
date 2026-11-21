@@ -121,6 +121,7 @@ export async function listScratch(
         Object.assign(folder, await scan(path));
       }
     } catch (err) {
+      if (missing(err)) continue;
       folder.kind = "other";
       folder.problem = messageOf(err);
     }

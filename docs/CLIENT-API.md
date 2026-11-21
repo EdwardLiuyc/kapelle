@@ -1772,7 +1772,7 @@ per id.
 
 **Refusals:** `404` `room_not_found`; `400` `invalid_request` for another room or an
 `ids` value that is not an array of non-empty strings; `500` `internal` when the scratch
-root exists but is not a real folder.
+root exists but is not a real folder or cannot be read.
 
 ### `POST /rooms/:id/agents/:agentId/messages`
 

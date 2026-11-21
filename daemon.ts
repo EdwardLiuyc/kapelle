@@ -1763,14 +1763,7 @@ async function afterScratchWriter(
 }
 
 async function withScratchChange<T>(work: () => Promise<T>): Promise<T> {
-  while (scratchWriting) {
-    try {
-      await scratchWriters;
-    } catch {
-      // The failed snapshot already answered its caller; the next reader
-      // still gets a turn.
-    }
-  }
+  while (scratchWriting) await scratchWriters;
   scratchReaders++;
   try {
     return await work();
