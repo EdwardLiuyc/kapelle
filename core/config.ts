@@ -131,8 +131,8 @@ function projectConfigPath(root: string): string {
 
 /** A `.kapelle` folder that is a link or a file cannot hold replaceable
  *  config, even when the link resolves to a readable file. This guards the
- *  `/config` view and writer; the other config readers keep their read-only
- *  behavior. */
+ *  `/config` view; the writer repeats the check inline. The other config
+ *  readers keep their read-only behavior. */
 function assertProjectConfigFolder(root: string): void {
   const dir = join(root, STATE_DIR);
   try {
