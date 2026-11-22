@@ -51,6 +51,7 @@ import {
 } from "../../client/command.ts";
 import {
   CONFIG_APPLIES,
+  configInvalidRefusal,
   configPatch,
   readConfig,
   sourceText,
@@ -1535,10 +1536,10 @@ function panelParts({
       back,
       invalid === undefined
         ? `Saves only the changed keys to ${printable(r.body.path)}; ${CONFIG_APPLIES}.`
-        : `Replaces the invalid file at ${printable(r.body.path)} with the values you enter; ${CONFIG_APPLIES}.`,
+        : `Replaces the invalid file at ${printable(r.body.path)}; any key you do not enter is removed; ${CONFIG_APPLIES}.`,
     );
     if (invalid !== undefined && panel) {
-      panel.notice = printable(invalid);
+      panel.notice = configInvalidRefusal(invalid);
       tui.requestRender();
     }
   };

@@ -130,7 +130,9 @@ function projectConfigPath(root: string): string {
 }
 
 /** A `.kapelle` folder that is a link or a file cannot hold replaceable
- *  config, even when the link resolves to a readable file. */
+ *  config, even when the link resolves to a readable file. This guards the
+ *  `/config` view and writer; the other config readers keep their read-only
+ *  behavior. */
 function assertProjectConfigFolder(root: string): void {
   const dir = join(root, STATE_DIR);
   try {
@@ -574,8 +576,8 @@ function strict<T>(fn: () => T): T {
   }
 }
 
-/** The patch's known keys and values, checked before anything is read. */
-function patchValues(
+/** The request's known keys and values, checked before anything is read. */
+function configValues(
   patch: Readonly<Record<string, unknown>>,
   path: string,
 ): ConfigValues {
@@ -608,7 +610,7 @@ export async function saveProjectConfig(
 ): Promise<void> {
   const path = projectConfigPath(root);
   // A bad value in the patch is refused before the file is read.
-  patchValues(patch, path);
+  configValues(patch, path);
 
   for (;;) {
     const raw = strict(() => readProjectRaw(root));
@@ -639,14 +641,16 @@ export async function saveProjectConfig(
  * Replace the whole project file. `null` omits a key. The complete next
  * content is checked before the write, including `linkPaths` against git.
  * The path must already be a plain, safe file: a link, another owner, or a
- * group/other-writable file is refused and left alone.
+ * group/other-writable file is refused and left alone. Unlike the merge in
+ * `saveProjectConfig`, a replacement is last-write-wins; it does not re-read
+ * after the git check.
  */
 export async function replaceProjectConfig(
   root: string,
   values: Readonly<Record<string, unknown>>,
 ): Promise<void> {
   const path = projectConfigPath(root);
-  const checked = patchValues(values, path);
+  const checked = configValues(values, path);
   if (checked.linkPaths) await validateWorktreeLinks(root, checked.linkPaths);
   const next = Object.fromEntries(
     Object.entries(values).filter(([, value]) => value !== null),

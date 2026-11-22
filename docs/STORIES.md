@@ -4316,7 +4316,9 @@ contract's minor version.
 view with `invalid` and rows from env/defaults. `PUT /config` replaces the whole file
 after checking every value and `linkPaths` against git; unsafe paths stay `400`. The TUI
 shows the error above the rows and saves through `PUT`; a pipe prints the refusal and
-the hint to fix it by hand or use a terminal. The contract is 1.28.
+the hint to fix it by hand or use a terminal. **Decided in outside review:** keep the
+env/default rows, warn that every key not entered is removed, and refuse an empty save
+so the form never truncates the file by accident. The contract is 1.28.
 
 ---
 

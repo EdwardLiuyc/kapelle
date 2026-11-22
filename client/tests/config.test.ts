@@ -10,7 +10,7 @@ import test from "node:test";
 import { runCommand } from "../command.ts";
 import {
   CONFIG_INVALID_HINT,
-  configInvalidLines,
+  configInvalidRefusal,
   configLines,
   configPatch,
 } from "../config.ts";
@@ -73,11 +73,42 @@ test("the patch has only the changed keys; blank is null, JSON is parsed, the re
   });
 });
 
-test("an invalid view has a refusal and one next step for a read-only screen", () => {
-  assert.deepEqual(
-    configInvalidLines("/r/.kapelle/config.json is not valid JSON: bad"),
-    ["/r/.kapelle/config.json is not valid JSON: bad", CONFIG_INVALID_HINT],
+test("an invalid view shares its refusal and gives the pipe one next step", () => {
+  assert.equal(
+    configInvalidRefusal("/r/.kapelle/config.json is not valid JSON: bad"),
+    "/r/.kapelle/config.json is not valid JSON: bad",
   );
+  assert.match(CONFIG_INVALID_HINT, /fix the file by hand/);
+});
+
+test("an empty replacement is refused before it sends a request (#504)", async (t) => {
+  let requests = 0;
+  const server = createServer((_req, res) => {
+    requests += 1;
+    res.writeHead(200, { "content-type": "application/json" }).end(
+      JSON.stringify({
+        root: "/r",
+        path: "/r/.kapelle/config.json",
+        rows: [],
+      } satisfies ConfigView),
+    );
+  });
+  await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
+  t.after(() => server.close());
+  const d: DaemonAddress = {
+    port: (server.address() as AddressInfo).port,
+    token: "tok",
+  };
+
+  const out = await runCommand(d, undefined, {
+    verb: "config",
+    cwd: "/r",
+    patch: {},
+    replace: true,
+  });
+  assert.equal(requests, 0);
+  assert.equal(out.ok, false);
+  assert.match(out.message ?? "", /nothing entered/i);
 });
 
 test("a replacement request is PUT /config with the whole form value set (#504)", async (t) => {
@@ -112,6 +143,6 @@ test("a replacement request is PUT /config with the whole form value set (#504)"
   assert.equal(out.ok, true);
   assert.match(
     out.line ?? "",
-    /saved maxConcurrency to \/r\/.kapelle\/config.json/,
+    /replaced \/r\/.kapelle\/config.json with maxConcurrency/,
   );
 });

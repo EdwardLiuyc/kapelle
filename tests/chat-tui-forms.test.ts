@@ -1257,9 +1257,16 @@ test("/config opens an invalid file with its error above the rows, then replaces
   const rowsRow = rowOf(out(), /stallIdleMs/);
   assert.ok(noticeRow > 0 && noticeRow < rowsRow, out());
 
+  // An empty replacement is refused, not a silent truncation.
+  await press(DOWN.repeat(7), "any key you do not enter is removed");
+  await press("\r", "nothing entered");
+  assert.equal(await readFile(path, "utf8"), '{"ttlMs": "soon"}');
+
   // A still-invalid save keeps the form and the file.
+  await press("\x1b", "ctrl+o → new room");
+  await press("/config\r", '"ttlMs"');
   await press(`${DOWN.repeat(3)}\r0\r`, "0 (unsaved)");
-  await press(DOWN.repeat(4), "Replaces the invalid file");
+  await press(DOWN.repeat(4), "any key you do not enter is removed");
   await press("\r", '"maxConcurrency" must be a whole');
   assert.equal(await readFile(path, "utf8"), '{"ttlMs": "soon"}');
 
@@ -1267,12 +1274,12 @@ test("/config opens an invalid file with its error above the rows, then replaces
   await press("\x1b", "ctrl+o → new room");
   await press("/config\r", '"ttlMs"');
   await press(`${DOWN.repeat(3)}\r2\r`, "2 (unsaved)");
-  await press(DOWN.repeat(4), "Replaces the invalid file");
-  await press("\r", "saved maxConcurrency to");
+  await press(DOWN.repeat(4), "any key you do not enter is removed");
+  await press("\r", "with maxConcurrency");
   assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
     maxConcurrency: 2,
   });
-  assert.match(out(), /saved maxConcurrency to .*config\.json/);
+  assert.match(out(), /replaced .*config\.json with maxConcurrency/);
 
   // An unsafe path is a status-line refusal, not a replaceable form.
   const elsewhere = await tempDir(t);

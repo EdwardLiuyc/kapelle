@@ -25,7 +25,8 @@ import {
   runCommand,
 } from "../client/command.ts";
 import {
-  configInvalidLines,
+  CONFIG_INVALID_HINT,
+  configInvalidRefusal,
   configLines,
   readConfig,
 } from "../client/config.ts";
@@ -439,9 +440,8 @@ async function chatPiped(
           console.error(`add it first: kapelle daemon add ${room.cwd}`);
         }
       } else if (r.body.invalid !== undefined) {
-        const [refusal, hint] = configInvalidLines(r.body.invalid);
-        console.error(`! ${refusal}`);
-        console.error(hint);
+        console.error(`! ${configInvalidRefusal(r.body.invalid)}`);
+        console.error(CONFIG_INVALID_HINT);
       } else for (const l of configLines(r.body)) console.log(l);
       continue;
     }

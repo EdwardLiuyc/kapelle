@@ -92,7 +92,8 @@ skipped. The daemon keeps booting and serving the rest.
 | ❌ | tracked / escaping link | `{"linkPaths": ["README.md"]}`, a path or a directory entry whose real target leaves the checkout | refused when the repository is added, a run starts, a room opens, or `PATCH`/`PUT /config` writes, as `invalid_config`; the path and its entries are checked again when a checkout is made |
 | ❌ | link git would see | an untracked path no ignore rule matches | refused when a checkout is made: the task fails, or the room's add is a 400 `invalid_config`; the links are removed again |
 | ❌ | out of range | negatives; `{"maxConcurrency": 0}`, `{"orchestratorTurnCap": 0}` | `0 or greater` (watchdog/retention) or `1 or greater` (concurrency/cap) |
-| ❌ | invalid JSON / non-object / unreadable | — | the same three structural refusals as the user file |
+| ❌ | invalid JSON / non-object | — | a structural refusal everywhere except `/config`, which shows a `200` invalid view so the file can be replaced |
+| ❌ | unreadable | — | `cannot read <path>: …`; `/config` refuses it as unsafe and does not offer replacement |
 | ⚠ | — | — | files never warn |
 
 A linked path is **shared state, not a copy**: the symlink points at the main
@@ -137,9 +138,10 @@ The daemon checks each value with the rules above before it writes, and the
 `linkPaths` the file will hold are also checked against git, as `POST /repos` does.
 It never writes a default. A safe file whose content is invalid opens with the
 validation error above the rows; saving valid values replaces the whole file through
-`PUT /config`. Unsafe paths — a symlink, a non-file, another owner, a file
-you cannot read, a group/other-writable file, or a linked `.kapelle` — are
-refused and left alone.
+`PUT /config`. The form warns that any key not entered is removed. Unsafe paths — a
+symlink, a non-file, another owner, a file you cannot read, a group/other-writable
+file, or a linked `.kapelle` — are refused and left alone. Only `/config` refuses a
+linked `.kapelle`; the other config readers keep their read-only behavior.
 `PATCH /config` still only merges changed keys into a valid file. A new file is
 `0644` whatever the umask; an existing file keeps its mode. A saved value applies to
 later runs, new rooms, the next sweep and new checkouts, not to work already underway.

@@ -784,19 +784,23 @@ export async function runCommand(
   }
   if (c.verb === "config") {
     const keys = Object.keys(c.patch);
-    if (!keys.length && !c.replace)
-      return { ok: true, line: "config: nothing changed" };
+    if (!keys.length) {
+      if (!c.replace) return { ok: true, line: "config: nothing changed" };
+      return refused(
+        "config: nothing entered; enter a value or fix the file by hand",
+        "invalid_request",
+      );
+    }
     const r = await call<ConfigView>(
       d,
       `/config?cwd=${encodeURIComponent(c.cwd)}`,
       { method: c.replace ? "PUT" : "PATCH", body: c.patch },
     );
     if (!r.ok) return refused(r.error.message, r.error.code);
-    const saved = keys.length ? keys.join(", ") : "config";
-    return {
-      ok: true,
-      line: printable(`saved ${saved} to ${r.body.path}; ${CONFIG_APPLIES}`),
-    };
+    const line = c.replace
+      ? `replaced ${printable(r.body.path)} with ${keys.join(", ")}; ${CONFIG_APPLIES}`
+      : `saved ${keys.join(", ")} to ${printable(r.body.path)}; ${CONFIG_APPLIES}`;
+    return { ok: true, line };
   }
   // The hall, from any view (M11-1).
   if (c.verb === "chat") {

@@ -2,9 +2,10 @@
  * The project config (M10-5): `GET /config` as lines, and the form's typed
  * values as the body of a `PATCH /config` or a whole-file `PUT /config`.
  *
- * **Both chat screens print and save from here**, so they cannot differ. The
- * daemon reads and writes `.kapelle/config.json`; the chat never touches the
- * file, as `client/` cannot import `core/config.ts`.
+ * **Both chat screens print and save from here**, so their rows and refusal
+ * cannot differ; only the pipe adds the replacement hint. The daemon reads
+ * and writes `.kapelle/config.json`; the chat never touches the file, as
+ * `client/` cannot import `core/config.ts`.
  *
  * **The screen never guesses** (M4-5): a typed value is sent as JSON when it
  * parses and as the text when it does not, so the daemon's own rule refuses
@@ -25,9 +26,9 @@ export const CONFIG_APPLIES =
 export const CONFIG_INVALID_HINT =
   "fix the file by hand, or run /config in the chat on a terminal to replace it";
 
-/** The refusal and the one next step, for a read-only screen. */
-export function configInvalidLines(invalid: string): string[] {
-  return [printable(invalid), CONFIG_INVALID_HINT];
+/** The daemon's invalid-file refusal as both screens show it. */
+export function configInvalidRefusal(invalid: string): string {
+  return printable(invalid);
 }
 
 /** `GET /config` for the repository `cwd` is in. */

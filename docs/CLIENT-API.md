@@ -22,7 +22,8 @@ M10-5, #494, which added `GET /config` and `PATCH /config`; M9-9, #501, which ad
 an agent's thinking level; #511, which distinguishes a deleted room; M11-1, #475,
 which added the hall; M11-2, #476, which added an agent's own `cwd`; #524,
 which added the hall scratch list and cleanup routes; and #504, which added the
-invalid-file view and `PUT /config`).
+invalid-file view and `PUT /config`; a stable `GET /config` now answers `200` with
+`invalid` instead of `400` for a safe file whose content is invalid).
 
 ## Contents
 
@@ -506,7 +507,8 @@ Replace the whole project file. `cwd` is the same query parameter as for `GET /c
 
 **Request:** every key to keep. `null` omits a key from the file, and a key not named is
 removed. The daemon validates the complete result before writing, including the
-`linkPaths` git check.
+`linkPaths` git check. A replacement is last-write-wins: a save that lands during the
+git check is overwritten, unlike `PATCH`'s merge retry.
 
 ```json
 { "maxConcurrency": 2, "linkPaths": ["node_modules"] }
