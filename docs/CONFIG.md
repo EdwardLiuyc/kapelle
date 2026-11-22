@@ -16,7 +16,8 @@ Three sources set the knobs that do not belong in a run file (M2-7, #37):
   `checkStateDir` refused a repository that tracked it; that state now lives
   in `$XDG_STATE_HOME/kapelle/repos/<name>-<hash>/`, so this file is the only
   thing kapelle reads from inside your repository. You write it by hand, or with
-  `/config` in the chat (M10-5), which saves through the daemon's `PATCH /config`.
+  `/config` in the chat (M10-5), which saves through the daemon's `PATCH /config`;
+  a safe invalid file can be replaced through `PUT /config` (#504).
   Nothing else creates it, and no preflight looks at it.
   A room reads it from the repository of its own `cwd`. One exception: a
   participant with its own `cwd` (M11-2) gets the `linkPaths` of the
@@ -39,7 +40,7 @@ Legend: **✅ happy** · **⚠ warning** · **❌ bad**.
 | Config | Read by | Not read by |
 | --- | --- | --- |
 | User file | the daemon's start, however it is reached: `kapelle daemon start` or bare `kapelle` starting one (M9-2) | in-process CLI, merge, sweep |
-| Project file | `POST /repos`, `POST /runs` (each request), `POST /rooms` and each room the daemon restores at start (its stall limits and turn cap), `kapelle run --file`, `sweepBoot` per repository, `GET /config` and `PATCH /config` | plain `kapelle "prompt"`, `merge` |
+| Project file | `POST /repos`, `POST /runs` (each request), `POST /rooms` and each room the daemon restores at start (its stall limits and turn cap), `kapelle run --file`, `sweepBoot` per repository, `GET /config`, `PATCH /config` and `PUT /config` | plain `kapelle "prompt"`, `merge` |
 | `KAPELLE_*` env | the daemon's start (including bare `kapelle`), every run-default and room-cap resolution, `kapelle run --file` | plain prompt, merge |
 
 ## User file — `$XDG_CONFIG_HOME/kapelle/config.json`
@@ -88,10 +89,11 @@ skipped. The daemon keeps booting and serving the rest.
 | ❌ | wrong-layer key | `{"port": 5000}` | `<path>: "port" is daemon-wide; put it in <user-config-path>.` |
 | ❌ | wrong type | `{"ttlMs": "soon"}`, `{"maxConcurrency": 1.5}`, `{"linkPaths": "node_modules"}` | whole-number rule naming the key, or the `linkPaths` array rule |
 | ❌ | bad link path | `{"linkPaths": ["/x"]}`, `["../x"]`, `["a", "a/b"]`, `[".git"]`, `["sub/.git"]`, `42` | entry-specific rule naming the file and `linkPaths[i]` |
-| ❌ | tracked / escaping link | `{"linkPaths": ["README.md"]}`, a path or a directory entry whose real target leaves the checkout | refused when the repository is added, a run starts, a room opens, or `PATCH /config` writes, as `invalid_config`; the path and its entries are checked again when a checkout is made |
+| ❌ | tracked / escaping link | `{"linkPaths": ["README.md"]}`, a path or a directory entry whose real target leaves the checkout | refused when the repository is added, a run starts, a room opens, or `PATCH`/`PUT /config` writes, as `invalid_config`; the path and its entries are checked again when a checkout is made |
 | ❌ | link git would see | an untracked path no ignore rule matches | refused when a checkout is made: the task fails, or the room's add is a 400 `invalid_config`; the links are removed again |
 | ❌ | out of range | negatives; `{"maxConcurrency": 0}`, `{"orchestratorTurnCap": 0}` | `0 or greater` (watchdog/retention) or `1 or greater` (concurrency/cap) |
-| ❌ | invalid JSON / non-object / unreadable | — | the same three structural refusals as the user file |
+| ❌ | invalid JSON / non-object | — | a structural refusal everywhere except `/config`, which shows a `200` invalid view so the file can be replaced |
+| ❌ | unreadable | — | `cannot read <path>: …`; `/config` refuses it as unsafe and does not offer replacement |
 | ⚠ | — | — | files never warn |
 
 A linked path is **shared state, not a copy**: the symlink points at the main
@@ -129,14 +131,22 @@ added, the chat asks to add it first, as `/new` does. The form lists every proje
 key with the file's value, and the value in use with its source: `default`, `config`
 or `env`. Enter edits a value; a blank value removes the key, so its default applies
 again. `linkPaths` is a JSON array, such as `["node_modules"]`. The save row sends
-only the changed keys. On a pipe, `/config` prints the same rows and edits nothing.
+only the changed keys. On a pipe, `/config` prints the same rows for a valid file and
+edits nothing.
 
 The daemon checks each value with the rules above before it writes, and the
 `linkPaths` the file will hold are also checked against git, as `POST /repos` does.
-It never writes a default, and it never writes over a file the reader refuses: an
-invalid file is shown as the refusal and stays as it is. A new file is `0644`
-whatever the umask; an existing file keeps its mode. A saved value applies to later
-runs, new rooms, the next sweep and new checkouts, not to work already underway.
+It never writes a default. A safe file whose content is invalid opens with the
+validation error above the rows; saving valid values replaces the whole file through
+`PUT /config`. The form warns that any key not entered is removed. Unsafe paths — a
+symlink, a non-file, another owner, a file you cannot read, a group/other-writable
+file, or a linked `.kapelle` — are refused and left alone. Only `/config` refuses a
+linked `.kapelle`; the other config readers keep their read-only behavior.
+`PATCH /config` still only merges changed keys into a valid file. A new file is
+`0644` whatever the umask; an existing file keeps its mode. A saved value applies to
+later runs, new rooms, the next sweep and new checkouts, not to work already underway.
+On a pipe, `/config` prints the refusal and says to fix the file by hand or use
+`/config` on a terminal to replace it.
 
 ## Environment — `KAPELLE_*`
 
@@ -199,14 +209,14 @@ Notes:
 - `core/config.ts` — key sets, value rules, both file readers, the `KAPELLE_*`
   reader, `warnUnknownConfigEnv`, `resolveRunDefaults`, `resolveRetentionMs`,
   `resolveOrchestratorTurnCap`, `readProjectLinkPaths`, and for `/config`
-  `projectConfigView` and `saveProjectConfig`.
-- `client/config.ts` — the `/config` rows as lines, and the form's values as a
-  `PATCH /config` body.
+  `projectConfigView`, `saveProjectConfig` and `replaceProjectConfig`.
+- `client/config.ts` — the `/config` rows as lines, the invalid-file lines, and the
+  form's values as a `PATCH` or `PUT /config` body.
 - `core/worktree.ts` — `openWorktrees` plans and makes the `linkPaths` mirrors,
   and refuses a tracked, escaping, or still-visible link, or an escaping or
   dangling entry of a linked directory.
 - `daemon.ts` — `DEFAULT_PORT` / `DEFAULT_PERMISSION_TIMEOUT_S` and flag
-  resolution, `postRepo`, `postRun`, `GET /config`, `PATCH /config`.
+  resolution, `postRepo`, `postRun`, `GET /config`, `PATCH /config`, `PUT /config`.
 - `cli.ts` — `runFromFile`, the project-config defaults for `--file`.
 - `core/runfile.ts` — `RunDefaults` and the task > run > config > built-in chain.
 - `core/sweep.ts` — `DEFAULT_RETENTION_MS` and the per-repository retention read.

@@ -47,7 +47,7 @@ export type { AgentEvent, Diff, PermissionReason, ToolCallStatus, ToolKind };
  * (M5-2 changed one). Which rows are stable is the table in
  * `docs/CLIENT-API.md`.
  */
-export const API_VERSION = { major: 1, minor: 27 } as const;
+export const API_VERSION = { major: 1, minor: 28 } as const;
 
 /**
  * What this daemon can do (B4). Names are only ever added, never removed or
@@ -213,13 +213,17 @@ export interface ConfigRow {
   env?: string;
 }
 
-/** `GET /config` and `PATCH /config` (M10-5, since 1.22): a repository's
- *  project config, every key in the order the daemon lists them. */
+/** `GET`, `PATCH` and `PUT /config` (M10-5, since 1.22; `PUT` since 1.28):
+ *  a repository's project config, every key in the order the daemon lists
+ *  them. */
 export interface ConfigView {
   root: string;
   /** The project file, `<root>/.kapelle/config.json`; it may not exist. */
   path: string;
   rows: ConfigRow[];
+  /** Since 1.28 (#504): why a safe file's content is invalid. The rows are
+   *  then env/default values, and `PUT /config` may replace the file. */
+  invalid?: string;
 }
 
 /** A finished task's verdict, mildest first. A run's status is the worst of

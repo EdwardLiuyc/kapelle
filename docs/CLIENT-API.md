@@ -7,7 +7,7 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.27** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.28** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
 rooms stable, M6-7b, #179, which added `resumed: "loaded"`, M6-7c, #235, which added
 `DELETE /rooms/:id`, M8-1, #265, which added a message's `from`, M8-2, #266, which
@@ -20,8 +20,10 @@ M8-7, #271, which added the orchestrator's turn cap; #371, which tightened the
 `daemon.json` lifecycle; M9-8, #307, which made the `/harnesses` routes stable; and
 M10-5, #494, which added `GET /config` and `PATCH /config`; M9-9, #501, which added
 an agent's thinking level; #511, which distinguishes a deleted room; M11-1, #475,
-which added the hall; M11-2, #476, which added an agent's own `cwd`; and #524,
-which added the hall scratch list and cleanup routes).
+which added the hall; M11-2, #476, which added an agent's own `cwd`; #524,
+which added the hall scratch list and cleanup routes; and #504, which added the
+invalid-file view and `PUT /config`; a stable `GET /config` now answers `200` with
+`invalid` instead of `400` for a safe file whose content is invalid).
 
 ## Contents
 
@@ -92,7 +94,7 @@ Check for a capability before you use its feature. Ignore names that you do not 
 | `events` | [The event stream](#the-event-stream) for runs, with replay. |
 | `permissions` | [Permissions](#permissions): list and answer. |
 | `rooms` | [Rooms](#rooms). Stable since 1.8. |
-| `config` | [A repository's project config](#get-config): read and save. Since 1.22. |
+| `config` | [A repository's project config](#get-config): read and save. Since 1.22. Since 1.28, a safe invalid file is viewable and replaceable. |
 
 ### Stability
 
@@ -127,7 +129,7 @@ Not every part of this API is final yet. Each part has one of three labels:
 | Request limits: `Content-Type`, body size, unknown fields, read timeout | M5-3. |
 | Everything under `/rooms`, and the room events | Since 1.8 (M6-7a). Rooms survive a daemon restart. |
 | `GET /harnesses`, `POST /harnesses`, `POST /harnesses/done`, `POST /harnesses/install` | Since 1.21 (M9-8). M4-5 added the list; M9-3 the find; M9-3b the install; M9-4 the login check. |
-| `GET /config`, `PATCH /config` | Since 1.22 (M10-5). |
+| `GET /config`, `PATCH /config`, `PUT /config` | Since 1.22 (M10-5); `PUT` and the invalid view since 1.28 (#504). |
 
 **Provisional.** These will change. The last column names the story that changes each
 one.
@@ -271,7 +273,7 @@ request that is not valid HTTP gets `400`.
 | `body_too_large` | `413` | The body is larger than 4 MiB. | Send less. |
 | `invalid_request` | `400` | A field is missing, has the wrong type, or is unknown; or the body is not a JSON object; or `Last-Event-ID` is out of range. | Fix the request. |
 | `invalid_run` | `400` | The run file is not valid. | Show the message. It names the field. |
-| `invalid_config` | `400` | The repository's `.kapelle/config.json` is not valid, or a value `PATCH /config` would save is not. | The person fixes that file, or the value. |
+| `invalid_config` | `400` | A config path is unsafe, or a value a config write would save is not valid. | The person fixes that path or value. `GET /config` reports content-invalid safe files as `200` with `invalid`. |
 | `repo_not_added` | `403` | `cwd` is not inside an added repository. | `POST /repos` first. |
 | `run_not_found` | `404` | No run has this id. | |
 | `room_not_found` | `404` | No room has this id. | |
@@ -346,6 +348,7 @@ the `GET` routes take none.
 | `GET /repos` | List the added repositories. |
 | `GET /config?cwd=…` | A repository's project config: every key, its value in use, and where that comes from. |
 | `PATCH /config?cwd=…` | Save changed keys of a repository's project config. |
+| `PUT /config?cwd=…` | Replace a repository's whole project config. |
 | `GET /harnesses` | List the harnesses the daemon can start by name, and which are installed. |
 | `POST /harnesses` | Find the installed harnesses again. |
 | `POST /harnesses/done` | The person has seen the setup list. |
@@ -461,14 +464,17 @@ order.
 - `file` is the file's value, when the file names one. Under `env` it is not in use
   until the variable is unset.
 - A value is a number, or the `linkPaths` list.
+- `invalid` (since 1.28): present when the file is a plain, safe file whose content is
+  invalid. The rows then come from `env` and defaults, and `PUT /config` may replace the
+  file. The message names the file, and the key when one is at fault.
 
 A saved value applies to later runs, new rooms, the next sweep and new checkouts. Work
 already underway keeps what it read.
 
 **Refusals:** `400` `invalid_request` when `cwd` is not absolute or does not exist.
 `403` `repo_not_added` when `cwd` is not in an added repository. `400`
-`invalid_config` when the file is not valid; the reply names the file, and the key
-when one is at fault.
+`invalid_config` when the config path is unsafe: a symlink, non-file, another owner, a
+file this process cannot read, a group/other-writable file, or a linked `.kapelle`.
 
 ### `PATCH /config`
 
@@ -492,7 +498,30 @@ default, and it writes nothing when nothing changes. It creates the file, and th
 - `400` `invalid_request`: a key that is not a project key, such as `port`.
 - `400` `invalid_config`: a value its rule refuses; a `linkPaths` path that is tracked
   or leaves the checkout, as `POST /repos` checks it; a file that is not valid now, or
-  a link; a `.kapelle` that is a link or a file.
+  a link; a `.kapelle` that is a link or a file. `PATCH` is merge-only and still refuses
+  an invalid file; use `PUT` to replace it.
+
+### `PUT /config`
+
+Replace the whole project file. `cwd` is the same query parameter as for `GET /config`.
+
+**Request:** every key to keep. `null` omits a key from the file, and a key not named is
+removed. The daemon validates the complete result before writing, including the
+`linkPaths` git check. A replacement is last-write-wins: a save that lands during the
+git check is overwritten, unlike `PATCH`'s merge retry.
+
+```json
+{ "maxConcurrency": 2, "linkPaths": ["node_modules"] }
+```
+
+**Reply `200`:** the view, as `GET /config` answers it.
+
+**Refusals:** the `GET /config` ones, and these. Nothing is written for any of them.
+
+- `400` `invalid_request`: a key that is not a project key, such as `port`.
+- `400` `invalid_config`: a value its rule refuses; a `linkPaths` path that is tracked
+  or leaves the checkout; a symlink, non-file, other owner, a file it cannot read,
+  group/other-writable file, or a `.kapelle` that is a link or a file.
 
 ### `GET /harnesses`
 

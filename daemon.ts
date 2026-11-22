@@ -98,6 +98,7 @@ import {
   readProjectConfig,
   readProjectLinkPaths,
   readUserConfig,
+  replaceProjectConfig,
   resolveOrchestratorTurnCap,
   resolveRunDefaults,
   saveProjectConfig,
@@ -910,8 +911,8 @@ async function refuseUnadded(cwd: string): Promise<string> {
 }
 
 /** The config view of an added repository (M10-5): every project key, its
- *  value in use and its source. A file the strict reader refuses is the
- *  400 the other config reads give. */
+ *  value in use and its source. A safe file whose content is invalid is a
+ *  200 with `invalid`; an unsafe path is the 400 the other config reads give. */
 function sendConfig(res: ServerResponse, root: string) {
   let view: ReturnType<typeof projectConfigView>;
   try {
@@ -934,6 +935,26 @@ async function patchConfig(
   const root = await refuseUnadded(existingDir(cwd, "cwd"));
   try {
     await saveProjectConfig(root, body);
+  } catch (err) {
+    if (err instanceof InvalidConfig || err instanceof LinkPathError) {
+      throw refusal(400, "invalid_config", messageOf(err));
+    }
+    throw err;
+  }
+  sendConfig(res, root);
+}
+
+/** `PUT /config?cwd=…` (#504): replace the whole project file after the
+ *  complete new content passes the same value and git checks. */
+async function putConfig(
+  cwd: string | null,
+  req: IncomingMessage,
+  res: ServerResponse,
+) {
+  const body = await readBody(req, PROJECT_KEYS);
+  const root = await refuseUnadded(existingDir(cwd, "cwd"));
+  try {
+    await replaceProjectConfig(root, body);
   } catch (err) {
     if (err instanceof InvalidConfig || err instanceof LinkPathError) {
       throw refusal(400, "invalid_config", messageOf(err));
@@ -2514,6 +2535,8 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     sendConfig(res, await refuseUnadded(cwd));
   } else if (req.method === "PATCH" && pathname === "/config") {
     await patchConfig(searchParams.get("cwd"), req, res);
+  } else if (req.method === "PUT" && pathname === "/config") {
+    await putConfig(searchParams.get("cwd"), req, res);
   } else if (req.method === "POST" && pathname === "/runs") {
     await postRun(req, res);
   } else if (req.method === "GET" && pathname === "/runs") {

@@ -4292,12 +4292,13 @@ The form edits the project file only. The user-level `port` and `permissionTimeo
 are daemon-wide and read at start; a later `/config daemon` can cover them. The chat
 does not read or write the file itself: `client/` cannot import `core/config.ts`, and
 the screens talk HTTP. The contract adds the `config` capability,
-`GET /config?cwd=…` for the view, and `PATCH /config?cwd=…` for changed keys, where
-`null` removes an override; both return the view. Only a repository the daemon has
+`GET /config?cwd=…` for the view, `PATCH /config?cwd=…` for changed keys, where
+`null` removes an override, and `PUT /config?cwd=…` for a whole-file replacement;
+all return the view. Only a repository the daemon has
 added is accepted, and the route writes only that repository's `.kapelle/config.json`.
 The view comes from one table in `core/config.ts`; the built-in defaults are imported
 from the modules that own them, not copied into the form. An existing invalid file is
-shown as the daemon's refusal and is not overwritten. A pipe prints the same rows from
+shown as the daemon's refusal and is not overwritten (amended by #504 below). A pipe prints the same rows from
 `/config`; only the editor needs a terminal. The form says that saved values apply to
 later runs, new rooms, the next sweep and new checkouts, not to work already underway.
 **Decided at pickup 2026-11-17 (#494):** saving `linkPaths` runs both the shape check
@@ -4311,6 +4312,13 @@ repository refused with `repo_not_added`; and `/config` in both screens.
 `docs/CONFIG.md` no longer says nothing creates the file, `README.md` no longer says the
 person writes it by hand, and `docs/CLIENT-API.md` documents the route and the
 contract's minor version.
+**Amended 2026-11-21 (#504):** a plain, safe file whose content is invalid is a `200`
+view with `invalid` and rows from env/defaults. `PUT /config` replaces the whole file
+after checking every value and `linkPaths` against git; unsafe paths stay `400`. The TUI
+shows the error above the rows and saves through `PUT`; a pipe prints the refusal and
+the hint to fix it by hand or use a terminal. **Decided in outside review:** keep the
+env/default rows, warn that every key not entered is removed, and refuse an empty save
+so the form never truncates the file by accident. The contract is 1.28.
 
 ---
 

@@ -30,6 +30,7 @@ import {
   readProjectConfig,
   readProjectLinkPaths,
   readUserConfig,
+  replaceProjectConfig,
   resolveOrchestratorTurnCap,
   resolveRetentionMs,
   resolveRunDefaults,
@@ -493,6 +494,64 @@ test("the view lists every project key with its value in use and source", async 
       source: "config",
     },
   );
+});
+
+test("the view names a safe invalid file, with env/default rows (#504)", async (t) => {
+  const root = await tempDir(t);
+  await writeProject(root, { ttlMs: "soon" });
+  const view = projectConfigView(root, { KAPELLE_RETENTION_MS: "5000" });
+  assert.match(view.invalid ?? "", /"ttlMs"/);
+  assert.deepEqual(
+    view.rows.find((r) => r.key === "ttlMs"),
+    {
+      key: "ttlMs",
+      default: WATCHDOG_DEFAULTS.ttlMs,
+      value: WATCHDOG_DEFAULTS.ttlMs,
+      source: "default",
+    },
+    "an invalid file contributes no row values",
+  );
+  assert.equal(view.rows.find((r) => r.key === "retentionMs")?.source, "env");
+
+  await writeFile(projectFile(root), "{bad", { mode: 0o644 });
+  assert.match(projectConfigView(root, {}).invalid ?? "", /is not valid JSON/);
+});
+
+test("the view refuses a symlinked config instead of offering replacement (#504)", async (t) => {
+  const root = await tempDir(t);
+  const elsewhere = await tempDir(t);
+  const planted = join(elsewhere, "planted.json");
+  await writeFile(planted, "{}", { mode: 0o644 });
+  await mkdir(join(root, ".kapelle"));
+  await symlink(planted, projectFile(root));
+  assert.throws(() => projectConfigView(root, {}), /must be a plain file/);
+});
+
+test("a replacement writes the whole file and keeps an existing mode (#504)", async (t) => {
+  const root = await repo(t);
+  await writeProject(root, { ttlMs: 60000, stallIdleMs: 1000 });
+  await chmod(projectFile(root), 0o600);
+
+  await replaceProjectConfig(root, { maxConcurrency: 2, ttlMs: null });
+  assert.equal(
+    await fileText(root),
+    `${JSON.stringify({ maxConcurrency: 2 }, null, 2)}\n`,
+  );
+  assert.equal((await stat(projectFile(root))).mode & 0o777, 0o600);
+});
+
+test("a replacement new file is 0644 and checks linkPaths against git (#504)", async (t) => {
+  const root = await repo(t);
+  await replaceProjectConfig(root, { maxConcurrency: 2 });
+  assert.equal((await stat(projectFile(root))).mode & 0o777, 0o644);
+
+  const before = await fileText(root);
+  await assert.rejects(
+    replaceProjectConfig(root, { linkPaths: ["README.md"] }),
+    (err: Error) =>
+      err instanceof LinkPathError && /is tracked by git/.test(err.message),
+  );
+  assert.equal(await fileText(root), before);
 });
 
 test("a save writes the changed keys only, keeps the rest in place, and resets with null", async (t) => {

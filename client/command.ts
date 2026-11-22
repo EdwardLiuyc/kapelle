@@ -25,8 +25,9 @@
  *
  * **`/config` is always a form** (M10-5): the project config of the room on
  * screen, or of the folder the chat started in. A hall chat has no project,
- * so `/config` refuses there (M11-1). Its save is the `config` route command,
- * the changed keys only (`client/config.ts`).
+ * so `/config` refuses there (M11-1). Its save is the `config` route command:
+ * changed keys through `PATCH`, or a whole-file `PUT` after an invalid view
+ * (`client/config.ts`).
  *
  * **`/loop` is `/new` with a start** (M8-5): a room titled
  * `<recipe>-<task>`, the orchestrator `po` in `auto`, and its first message
@@ -99,7 +100,7 @@ export type RouteCommand =
   | { verb: "delete" }
   | { verb: "title"; title: string }
   | { verb: "cap"; turnCap: number }
-  | { verb: "config"; cwd: string; patch: ConfigPatch }
+  | { verb: "config"; cwd: string; patch: ConfigPatch; replace?: true }
   | { verb: "remove" | "cancel"; id: string; name: string }
   | {
       verb: "forward";
@@ -783,19 +784,23 @@ export async function runCommand(
   }
   if (c.verb === "config") {
     const keys = Object.keys(c.patch);
-    if (!keys.length) return { ok: true, line: "config: nothing changed" };
+    if (!keys.length) {
+      if (!c.replace) return { ok: true, line: "config: nothing changed" };
+      return refused(
+        "config: nothing entered; enter a value or fix the file by hand",
+        "invalid_request",
+      );
+    }
     const r = await call<ConfigView>(
       d,
       `/config?cwd=${encodeURIComponent(c.cwd)}`,
-      { method: "PATCH", body: c.patch },
+      { method: c.replace ? "PUT" : "PATCH", body: c.patch },
     );
     if (!r.ok) return refused(r.error.message, r.error.code);
-    return {
-      ok: true,
-      line: printable(
-        `saved ${keys.join(", ")} to ${r.body.path}; ${CONFIG_APPLIES}`,
-      ),
-    };
+    const line = c.replace
+      ? `replaced ${printable(r.body.path)} with ${keys.join(", ")}; ${CONFIG_APPLIES}`
+      : `saved ${keys.join(", ")} to ${printable(r.body.path)}; ${CONFIG_APPLIES}`;
+    return { ok: true, line };
   }
   // The hall, from any view (M11-1).
   if (c.verb === "chat") {

@@ -16,12 +16,15 @@
  * the file and the key: a silently-ignored `stallIdleMs` typo is a watchdog
  * that never fires. A missing file means "no opinion", not an error.
  *
- * **The project file has one writer, `saveProjectConfig`** (M10-5), behind
- * the daemon's `PATCH /config`. It writes only the keys a person changed,
- * never a default, and it refuses to touch a file the strict reader refuses.
- * `projectConfigView` is the one table of every project key, its value in
- * use and where that comes from; the defaults come from the modules that own
- * them. Nothing creates the user file.
+ * **The project file is written only by `saveProjectConfig`** (M10-5),
+ * behind the daemon's `PATCH /config`, **and `replaceProjectConfig`**, behind
+ * `PUT /config`. They share the safe writer. A merge writes only the keys a
+ * person changed and never a default; a replacement writes the whole file.
+ * Unsafe files are refused. A safe file whose content is invalid is shown by
+ * `projectConfigView` with its refusal and can be replaced. `projectConfigView`
+ * is the one table of every project key, its value in use and where that
+ * comes from; the defaults come from the modules that own them. Nothing
+ * creates the user file.
  *
  * **Unknown `KAPELLE_*` names warn and are ignored** rather than refused: the
  * prefix is also the secret namespace (`protocol/registry.ts`'s
@@ -32,7 +35,9 @@
 
 import { randomBytes } from "node:crypto";
 import {
+  accessSync,
   chmodSync,
+  constants,
   lstatSync,
   mkdirSync,
   readFileSync,
@@ -51,6 +56,13 @@ import { STATE_DIR, validateWorktreeLinks } from "./worktree.ts";
 
 const messageOf = (err: unknown) =>
   err instanceof Error ? err.message : String(err);
+
+/** A save refused before anything was written: the file, a value or the
+ *  `.kapelle` folder. The daemon answers it as `invalid_config`. */
+export class InvalidConfig extends Error {}
+
+/** A project config path that cannot be trusted for reading or replacement. */
+class UnsafeConfigFile extends InvalidConfig {}
 
 /** Every knob a file or a `KAPELLE_*` variable may carry. */
 interface ConfigValues {
@@ -115,6 +127,25 @@ export function userConfigPath(env: NodeJS.ProcessEnv = process.env): string {
 /** `<root>/.kapelle/config.json`, beside the run state it defaults. */
 function projectConfigPath(root: string): string {
   return join(root, STATE_DIR, "config.json");
+}
+
+/** A `.kapelle` folder that is a link or a file cannot hold replaceable
+ *  config, even when the link resolves to a readable file. This guards the
+ *  `/config` view; the writer repeats the check inline. The other config
+ *  readers keep their read-only behavior. */
+function assertProjectConfigFolder(root: string): void {
+  const dir = join(root, STATE_DIR);
+  try {
+    const st = lstatSync(dir, { throwIfNoEntry: false });
+    if (st && !st.isDirectory()) {
+      throw new UnsafeConfigFile(
+        `${dir} must be a folder, not a link or a file.`,
+      );
+    }
+  } catch (err) {
+    if (err instanceof UnsafeConfigFile) throw err;
+    throw new UnsafeConfigFile(`cannot read ${dir}: ${messageOf(err)}`);
+  }
 }
 
 // --- value rules -------------------------------------------------------------
@@ -265,7 +296,7 @@ function readConfigFile(
     const st = lstatSync(path);
     const mode = st.mode & 0o777;
     if (!st.isFile() || st.uid !== userInfo().uid || (mode & 0o022) !== 0) {
-      throw new Error(
+      throw new UnsafeConfigFile(
         `${path} must be a plain file owned by you and not writable by ` +
           `anyone else. Fix or remove it, then try again.`,
       );
@@ -273,8 +304,8 @@ function readConfigFile(
     text = readFileSync(path, "utf8");
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
-    if (err instanceof Error && err.message.startsWith(path)) throw err;
-    throw new Error(`cannot read ${path}: ${messageOf(err)}`);
+    if (err instanceof UnsafeConfigFile) throw err;
+    throw new UnsafeConfigFile(`cannot read ${path}: ${messageOf(err)}`);
   }
 
   let parsed: unknown;
@@ -475,10 +506,6 @@ interface ProjectConfigRow {
   env?: string;
 }
 
-/** A save refused before anything was written: the file, a value or the
- *  `.kapelle` folder. The daemon answers it as `invalid_config`. */
-export class InvalidConfig extends Error {}
-
 /** Each project key's built-in value, from the module that owns it. A
  *  function, not a constant: `core/sweep.ts` imports this file, so its value
  *  is read only after both have loaded. */
@@ -495,14 +522,23 @@ function projectDefaults(): Record<ProjectKey, ProjectValue> {
 /**
  * Every project key, not only the ones in the file: its value in use and
  * where that comes from. The same order as the run-default resolution:
- * `env > project config > built-in`. Throws, as `readProjectConfig` does,
- * for a file the strict reader refuses.
+ * `env > project config > built-in`. A safe file whose content is invalid
+ * returns env/default rows and its refusal in `invalid`; an unsafe path
+ * still throws.
  */
 export function projectConfigView(
   root: string,
   env: NodeJS.ProcessEnv = process.env,
-): { path: string; rows: ProjectConfigRow[] } {
-  const file = readProjectConfig(root);
+): { path: string; rows: ProjectConfigRow[]; invalid?: string } {
+  assertProjectConfigFolder(root);
+  let file: ConfigValues = {};
+  let invalid: string | undefined;
+  try {
+    file = readProjectConfig(root);
+  } catch (err) {
+    if (err instanceof UnsafeConfigFile) throw err;
+    invalid = messageOf(err);
+  }
   const fromEnv = readEnvConfig(env);
   const defaults = projectDefaults();
   const rows = PROJECT_KEYS.map((key): ProjectConfigRow => {
@@ -523,7 +559,11 @@ export function projectConfigView(
       return { ...row, value: inFile, source: "config" };
     return { ...row, value: defaults[key], source: "default" };
   });
-  return { path: projectConfigPath(root), rows };
+  return {
+    path: projectConfigPath(root),
+    rows,
+    ...(invalid !== undefined && { invalid }),
+  };
 }
 
 /** `fn`, with a refusal it throws turned into an `InvalidConfig`. */
@@ -531,8 +571,27 @@ function strict<T>(fn: () => T): T {
   try {
     return fn();
   } catch (err) {
+    if (err instanceof UnsafeConfigFile) throw err;
     throw new InvalidConfig(messageOf(err));
   }
+}
+
+/** The request's known keys and values, checked before anything is read. */
+function configValues(
+  patch: Readonly<Record<string, unknown>>,
+  path: string,
+): ConfigValues {
+  const known = PROJECT_KEYS as readonly string[];
+  const unknown = Object.keys(patch).find((key) => !known.includes(key));
+  if (unknown !== undefined) {
+    throw new InvalidConfig(
+      `unknown key ${JSON.stringify(unknown)}. Known: ${known.join(", ")}.`,
+    );
+  }
+  const set = Object.fromEntries(
+    Object.entries(patch).filter(([, value]) => value !== null),
+  );
+  return strict(() => projectValues(set, path));
 }
 
 /**
@@ -550,18 +609,8 @@ export async function saveProjectConfig(
   patch: Readonly<Record<string, unknown>>,
 ): Promise<void> {
   const path = projectConfigPath(root);
-  const known = PROJECT_KEYS as readonly string[];
-  const unknown = Object.keys(patch).find((key) => !known.includes(key));
-  if (unknown !== undefined) {
-    throw new InvalidConfig(
-      `unknown key ${JSON.stringify(unknown)}. Known: ${known.join(", ")}.`,
-    );
-  }
-  const set = Object.fromEntries(
-    Object.entries(patch).filter(([, value]) => value !== null),
-  );
   // A bad value in the patch is refused before the file is read.
-  strict(() => projectValues(set, path));
+  configValues(patch, path);
 
   for (;;) {
     const raw = strict(() => readProjectRaw(root));
@@ -589,6 +638,27 @@ export async function saveProjectConfig(
 }
 
 /**
+ * Replace the whole project file. `null` omits a key. The complete next
+ * content is checked before the write, including `linkPaths` against git.
+ * The path must already be a plain, safe file: a link, another owner, or a
+ * group/other-writable file is refused and left alone. Unlike the merge in
+ * `saveProjectConfig`, a replacement is last-write-wins; it does not re-read
+ * after the git check.
+ */
+export async function replaceProjectConfig(
+  root: string,
+  values: Readonly<Record<string, unknown>>,
+): Promise<void> {
+  const path = projectConfigPath(root);
+  const checked = configValues(values, path);
+  if (checked.linkPaths) await validateWorktreeLinks(root, checked.linkPaths);
+  const next = Object.fromEntries(
+    Object.entries(values).filter(([, value]) => value !== null),
+  );
+  writeProjectFile(root, next);
+}
+
+/**
  * The project file, written so the strict reader accepts it: a plain file
  * that keeps its mode, or 0644 for a new one whatever the umask, written to
  * a temporary file and renamed, so no reader sees half of it. The temporary
@@ -609,6 +679,27 @@ function writeProjectFile(root: string, values: Record<string, unknown>) {
   if (!st) mkdirSync(dir);
   const path = projectConfigPath(root);
   const was = lstatSync(path, { throwIfNoEntry: false });
+  if (
+    was &&
+    (!was.isFile() || was.uid !== userInfo().uid || (was.mode & 0o022) !== 0)
+  ) {
+    throw new UnsafeConfigFile(
+      `${path} must be a plain file owned by you and not writable by ` +
+        `anyone else. Fix or remove it, then try again.`,
+    );
+  }
+  // A file this process cannot read cannot be shown by GET /config, so a
+  // replacement would be written and then refused while answering the view.
+  if (was) {
+    try {
+      accessSync(path, constants.R_OK);
+    } catch (err) {
+      throw new UnsafeConfigFile(
+        `${path} must be readable by you: ${messageOf(err)}. Fix or remove ` +
+          `it, then try again.`,
+      );
+    }
+  }
   const mode = was ? was.mode & 0o777 : 0o644;
   const tmp = `${path}.${randomBytes(6).toString("hex")}.tmp`;
   try {
