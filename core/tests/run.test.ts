@@ -502,7 +502,9 @@ test("a successful task's finished event carries its verdict and duration", asyn
   // `status: "cancelled"` or `durationMs: 0` would survive it.
   const bus = createEventBus();
   const seen: AgentEventEnvelope[] = [];
-  bus.addListener((event) => seen.push(event));
+  bus.addListener((event) => {
+    seen.push(event);
+  });
 
   const exec: TaskExecutor = async () => {
     // A measurable delay: `durationMs: 0` is the mutant this test exists to

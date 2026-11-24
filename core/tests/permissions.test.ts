@@ -26,7 +26,9 @@ function setup(timeoutMs = 60_000) {
   const queue = createPermissionQueue(timeoutMs);
   const bus = createEventBus();
   const events: AgentEventEnvelope[] = [];
-  bus.addListener((e) => events.push(e));
+  bus.addListener((e) => {
+    events.push(e);
+  });
   const cancel = new AbortController();
   const policy = queue.policyFor("run-1", bus, cancel.signal);
   return { queue, events, bus, cancel, policy };

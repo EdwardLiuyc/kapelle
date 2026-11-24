@@ -23,8 +23,12 @@ test("every subscriber receives every event", () => {
   const bus = createEventBus();
   const seenA: AgentEventEnvelope[] = [];
   const seenB: AgentEventEnvelope[] = [];
-  bus.addListener((e) => seenA.push(e));
-  bus.addListener((e) => seenB.push(e));
+  bus.addListener((e) => {
+    seenA.push(e);
+  });
+  bus.addListener((e) => {
+    seenB.push(e);
+  });
 
   bus.emit(event);
 
@@ -73,16 +77,49 @@ test("a throwing subscriber does not stop the ones behind it", (t) => {
   assert.doesNotThrow(() => bus.emit(event));
 
   assert.equal(reached, true);
+  assert.equal(errored.mock.calls.length, 1);
   // The error object travels, not its message — a listener bug keeps its stack.
   const [, thrown] = errored.mock.calls[0].arguments;
   assert.ok(thrown instanceof Error);
   assert.equal(thrown.message, "renderer is broken");
 });
 
+test("an async rejecting subscriber is logged and does not stop the ones behind it", async (t) => {
+  const bus = createEventBus();
+  const errored = t.mock.method(console, "error", () => {});
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  t.after(() => process.off("unhandledRejection", onUnhandled));
+
+  const seen: string[] = [];
+  bus.addListener(async () => {
+    seen.push("async");
+    throw new Error("renderer is broken");
+  });
+  bus.addListener(() => {
+    seen.push("next");
+  });
+
+  bus.emit(event);
+  assert.deepEqual(seen, ["async", "next"]);
+
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(errored.mock.calls.length, 1);
+  assert.deepEqual(unhandled, []);
+
+  // The error object travels, not its message — a listener bug keeps its stack.
+  const [, rejected] = errored.mock.calls[0].arguments;
+  assert.ok(rejected instanceof Error);
+  assert.equal(rejected.message, "renderer is broken");
+});
+
 test("emit detaches from the bus object, so it can be passed as onEvent", () => {
   const bus = createEventBus();
   const seen: AgentEventEnvelope[] = [];
-  bus.addListener((e) => seen.push(e));
+  bus.addListener((e) => {
+    seen.push(e);
+  });
 
   const sink = bus.emit;
   sink(event);

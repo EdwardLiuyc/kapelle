@@ -33,18 +33,33 @@
  * skips the listeners behind it, so a broken renderer would take the run down
  * with it. Wrapping every handler to prevent that costs more code than the
  * Set below.
+ *
+ * A listener may be async. Its promise is not awaited: listeners start in
+ * subscription order, but their continuations can interleave with later emits,
+ * so a listener that needs event order must queue its own work. A rejection
+ * is logged after `emit` returns, unlike a synchronous throw.
  */
 
 import type { AgentEventEnvelope } from "../protocol/agent.ts";
 
 /** Not exported until something imports it — same rule that kept
  *  `AgentEventEnvelope` internal until this file needed it. */
-type BusListener = (event: AgentEventEnvelope) => void;
+type BusListener = (event: AgentEventEnvelope) => void | Promise<void>;
+
+/** A consumer that fails is a bug in that consumer, never a reason to lose the
+ *  run or the events behind it. A rejected promise is reported here too. */
+function reportListenerError(err: unknown): void {
+  // The error object rather than its message: a listener bug is worth a
+  // stack trace.
+  // Reason: listener exceptions must be visible; this is the intended reporting point.
+  console.error("! event listener failed:", err); // pi-lens-ignore: console-statement
+}
 
 export interface EventBus {
   addListener(listener: BusListener): void;
-  /** Closure-bound, so it can be handed straight to `AcpAgent`'s `onEvent`. */
-  emit: BusListener;
+  /** Closure-bound, so it can be handed straight to `AcpAgent`'s `onEvent`.
+   *  The bus itself never returns a promise. */
+  emit: (event: AgentEventEnvelope) => void;
 }
 
 export function createEventBus(): EventBus {
@@ -61,13 +76,10 @@ export function createEventBus(): EventBus {
     emit(event) {
       for (const listener of listeners) {
         try {
-          listener(event);
+          const result = listener(event);
+          if (result) void Promise.resolve(result).catch(reportListenerError);
         } catch (err) {
-          // A consumer that throws is a bug in that consumer, never a reason
-          // to lose the run or the events behind it. The error object rather
-          // than its message: a listener bug is worth a stack trace.
-          // Reason: listener exceptions must be visible; this is the intended reporting point.
-          console.error("! event listener threw:", err); // pi-lens-ignore: console-statement
+          reportListenerError(err);
         }
       }
     },
