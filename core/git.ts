@@ -8,6 +8,10 @@
  * Every call states the exit codes it accepts and its output buffer. Calls that
  * expect success list 0; a diff also lists 1, because git uses it for "the
  * sides differ".
+ *
+ * An incomplete trailing UTF-8 sequence is dropped rather than decoded as
+ * U+FFFD. An exit 0 that `exitCodes` refuses is a caller error: `tryGit`
+ * rethrows it instead of returning null.
  */
 
 import { spawn } from "node:child_process";
@@ -24,7 +28,7 @@ export class GitError extends Error {
   readonly exitCode: number | null;
   readonly stdout: string;
   readonly stderr: string;
-  /** True when `exitCodes` refuses git's successful exit 0. */
+  /** True when the caller's options, not git, made the call fail. */
   readonly callerError: boolean;
 
   constructor(
@@ -94,11 +98,9 @@ function failureMessage(
   args: readonly string[],
   exitCode: number | null,
   stderr: string,
-  fallback?: string,
 ): string {
   const text = stderr.trim();
   if (text) return text;
-  if (fallback) return fallback;
   return exitCode === null
     ? `git ${commandName(args)} failed`
     : `git ${commandName(args)} exited with code ${exitCode}`;
@@ -188,6 +190,7 @@ export function gitWithInput(
             stdout(),
             stderr(),
             bufferMessage(args, options.maxBuffer, stream),
+            true,
           ),
         );
         child.kill();

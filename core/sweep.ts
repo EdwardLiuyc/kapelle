@@ -624,10 +624,9 @@ async function repoDeletePreview(
   if (branches.size === 0) return [];
 
   const owned = new Set([...branches].map((branch) => `refs/heads/${branch}`));
-  const refs = await gitWithInput(
+  const refs = await git(
     root,
     ["for-each-ref", "--format=%(refname)"],
-    "",
     GIT_INPUT,
   );
   const outside = refs.split("\n").filter((ref) => ref && !owned.has(ref));

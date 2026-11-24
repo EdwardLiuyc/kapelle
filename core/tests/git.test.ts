@@ -104,7 +104,7 @@ test("git accepts exit 1 only for the call that asks for it", async (t) => {
   );
 });
 
-test("git returns output larger than execFile's default buffer", async (t) => {
+test("git returns output larger than the old 1 MiB default buffer", async (t) => {
   const root = await gitRepo(t);
   const big = "x".repeat(1024 * 1024 + 64);
   await writeFile(join(root, "big.txt"), big);
@@ -227,6 +227,39 @@ fi
     const err = await rejectedGit(run);
     assert.equal(err.callerError, true);
     assert.equal(err.stderr, "err\n");
+  }
+});
+
+test("tryGit rethrows an overflow but accepts the exact buffer", async (t) => {
+  const root = await gitRepo(t);
+  await scriptedGit(
+    t,
+    () => `
+if [ "$1" = "payload" ]; then
+  printf '1234'
+  exit 0
+fi
+`,
+  );
+
+  assert.equal(
+    await tryGit(root, ["payload"], { ...GIT, maxBuffer: 4 }),
+    "1234",
+  );
+  assert.equal(
+    await tryGitLine(root, ["payload"], { ...GIT, maxBuffer: 4 }),
+    "1234",
+  );
+
+  for (const run of [
+    () => tryGit(root, ["payload"], { ...GIT, maxBuffer: 3 }),
+    () => tryGitLine(root, ["payload"], { ...GIT, maxBuffer: 3 }),
+  ]) {
+    const err = await rejectedGit(run);
+    assert.equal(err.exitCode, null);
+    assert.equal(err.stdout, "123");
+    assert.equal(err.callerError, true);
+    assert.match(err.message, /3-byte stdout buffer/);
   }
 });
 
