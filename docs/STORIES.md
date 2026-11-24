@@ -4385,6 +4385,8 @@ takes a caller who is not the operator" with D8, not with a sandbox. `SECURITY.m
 **The build order** is not the story numbers: part 1 (M11-1..M11-3), then M11-4..M11-6,
 then M11-8, then M11-7, then M11-9, then part 4 (M11-10, M11-11). M11-7 needs keys that
 stay the same after a restart, and M11-8 makes them.
+**Amended 2026-11-24 (M12 D1):** M11-3 waits for M12-8b, and M11-8 waits for M12-7b, so
+neither grows a file M12 splits. M11-4..M11-6 need neither.
 
 ### Part 1 — The hall
 
@@ -4436,7 +4438,7 @@ in a repository with no commit, and with no `--cwd`; an untouched scratch folder
 with its agent and a used one kept; and two agents in one room in two different
 repositories.
 
-**M11-3 · Move an agent into a room and out again · L · needs M11-2**
+**M11-3 · Move an agent into a room and out again · L · needs M11-2, M12-8b**
 `/move <name> <room>` moves an agent, from the hall or from a room. It keeps the same
 harness process, so it keeps its memory, its folder and its branch. Its old messages
 stay in the old room's log. Both rooms show a line: the agent left, the agent came in.
@@ -4513,7 +4515,7 @@ commands match what they did, and the measurement is recorded.
 
 ### Part 3 — People and keys
 
-**M11-8 · People and keys in a file · M · needs nothing**
+**M11-8 · People and keys in a file · M · needs M12-7b**
 On the daemon's machine, verbs add a person, add a key with a label, list them, and
 cancel one key. A new key is shown once; the daemon keeps only its hash. Keys are
 read at start and again after a change, so a cancel needs no restart. This story takes
@@ -4558,6 +4560,266 @@ Each person has their own hall, made the first time they connect. M11-1's hall i
 operator's. A person can add members to their hall, as to any room.
 *Done when* tests cover two people with two halls, a hall hidden from another person,
 and a hall shared by adding a member.
+
+---
+
+## M12 — A smaller, safer core
+
+**Added 2026-11-24.** The layers hold, but four files carry much of the logic:
+`core/room.ts` (3,222 lines), `daemon.ts` (2,804), `cli.ts` (2,003) and
+`protocol/agent.ts` (1,355). Some rules are written down but not checked, and a few
+small holes are known. M12 splits the two biggest files before M11 makes them bigger,
+and closes the holes. Every story keeps behaviour the same, except M12-4, M12-6,
+M12-10b and M12-11, which change it on purpose.
+
+**Decided 2026-11-24** (with the person):
+
+- **D1. M12 runs beside M11.** The small stories go first. M12-8a and M12-8b land before
+  M11-3, which changes `core/room.ts` a lot. M12-7a and M12-7b land before M11-8, which
+  adds keys to the daemon. M11-4..M11-6 touch other files and need neither. M11-7
+  follows M11-8, so it waits for M12-7b too.
+- **D2. The scope.** In: one git helper, the import rule, the DTOs, the permission scope,
+  the async listener, the run writer, the daemon and room splits, the security parts of
+  `protocol/agent.ts`, the CLI parser, and a bound on a kept title. To the backlog, each
+  with a trigger: dropping old runs, rooms and decisions from memory, a neutral folder
+  for the contract, and splitting the TUI files.
+- **D3. `ask` and `safe` never send `allow_always`.** One "allow" is one write on our
+  side (#310), but the harness that hears "always" may stop asking for that tool. Only
+  `auto` may send it. M1a-5 recorded two option lists (2026-09-02, #13): claude-agent-acp
+  0.49.0 and copilot 1.0.80 both offered `allow_once` beside `allow_always`. Those builds
+  are older than the registry's pins, and codex, kimi and opencode's ask for a write
+  outside the root have no record. M12-4 measures all five first.
+- **D4. Only the run writer is fixed now.** A daemon that boots beside a live CLI run
+  shows it as `killed` until its next restart. M12-6 fixes that. Two processes can also
+  race on `git worktree` commands for one repository, but nobody has seen it, so it goes
+  to the backlog. So does sending every run through the daemon: it is cleaner, but it is
+  a product change of its own.
+- **D5. The CLI refuses a flag it does not know**, and names it. A typo such as
+  `--cdw` must not run in the wrong folder in silence. `core/config.ts` refuses an
+  unknown key for the same reason. The change gets a `CHANGELOG.md` line.
+
+**The build order:** M12-1..M12-6 first, in any order. M12-7a → M12-7b and M12-8a →
+M12-8b can run side by side, each before its M11 story. M12-9 after M12-4. M12-10a →
+M12-10b, and M12-11, at any time.
+
+### Part 1 — Small fixes
+
+**M12-1 · One git helper · M · needs nothing**
+`core/worktree.ts`, `core/merge.ts`, `core/sweep.ts` and `core/diff.ts` each start `git`
+with their own copy of `git()`, and three have their own `tryGit()`. The copies differ:
+some trim the output, one sets a 64 MB buffer, one accepts exit code 1 from `git diff`,
+and `tryGit` hides every error. A new `core/git.ts` holds `git`, `tryGit` and
+`gitWithInput`, and the four files use it. The output is raw by default, with no trim,
+because a path can start or end with a space. A failure is a `GitError` with the exit
+code, stdout and stderr. Each call names the exit codes it accepts and its buffer. A path
+that a program reads uses `-z`. `git worktree list` is the one that does not today:
+`core/sweep.ts`'s `listWorktrees` splits it on newlines, so a worktree path with a
+newline reads as two (seen on 2026-11-24 with git 2.43). The sweep deletes, so it must
+not guess. Two calls stay as they are: `cli.ts`'s one `git` call is synchronous
+(`execFileSync`), and `client/loop.ts`'s `gitTop` is in `client/`, which may not import
+`core/`. `AGENTS.md`'s table gets a row for `core/git.ts`.
+**Gap:** `git worktree list --porcelain -z` (`-z` works only with `--porcelain`) needs
+git 2.36, and no doc names the oldest git kapelle supports. The pickup names it in the
+README, and decides what the sweep does with an older git: refuse to reap and say why,
+or keep today's read.
+*Done when* tests cover a worktree path with a newline, a path with spaces and non-ASCII
+letters, leading and trailing spaces kept, exit code 1 accepted for `diff` and refused
+elsewhere, a folder that is not a repository, output larger than the default buffer, and
+input on stdin; and no file in `core/` starts `git` except `core/git.ts`.
+
+**M12-2 · No import loops, and one test for the whole import rule · S · needs nothing**
+`core/config.ts` and `core/sweep.ts` import each other: config takes
+`DEFAULT_RETENTION_MS` from sweep, and sweep takes `resolveRetentionMs` from config.
+`chat/tui/question.ts` and `chat/tui/panel.ts` import each other too, one side with a
+type only. `core/config.ts` takes over `DEFAULT_RETENTION_MS`, and `EDITOR_THEME` moves
+to a small file in `chat/tui/`. Today `tests/chat-piped.test.ts` checks the import rule
+for `chat.ts`, `chat/` and `client/` only. That check moves to its own file and covers
+the whole source tree: `protocol/` imports no `core/`, `client/`, `chat/` or daemon file;
+`core/` imports no `client/`, `chat/` or daemon file; `client/` imports only `client/`
+and `protocol/types.ts`; the exceptions `AGENTS.md` names are listed by name; and no
+import loop exists at run time. A type-only import stays allowed, as today.
+*Done when* the checker is tested on a small made-up graph for each rule and for a loop,
+the test passes on the tree, and the two loops are gone.
+
+**M12-3 · DTOs for the three core shapes · S · needs nothing**
+`GET /permissions` and `GET /permissions/:id` send the objects of `core/permissions.ts`
+as they are. `GET`, `PATCH` and `PUT /config` send `{ root, ...projectConfigView(root) }`.
+So a field added in `core/` reaches every client with no type error. `daemon/dto.ts`
+gets `toPendingDecision`, `toPermissionDecision` and `toConfigView`. Each copies the
+fields the contract names, one by one, nested ones too: a decision's `diff`, and each
+config row. The header of `client/contract.ts` says three shapes, not four: a run's
+report already goes through `toTaskDto`. No reply changes.
+*Done when* tests add an unknown field at the top and in a nested object of each core
+shape and find it in no reply, and every existing daemon test passes unchanged.
+
+**M12-4 · `ask` and `safe` never send `allow_always` · M · needs nothing**
+D3. First, `docs/FINDINGS.md` records which option kinds each harness offers, for every
+request it was measured to send. claude, copilot, codex and kimi
+(`measured.asksPermission`) run one edit, and one request of each kind the policy
+approves with no question: `READ_ONLY_KINDS` in `core/policy.ts`, today `read`, `search`
+and `fetch`. opencode runs a write outside the root: it asks for that one, though its
+flag is `false` (§M9-1 re-measure, and `AGENTS.md`). claude and copilot are measured
+again, because M1a-5's record (2026-09-02, issue #13) is on older builds; the new
+section becomes the owner, and M1a-5's lines point to it. The same edit fixes the
+`asksPermission` line near the top of `docs/FINDINGS.md`, which still says the policy
+has no jurisdiction over opencode: §M9-1 re-measure found that it does, for that one
+request. This matters where a yes would become a refusal: under `safe` and `ask`, a
+read-only kind is allowed with no question, and under `ask`, a person may say yes to
+opencode's outside write. If a harness offers only `allow_always` there, the person
+decides before the change lands.
+A policy answers `true` or `false`, so `pickOption` cannot tell which mode said yes,
+and it takes `allow_always` when no `allow_once` is offered. A policy answer gains a
+scope: `once` or `session`. `true` still means `once`. `ask` and `safe` answer `once`;
+`auto` answers `session`. Under `once`, `pickOption` takes only `allow_once`, and returns
+`null` when there is none, so the request is refused as one with no match is. Under
+`session` it keeps today's order. A room reads its mode at each request, so a mode change
+counts from the next request. Our own rule does not change: one approval is one write of
+the bytes the person saw (#310). The top of `protocol/agent.ts` states the rule, and
+`CHANGELOG.md` gets a line.
+*Done when* `docs/FINDINGS.md` records the option kinds of every entry that sends a
+permission request, for an edit and for each kind in `READ_ONLY_KINDS`, opencode's
+outside write included, M1a-5's record points to it, and the `asksPermission` line no
+longer says the policy has no jurisdiction over opencode;
+and tests cover the `always-menu` attack (`hostile-agent.mjs`) refused under
+`ask` with no write; a new `hostile-agent.mjs` scenario, one attack as `AGENTS.md` asks,
+that offers only `allow_always` for a read-only tool, refused under `safe`; the
+`always-menu` attack under `auto` given `allow_always`, with the one-write rule still
+held; and a room switched from `auto` to `ask` refusing the next such request.
+
+**M12-5 · The bus catches an async listener's rejection · XS · needs nothing**
+`core/events.ts` catches a listener that throws. But TypeScript lets an `async` function
+stand where a `void` callback is wanted, and its rejected promise skips the `try`. It
+becomes an unhandled rejection, which can end the process. The listener type becomes
+`void | Promise<void>`. The bus still calls each listener in order and does not wait for
+it. A returned promise gets a `.catch` that logs, as a throw does.
+*Done when* tests cover an async listener that rejects: the error is logged, no unhandled
+rejection occurs, and the next listener still gets the event.
+
+**M12-6 · `run.json` names its writer · S · needs nothing**
+D4. A CLI `run --file` in an added repository writes `run.json`. A daemon that boots while
+that run works reads `running` and rewrites the record as `killed`. The CLI's next write
+puts the true status back, but the daemon shows `killed` until its own next restart. The
+`ponytail:` note in `core/sweep.ts` names this. The record gains its writer's pid and `ps`
+start time, as `children.json` has (`processIdentity`). The boot sweep leaves a record
+alone while its writer is alive. A record with no writer, written before this story, is
+read as today.
+**Gap:** what the daemon does with a run that another process owns. The pickup decides
+what `kapelle ps` shows for it, and whether `DELETE /runs/:id` refuses it.
+*Done when* tests cover a live CLI run kept `running` across a daemon boot, a record whose
+writer died rewritten as `killed`, and an old record with no writer read as today; and
+the `ponytail:` note is gone.
+
+### Part 2 — The big splits
+
+**M12-7a · The daemon's boot apart from its app · L · needs nothing**
+`daemon.ts` starts a server when it is imported, and holds about 18 maps and flags at
+module level. So each part that needs a test was cut out by hand into `daemon/`, and the
+rest is tested only by starting a daemon. `daemon/main.ts` does the arguments, the claim,
+the sweep, the restore, the signals and the listen. `daemon/app.ts` exports
+`createDaemonApp(deps)`, and importing it starts nothing. Its state sits in small owners,
+each with one job: runs, child processes, idempotency keys and rooms. It is not one big
+state object. `daemon.ts` stays the entry that the bin and `kapelle daemon start` load.
+No route changes. A daemon-wide cap on live harnesses, if one is ever wanted (R40), goes
+in `daemon/app.ts`. `AGENTS.md`'s rows for `daemon.ts` and `daemon/` change.
+*Done when* a test imports `daemon/app.ts`, serves real HTTP on port 0 in its own process,
+and covers one run route and one room route; the subprocess tests for start, claim,
+signals and crash recovery pass unchanged; and so does the rest of the suite.
+
+**M12-7b · A route table · M · needs M12-7a**
+`route()` is a 167-line `if / else if` chain with eight regular expressions. It becomes
+one table of `{ method, pattern, handler }`. The handlers move to
+`daemon/routes/runs.ts`, `daemon/routes/rooms.ts` and `daemon/routes/harnesses.ts`
+(`routes/`, because `daemon/run.ts` and `daemon/rooms.ts` already exist). The `Host`
+check and the token check stay in front of every route, in one place. An unknown path or
+a wrong method answers as today. No framework. `AGENTS.md`'s `daemon/` row names
+`daemon/routes/`.
+*Done when* every route's tests pass unchanged, a test walks the table and shows that
+each route is reached only after the `Host` and token checks, and `AGENTS.md`'s table
+names `daemon/routes/`.
+
+**M12-8a · `core/room.ts`: the types, the checks and the record in their own files · M · needs nothing**
+`core/room/types.ts` takes the shared types, the constants and `RoomRefusal`, and imports
+nothing from `core/room.ts`. It comes first, because the checks throw `RoomRefusal`.
+`core/room/validate.ts` takes `roomAgent`, `roomAgents`, `participantChanges` and the
+`check*` functions. `core/room/record.ts` takes `roomFile`, `writeRoomRecord`,
+`readRoomRecord`, `crashed` and the tombstone functions. Callers import from the new
+files. Each new file's header takes the rules of `core/room.ts`'s header that are about
+it, and `core/room.ts`'s header keeps the rest. `AGENTS.md`'s table gets a row for
+`core/room/`.
+*Done when* the suite passes unchanged, the import test finds no new loop,
+`core/room.ts` holds no check and no record function, and `AGENTS.md`'s table names the
+new files.
+
+**M12-8b · `core/room.ts`: turns and participants · L · needs M12-8a**
+`buildRoom` (about 845 lines) and `createParticipant` (about 970) share state through
+closures, so a change to the turn queue can break a revive or a save with nothing in
+sight. The shared state gets names, in small types with one job each, not one big state
+object. Then `core/room/turns.ts` takes the queue, the busy refusal and the turn cap, and
+`core/room/participant.ts` takes the spawn, the revive with `session/load`, the mode sent
+again, the model and the level. `Room` stays the one public interface. Checkout work
+still calls `core/worktree.ts`. `AGENTS.md`'s `core/room/` row names the two new files,
+and its rules that say "see the top of `core/room.ts`" point to the file that now holds
+each rule.
+*Done when* the suite passes unchanged, including the multi-turn and revive tests
+against `mock-agent.mjs`; each rule in today's header of `core/room.ts` sits in exactly
+one header; and `AGENTS.md`'s table and rules point to the right files.
+
+### Part 3 — The protocol and the CLI
+
+**M12-9 · `protocol/agent.ts`: the security parts in their own files · M · needs M12-4**
+`protocol/agent.ts` mixes the child process, JSON-RPC, the ACP calls, the path guard, file
+reads and writes, `pickOption`, the write decisions and stderr. `pickOption`, which is
+pure, and the path guard move to their own files. The guard calls `realpath`, so its name
+and header say that it reads the disk. The JSON-RPC framing moves too. `AcpAgent` stays
+the one public class, and the `toolCallId` map and `#writeDecisions` stay in it
+(`AGENTS.md`). Check every step against `mock-agent.mjs` and `hostile-agent.mjs` first.
+The 32 MiB line check stays as its `ponytail:` note says. `AGENTS.md` changes too: its
+table gets a row for each new `protocol/` file, and each of its rules that says "see the
+top of `protocol/agent.ts`" points to the file that now holds that rule.
+*Done when* every `mock-agent.mjs` and `hostile-agent.mjs` test passes unchanged, the guard
+and `pickOption` have tests of their own, and `AGENTS.md`'s table and rules point to the
+right files.
+
+**M12-10a · The CLI's flags today, pinned by tests · S · needs nothing**
+`cli.ts` parses its flags by hand. Before that changes, tests record what each verb does
+with: a flag before the verb, a flag with no value, a flag given twice, a value after a
+boolean flag, `--`, the arguments `kapelle chat` passes on to `chat.ts`, an unknown flag,
+and each usage error. Today at least `kapelle workspace --bogus` ignores the unknown flag.
+*Done when* each verb in `kapelle --help` has these cases, and the test file's header
+lists the verbs that ignore an unknown flag today.
+
+**M12-10b · The CLI parses with `parseArgs` and refuses an unknown flag · M · needs M12-10a**
+D5. `cli.ts` uses `parseArgs` from `node:util`, as `chat.ts` and `daemon.ts` do: strict,
+with `allowPositionals`, and one option list per verb, still in `cli.ts`. An unknown flag
+is refused with its name and the verb's usage. The refusals that are product rules stay,
+such as `--agent` beside `--file`. `CHANGELOG.md` names the change. Moving verbs into a
+`cli/` folder is not part of this story. #394 clears old pi-lens warnings in the same
+file; take it with this story or just before it.
+*Done when* M12-10a's tests pass unchanged, except the unknown-flag cases, which now expect
+the refusal.
+
+**M12-11 · A harness's title is cut before it is kept · S · needs nothing**
+D2. A tool call's title comes from the harness, and only the 32 MiB line limit bounds it.
+`AcpAgent` keeps each settled tool call's title for the life of a room, and
+`core/permissions.ts` keeps each settled decision's title for the life of the daemon (its
+`ponytail:` note). Both cut the title to a fixed length when the entry settles. A
+question about a live call still shows the whole title. A late question, about a call
+that has already settled, shows the cut title: `#requestPermission` reads the kept title
+when the request carries none (`protocol/agent.ts`). That is the cost of the bound. The
+event log still holds the whole line.
+A client sees the change: `GET /permissions/:id` sends a settled decision's `title`
+(`PendingDecision.title` in `client/contract.ts`). So `docs/CLIENT-API.md` says the title
+is cut, as it already says for `input` and `diff`, and `CHANGELOG.md` gets a line.
+`GET /permissions/:id` is a stable part, so the cut bumps the contract version
+(`docs/CLIENT-API.md`).
+**Gap:** the length, which the pickup picks from what the screens show; and which
+number the cut bumps. `major` is for a change that can break a client and `minor` for
+an addition, and a shorter field is neither.
+*Done when* tests cover a long title cut in both maps, a short title kept whole, a
+question about a live call with the whole title, a late question about a settled call
+with the cut title, the event log line unchanged, and `GET /permissions/:id`
+for a settled decision with a long title; `docs/CLIENT-API.md` states the cut; and the
+`ponytail:` note in `core/permissions.ts` says what is bounded now.
 
 ---
 
@@ -4633,7 +4895,7 @@ M9-1..M9-7, M9-3b, M9-5b, M9-5c, M9-5d, M9-8a ─ M9-8   (the first publish)
 another. M10-1 and M10-3 are done.
 
 **M11 (added 2026-11-13)** needs nothing that is open. Its build order is in its own
-section.
+section. **Amended 2026-11-24:** M11-3 needs M12-8b, and M11-8 needs M12-7b (M12 D1).
 
 ```text
 M11-1 ─ M11-2 ─ M11-3
@@ -4641,6 +4903,17 @@ M11-4 ─┬─ M11-5 ─┬─ M11-7
        └─ M11-6 ─┤
 M11-8 ───────────┘
 M11-8 ─ M11-9 ─ M11-10 ─ M11-11   (M11-11 also needs M11-1)
+```
+
+**M12 (added 2026-11-24)** needs nothing that is open, and runs beside M11. Its build
+order is in its own section.
+
+```text
+M12-1, M12-2, M12-3, M12-5, M12-6, M12-11   (need nothing)
+M12-4 ─ M12-9
+M12-7a ─ M12-7b ─ M11-8
+M12-8a ─ M12-8b ─ M11-3
+M12-10a ─ M12-10b
 ```
 
 Three things are worth pulling forward, because everything queues behind them:
@@ -4822,3 +5095,33 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   prints every `agent_thought_chunk` as dim text, and pi sends tens of thousands in one
   room. M7 only touches the TUI, which shows the word `thinking`. *Trigger:* a run whose
   output is hard to read because of thinking text.
+- **Drop old runs, rooms and decisions from the daemon's memory.** Named by M12 (D2). The
+  daemon keeps every run and room it loaded, every settled decision and every idempotency
+  key until it stops; the boot sweep is the only cleanup. M12-11 bounds the largest entry.
+  The shape when it is wanted: drop each kind with its own rule, on a timer. Do not call
+  the boot sweep on a timer, because live objects still point at those runs. A key that
+  expires lets a late retry start a second run, so its expiry is a contract change in
+  `docs/CLIENT-API.md`. *Trigger:* a daemon seen to grow in memory over days.
+- **A neutral folder for the client contract.** Named by M12 (D2). `daemon.ts` and four
+  files in `daemon/` import `client/contract.ts`, so the server depends on a folder named
+  "client". `docs/CLIENT-API.md` tells client authors to import that path, so a move
+  changes it for them. *Trigger:* a client outside this repository imports the contract,
+  or M11's remote screen ships a client package of its own.
+- **Split `chat/tui.ts` and `chat/tui/panel.ts`.** Named by M12 (D2). They hold 1,725 and
+  1,571 lines. Most screen logic is already pure, in `chat/view.ts` and `client/`. The
+  shape when it is wanted: first the pure parts, the key bindings and the form
+  definitions; the send flow only after it has a small interface to the screen.
+  *Trigger:* a story that needs a big change to either file.
+- **A lock between processes for `git worktree` commands.** Named by M12 (D4).
+  `serializeWorktreeMutation` runs one command at a time in one process only, so the CLI
+  and the daemon can race on one repository. *Trigger:* a worktree command seen to fail
+  because another kapelle process held git's lock.
+- **Every run goes through the daemon.** Named by M12 (D4). `kapelle run --file` would
+  post the run and follow it, as `--detach` and `attach` do. For: one owner for all run
+  state, so the race above and M12-6's case go away; more than one `ask` task in a run
+  (today they all fall to `safe`); one way to draw a run instead of two. Against: a run
+  needs the daemon; a folder outside every added repository needs a rule; ^C must cancel
+  the run (`DELETE /runs/:id` has no verb); with M11's remote daemon, the folder must
+  exist on the daemon's machine; and about 60 places in `tests/cli.test.ts` change. It
+  reverses M2-9's choice to keep the in-process path. *Trigger:* a person wants more than
+  one `ask` task in a run they watch, or the race above is seen. Decide it with M11-4.
