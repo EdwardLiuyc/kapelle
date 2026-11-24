@@ -659,7 +659,9 @@ async function roomOn(
   const roomId = newRoomId();
   const bus = createEventBus();
   const events: AgentEventEnvelope[] = [];
-  bus.addListener((e) => events.push(e));
+  bus.addListener((e) => {
+    events.push(e);
+  });
   const room = await openRoom({
     roomId,
     cwd: repo,
@@ -904,7 +906,9 @@ async function modeRoom(
   const roomId = newRoomId();
   const bus = createEventBus();
   const events: AgentEventEnvelope[] = [];
-  bus.addListener((e) => events.push(e));
+  bus.addListener((e) => {
+    events.push(e);
+  });
   const request = roomAgent({
     cmd: `node ${MOCK_AGENT}${scenario ? ` --scenario ${scenario}` : ""}`,
     name: "alice",
@@ -1626,7 +1630,9 @@ async function pausable(
   const roomId = newRoomId();
   const bus = createEventBus();
   const events: AgentEventEnvelope[] = [];
-  bus.addListener((e) => events.push(e));
+  bus.addListener((e) => {
+    events.push(e);
+  });
   const room = await openRoom({
     roomId,
     cwd: repo,
@@ -1659,7 +1665,9 @@ async function restored(
 ) {
   const bus = createEventBus();
   const events: AgentEventEnvelope[] = [];
-  bus.addListener((e) => events.push(e));
+  bus.addListener((e) => {
+    events.push(e);
+  });
   const room = await restoreRoom({
     record,
     setup: await openWorktrees(record.cwd, record.id),
@@ -1728,7 +1736,9 @@ test("a saved unknown agent is tombstoned and the rest of the room restores (#31
   const history = room.eventLog?.size ?? 0;
   const backBus = createEventBus();
   const backEvents: AgentEventEnvelope[] = [];
-  backBus.addListener((event) => backEvents.push(event));
+  backBus.addListener((event) => {
+    backEvents.push(event);
+  });
   const back = await restoreRoom({
     record,
     setup: await openWorktrees(repo, roomId),
@@ -1775,7 +1785,9 @@ test("a saved unknown agent is tombstoned and the rest of the room restores (#31
   );
   const secondBus = createEventBus();
   const secondEvents: AgentEventEnvelope[] = [];
-  secondBus.addListener((event) => secondEvents.push(event));
+  secondBus.addListener((event) => {
+    secondEvents.push(event);
+  });
   const secondNotices: string[] = [];
   const second = await restoreRoom({
     record: readRoomRecord(file),
@@ -2249,7 +2261,9 @@ async function loading(
   const roomId = newRoomId();
   const bus = createEventBus();
   const events: AgentEventEnvelope[] = [];
-  bus.addListener((e) => events.push(e));
+  bus.addListener((e) => {
+    events.push(e);
+  });
   const room = await openRoom({
     roomId,
     cwd: repo,
@@ -2606,7 +2620,9 @@ async function loopRoom(
   const roomId = newRoomId();
   const bus = createEventBus();
   const events: AgentEventEnvelope[] = [];
-  bus.addListener((e) => events.push(e));
+  bus.addListener((e) => {
+    events.push(e);
+  });
   const logged: string[] = [];
   const agent = (name: string, s: string, role?: string) =>
     roomAgent({
