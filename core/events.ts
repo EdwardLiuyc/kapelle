@@ -34,8 +34,10 @@
  * with it. Wrapping every handler to prevent that costs more code than the
  * Set below.
  *
- * A listener may be async. Its promise is not awaited: listeners run in
- * subscription order, and a rejection is logged and isolated like a throw.
+ * A listener may be async. Its promise is not awaited: listeners start in
+ * subscription order, but their continuations can interleave with later emits,
+ * so a listener that needs event order must queue its own work. A rejection
+ * is logged after `emit` returns, unlike a synchronous throw.
  */
 
 import type { AgentEventEnvelope } from "../protocol/agent.ts";
@@ -50,7 +52,7 @@ function reportListenerError(err: unknown): void {
   // The error object rather than its message: a listener bug is worth a
   // stack trace.
   // Reason: listener exceptions must be visible; this is the intended reporting point.
-  console.error("! event listener threw:", err); // pi-lens-ignore: console-statement
+  console.error("! event listener failed:", err); // pi-lens-ignore: console-statement
 }
 
 export interface EventBus {

@@ -77,6 +77,7 @@ test("a throwing subscriber does not stop the ones behind it", (t) => {
   assert.doesNotThrow(() => bus.emit(event));
 
   assert.equal(reached, true);
+  assert.equal(errored.mock.calls.length, 1);
   // The error object travels, not its message — a listener bug keeps its stack.
   const [, thrown] = errored.mock.calls[0].arguments;
   assert.ok(thrown instanceof Error);
@@ -104,6 +105,7 @@ test("an async rejecting subscriber is logged and does not stop the ones behind 
   assert.deepEqual(seen, ["async", "next"]);
 
   await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(errored.mock.calls.length, 1);
   assert.deepEqual(unhandled, []);
 
   // The error object travels, not its message — a listener bug keeps its stack.
