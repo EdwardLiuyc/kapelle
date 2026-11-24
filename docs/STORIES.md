@@ -4660,9 +4660,9 @@ root: it asks for that one, though its flag is `false` (§M9-1 re-measure, and
 `AGENTS.md`). claude and copilot are measured again, because M1a-5's record
 (2026-09-02, issue #13) is on older builds; the new section becomes the owner, and
 M1a-5's lines point to it. This matters where a yes would become a refusal: under
-`safe`, a read-only tool is allowed with no question, and under `ask`, a person may say yes to opencode's outside
-write. If a harness offers only `allow_always` there, the person decides before the
-change lands.
+`safe`, a read-only tool is allowed with no question, and under `ask`, a person may
+say yes to opencode's outside write. If a harness offers only `allow_always` there,
+the person decides before the change lands.
 A policy answers `true` or `false`, so `pickOption` cannot tell which mode said yes,
 and it takes `allow_always` when no `allow_once` is offered. A policy answer gains a
 scope: `once` or `session`. `true` still means `once`. `ask` and `safe` answer `once`;
