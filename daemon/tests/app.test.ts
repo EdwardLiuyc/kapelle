@@ -8,6 +8,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import type { AddressInfo } from "node:net";
+import { constants as osConstants } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -25,10 +26,40 @@ import {
   useDaemonDirs,
   withAgent,
 } from "../../integration/helpers.ts";
-import { createDaemonApp } from "../app.ts";
 import { digest } from "../http.ts";
 
-test("createDaemonApp serves a run and a room over real HTTP, then stops", async (t) => {
+test("createDaemonApp loads cleanly and serves both routes", async (t) => {
+  const signals = Object.keys(osConstants.signals);
+  const listeners = new Map(
+    signals.map((signal) => [signal, process.listenerCount(signal)]),
+  );
+  const servers = () =>
+    process
+      .getActiveResourcesInfo()
+      .filter((resource) => resource === "TCPSERVERWRAP").length;
+  const serversBefore = servers();
+  const argv = process.argv;
+  process.argv = new Proxy(argv, {
+    get() {
+      throw new Error("daemon/app.ts read process.argv at import");
+    },
+  });
+  const { createDaemonApp } = await import("../app.ts").finally(() => {
+    process.argv = argv;
+  });
+  for (const signal of signals) {
+    assert.equal(
+      process.listenerCount(signal),
+      listeners.get(signal),
+      `importing daemon/app.ts added a ${signal} handler`,
+    );
+  }
+  assert.equal(
+    servers(),
+    serversBefore,
+    "importing daemon/app.ts opened a server",
+  );
+
   const state = await tempDir(t);
   const before = {
     XDG_STATE_HOME: process.env.XDG_STATE_HOME,
@@ -51,7 +82,8 @@ test("createDaemonApp serves a run and a room over real HTTP, then stops", async
     childrenFile,
     permissionTimeoutMs: 120_000,
   });
-  // Importing and making the app opened nothing.
+  // Making the app opened nothing; the import checks above prove its own
+  // side-effect-free load.
   assert.equal(app.server.listening, false);
   app.restoreRuns();
   await app.restoreRooms();
