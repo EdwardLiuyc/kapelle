@@ -39,7 +39,6 @@
  * external diff, a text conversion and renames, and quotes in a path.
  */
 
-import { execFile } from "node:child_process";
 import {
   copyFile,
   mkdir,
@@ -52,12 +51,23 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { promisify } from "node:util";
 
 import type { PolicyEdit } from "../protocol/agent.ts";
 import type { Diff } from "../protocol/types.ts";
+import { GitError, type GitOptions, git } from "./git.ts";
 
-const run = promisify(execFile);
+const GIT = { exitCodes: [0], maxBuffer: 1024 * 1024 } satisfies GitOptions;
+const DIFF = {
+  exitCodes: [0, 1],
+  maxBuffer: 64 * 1024 * 1024,
+} satisfies GitOptions;
+const line = (text: string): string => text.replace(/\r?\n$/, "");
+const gitIn = (
+  cwd: string,
+  args: readonly string[],
+  options: GitOptions,
+): Promise<string> =>
+  git(cwd, ["-c", "core.quotepath=false", ...args], options);
 
 const QUESTION_CAP = 32 * 1024;
 const ROUTE_CAP = 512 * 1024;
@@ -77,31 +87,6 @@ function underDir(dir: string, path: string): string {
   if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`))
     throw new Error(`diff path leaves its temporary folder: ${path}`);
   return target;
-}
-
-/** `git` with its stdout. `git diff` exits 1 when the two sides differ,
- *  which is not an error here. */
-async function git(
-  cwd: string,
-  args: string[],
-  env?: NodeJS.ProcessEnv,
-): Promise<string> {
-  try {
-    const { stdout } = await run(
-      "git",
-      ["-c", "core.quotepath=false", ...args],
-      // ponytail: a diff past 64 MB fails; stream and cut it if one ever
-      // needs to show.
-      { cwd, env: env ?? process.env, maxBuffer: 64 * 1024 * 1024 },
-    );
-    return stdout;
-  } catch (err) {
-    const e = err as { code?: unknown; stdout?: string };
-    if (e.code === 1 && args.includes("diff") && e.stdout !== undefined) {
-      return e.stdout;
-    }
-    throw err;
-  }
 }
 
 /**
@@ -173,14 +158,18 @@ export async function editDiff(
         await mkdir(dirname(file), { recursive: true });
         await writeFile(file, text, "utf8");
       }
-      let out = await git(dir, [
-        "diff",
-        "--no-index",
-        "--no-prefix",
-        ...DIFF_FLAGS,
-        old === null ? "/dev/null" : a,
-        b,
-      ]);
+      let out = await gitIn(
+        dir,
+        [
+          "diff",
+          "--no-index",
+          "--no-prefix",
+          ...DIFF_FLAGS,
+          old === null ? "/dev/null" : a,
+          b,
+        ],
+        DIFF,
+      );
       // A new file's header names `b/` twice; say `a/` first, as git does
       // in a repository.
       if (old === null) out = out.replace(/^diff --git b\//, "diff --git a/");
@@ -199,11 +188,15 @@ async function resolveCommit(
   ref: string,
 ): Promise<string | undefined> {
   try {
-    return (
-      await git(dir, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`])
-    ).trim();
+    return line(
+      await gitIn(
+        dir,
+        ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`],
+        GIT,
+      ),
+    );
   } catch (err) {
-    if ((err as { code?: unknown }).code === 1) return undefined;
+    if (err instanceof GitError && err.exitCode === 1) return undefined;
     throw err;
   }
 }
@@ -220,10 +213,10 @@ export async function isAncestor(
   const commit = await resolveCommit(dir, ancestor);
   if (commit === undefined) return false;
   try {
-    await git(dir, ["merge-base", "--is-ancestor", commit, ref]);
+    await gitIn(dir, ["merge-base", "--is-ancestor", commit, ref], GIT);
     return true;
   } catch (err) {
-    if ((err as { code?: unknown }).code === 1) return false;
+    if (err instanceof GitError && err.exitCode === 1) return false;
     throw err;
   }
 }
@@ -241,7 +234,7 @@ export async function mergeBase(
 ): Promise<string | undefined> {
   const base = await resolveCommit(dir, baseRef);
   if (base === undefined) return undefined;
-  return (await git(dir, ["merge-base", base, ref])).trim();
+  return line(await gitIn(dir, ["merge-base", base, ref], GIT));
 }
 
 /**
@@ -255,10 +248,10 @@ export async function checkoutDiff(
   ref: string,
   cap = ROUTE_CAP,
 ): Promise<Diff> {
-  const top = (await git(dir, ["rev-parse", "--show-toplevel"])).trim();
+  const top = line(await gitIn(dir, ["rev-parse", "--show-toplevel"], GIT));
   const index = resolve(
     top,
-    (await git(top, ["rev-parse", "--git-path", "index"])).trim(),
+    line(await gitIn(top, ["rev-parse", "--git-path", "index"], GIT)),
   );
   const tmp = await mkdtemp(join(tmpdir(), "kapelle-index-"));
   try {
@@ -276,11 +269,11 @@ export async function checkoutDiff(
       await copyFile(index, copy).catch(() => {});
     }
     const env = { ...process.env, GIT_INDEX_FILE: copy };
-    await git(top, ["add", "--intent-to-add", "--", "."], env);
-    const text = await git(
+    await gitIn(top, ["add", "--intent-to-add", "--", "."], { ...GIT, env });
+    const text = await gitIn(
       top,
       ["diff", ...DIFF_FLAGS, "--src-prefix=a/", "--dst-prefix=b/", ref, "--"],
-      env,
+      { ...DIFF, env },
     );
     return capDiff(text, cap);
   } finally {
@@ -299,15 +292,19 @@ export async function rangeDiff(
   toRef: string,
   cap = ROUTE_CAP,
 ): Promise<Diff> {
-  const text = await git(cwd, [
-    "diff",
-    ...DIFF_FLAGS,
-    "--src-prefix=a/",
-    "--dst-prefix=b/",
-    // Three dots: from where the two meet, so a target commit the source
-    // lacks is not shown as removed.
-    `${fromRef}...${toRef}`,
-    "--",
-  ]);
+  const text = await gitIn(
+    cwd,
+    [
+      "diff",
+      ...DIFF_FLAGS,
+      "--src-prefix=a/",
+      "--dst-prefix=b/",
+      // Three dots: from where the two meet, so a target commit the source
+      // lacks is not shown as removed.
+      `${fromRef}...${toRef}`,
+      "--",
+    ],
+    DIFF,
+  );
   return capDiff(text, cap);
 }

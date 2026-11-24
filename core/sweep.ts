@@ -55,12 +55,13 @@
  * `restoreRuns` follows.
  */
 
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { rename, writeFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { resolveRetentionMs } from "./config.ts";
+import { GitError, type GitOptions, git, gitWithInput, tryGit } from "./git.ts";
 import { branchName, branchPrefix } from "./ids.ts";
 import {
   crashed,
@@ -78,6 +79,19 @@ import {
 } from "./worktree.ts";
 
 const run = promisify(execFile);
+const GIT = { exitCodes: [0], maxBuffer: 1024 * 1024 } satisfies GitOptions;
+const GIT_INPUT = {
+  exitCodes: [0],
+  maxBuffer: 64 * 1024 * 1024,
+} satisfies GitOptions;
+const line = (text: string): string => text.replace(/\r?\n$/, "");
+const tryGitLine = async (
+  cwd: string,
+  args: readonly string[],
+): Promise<string | null> => {
+  const text = await tryGit(cwd, args, GIT);
+  return text === null ? null : line(text);
+};
 
 const messageOf = (err: unknown) =>
   err instanceof Error ? err.message : String(err);
@@ -393,15 +407,31 @@ async function managedWorktrees(
 
 /** `managedWorktrees`, but a throw when git cannot answer. */
 async function listWorktrees(root: string): Promise<ManagedWorktree[]> {
+  // Probe before prune: an older git must not change the admin directory
+  // before the sweep knows it can read every path safely.
+  try {
+    await worktreeGit(root, ["worktree", "list", "--porcelain", "-z"]);
+  } catch (err) {
+    const detail = err instanceof GitError ? err.message : messageOf(err);
+    throw new Error(
+      "worktree paths need `git worktree list --porcelain -z` " +
+        `(Git 2.36 or newer): ${detail}`,
+    );
+  }
   // An admin entry whose working tree is gone is what plain `git worktree
   // prune` exists for; clearing it first keeps the list below honest.
   await worktreeGit(root, ["worktree", "prune"]);
-  const out = await worktreeGit(root, ["worktree", "list", "--porcelain"]);
+  const out = await worktreeGit(root, [
+    "worktree",
+    "list",
+    "--porcelain",
+    "-z",
+  ]);
   const wtRoot = join(stateDirFor(root), "wt");
   const managed: ManagedWorktree[] = [];
-  for (const line of out.split("\n")) {
-    if (!line.startsWith("worktree ")) continue;
-    const path = line.slice("worktree ".length);
+  for (const field of out.split("\0")) {
+    if (!field.startsWith("worktree ")) continue;
+    const path = field.slice("worktree ".length);
     const rel = relative(wtRoot, path);
     // The repository's own checkout is a `..` away and is never ours.
     if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`)) continue;
@@ -516,11 +546,15 @@ async function roomBranches(
   left: string[],
 ): Promise<Set<string>> {
   const prefix = branchPrefix(roomId);
-  const refs = await git(root, [
-    "for-each-ref",
-    "--format=%(refname:lstrip=2)",
-    `refs/heads/${prefix.slice(0, -1)}`,
-  ]);
+  const refs = await git(
+    root,
+    [
+      "for-each-ref",
+      "--format=%(refname:lstrip=2)",
+      `refs/heads/${prefix.slice(0, -1)}`,
+    ],
+    GIT,
+  );
   const branches = new Set(refs.split("\n").filter(Boolean));
   for (const p of saved) {
     const branch = p.branch;
@@ -576,7 +610,7 @@ async function repoDeletePreview(
 ): Promise<RoomDeletePreview["branches"]> {
   // A room whose cwd is no repository has no branches to lose, as
   // `removeRoom` says.
-  if ((await tryGit(root, ["rev-parse", "--git-dir"])) === null) return [];
+  if ((await tryGitLine(root, ["rev-parse", "--git-dir"])) === null) return [];
   const branches = await roomBranches(root, roomId, saved, []);
   if (branches.size === 0) return [];
 
@@ -585,11 +619,12 @@ async function repoDeletePreview(
     root,
     ["for-each-ref", "--format=%(refname)"],
     "",
+    GIT_INPUT,
   );
   const outside = refs.split("\n").filter((ref) => ref && !owned.has(ref));
   // A detached main checkout is a ref too: its commit survives the delete.
   if (
-    (await tryGit(root, ["symbolic-ref", "--quiet", "--short", "HEAD"])) ===
+    (await tryGitLine(root, ["symbolic-ref", "--quiet", "--short", "HEAD"])) ===
     null
   ) {
     outside.push("HEAD");
@@ -614,6 +649,7 @@ async function repoDeletePreview(
           "--",
         ],
         negative,
+        GIT_INPUT,
       );
       const commits = log
         .split("\n")
@@ -629,6 +665,7 @@ async function repoDeletePreview(
                 root,
                 ["rev-list", "--count", branch, "--stdin", "--"],
                 negative,
+                GIT_INPUT,
               ),
             )
           : commits.length;
@@ -681,7 +718,7 @@ export async function removeRoom(
       force: true,
     });
     // A room whose cwd is no repository has no branches.
-    if ((await tryGit(at, ["rev-parse", "--git-dir"])) === null) continue;
+    if ((await tryGitLine(at, ["rev-parse", "--git-dir"])) === null) continue;
     // A checkout removed by hand leaves an admin entry that still holds its
     // branch; `roomCheckouts` skipped the prune when the folder was gone.
     await worktreeGit(at, ["worktree", "prune"]);
@@ -752,7 +789,12 @@ async function reconcileOrphan(path: string, pass: RepoPass): Promise<void> {
   // on no ref at all, and removing the checkout takes its reflog with it, so
   // the commits become unreachable. Orphans are precisely the `kill -9` case,
   // which is when an agent is most likely to have been interrupted mid-move.
-  const on = await tryGit(path, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  const on = await tryGitLine(path, [
+    "symbolic-ref",
+    "--quiet",
+    "--short",
+    "HEAD",
+  ]);
   if (on === null) {
     onNotice(
       `leaving orphan worktree ${path}: it is on a detached HEAD, so any ` +
@@ -769,25 +811,14 @@ async function reconcileOrphan(path: string, pass: RepoPass): Promise<void> {
   onNotice(`removed orphan worktree ${path}; its branch ${on} is kept`);
 }
 
-/** `git`, but a failure is an answer (`null`) rather than a throw. */
-async function tryGit(cwd: string, args: string[]): Promise<string | null> {
-  try {
-    const out = await git(cwd, args);
-    return out.trim();
-  } catch {
-    return null;
-  }
-}
-
 /** Does the repository have this exact local branch? */
 async function hasBranch(root: string, branch: string): Promise<boolean> {
   try {
-    await git(root, [
-      "rev-parse",
-      "--verify",
-      "--quiet",
-      `refs/heads/${branch}`,
-    ]);
+    await git(
+      root,
+      ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`],
+      GIT,
+    );
     return true;
   } catch {
     return false;
@@ -861,45 +892,6 @@ async function reapRun(
   onNotice(`reaped run ${id}`);
 }
 
-async function git(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await run("git", args, { cwd });
-  return stdout;
-}
-
-/** `git` with a string on stdin, so long revision lists stay off argv and a
- *  read is not capped by `execFile`'s buffer. `--stdin` reads `^<ref>` lines. */
-function gitWithInput(
-  cwd: string,
-  args: string[],
-  input: string,
-): Promise<string> {
-  return new Promise((ok, fail) => {
-    const child = spawn("git", args, { cwd });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8").on("data", (text) => {
-      stdout += text;
-    });
-    child.stderr.setEncoding("utf8").on("data", (text) => {
-      stderr += text;
-    });
-    child.on("error", fail);
-    child.on("close", (code) => {
-      if (code === 0) ok(stdout);
-      else
-        fail(
-          new Error(
-            stderr.trim() ||
-              `git ${args[0] ?? "command"} exited with code ${code}`,
-          ),
-        );
-    });
-    // A git that exits before reading stdin makes this write fail.
-    child.stdin.on("error", () => {});
-    child.stdin.end(input);
-  });
-}
-
 /**
  * `git` for a command that reads or writes `.git/worktrees/`: the same
  * per-repository queue `core/worktree.ts` uses, because a concurrent
@@ -907,7 +899,7 @@ function gitWithInput(
  */
 async function worktreeGit(cwd: string, args: string[]): Promise<string> {
   return serializeWorktreeMutation(await mutationKey(cwd), () =>
-    git(cwd, args),
+    git(cwd, args, GIT),
   );
 }
 
@@ -1099,7 +1091,10 @@ const isLockNotice = (notice: { text: string }) =>
 
 /** The checkout's `index.lock`, when git left one, or `null`. */
 async function indexLock(worktree: string): Promise<string | null> {
-  const gitDir = await tryGit(worktree, ["rev-parse", "--absolute-git-dir"]);
+  const gitDir = await tryGitLine(worktree, [
+    "rev-parse",
+    "--absolute-git-dir",
+  ]);
   if (gitDir === null) return null;
   const lock = join(gitDir, "index.lock");
   return existsSync(lock) ? lock : null;

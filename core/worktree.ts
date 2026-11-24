@@ -74,10 +74,25 @@ import {
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { isAncestor } from "./diff.ts";
+import { GitError, type GitOptions, git, tryGit } from "./git.ts";
 import { branchName } from "./ids.ts";
 import { stateDirFor } from "./runtime.ts";
 
 const run = promisify(execFile);
+const GIT = { exitCodes: [0], maxBuffer: 1024 * 1024 } satisfies GitOptions;
+const line = (text: string): string => text.replace(/\r?\n$/, "");
+const gitLine = async (
+  cwd: string,
+  args: readonly string[],
+  options: GitOptions = GIT,
+): Promise<string> => line(await git(cwd, args, options));
+const tryGitLine = async (
+  cwd: string,
+  args: readonly string[],
+): Promise<string | null> => {
+  const text = await tryGit(cwd, args, GIT);
+  return text === null ? null : line(text);
+};
 
 /**
  * The one thing still kept **inside** the repository: `<repo>/.kapelle/`, which
@@ -140,10 +155,10 @@ async function trackedChangedPaths(cwd: string): Promise<string[]> {
 }
 
 async function statusPaths(cwd: string, untracked: string): Promise<string[]> {
-  const { stdout } = await run(
-    "git",
+  const stdout = await git(
+    cwd,
     ["status", "--porcelain", "-z", untracked],
-    { cwd },
+    GIT,
   );
   const entries = stdout.split("\0");
   const paths: string[] = [];
@@ -159,21 +174,6 @@ async function statusPaths(cwd: string, untracked: string): Promise<string[]> {
     }
   }
   return paths;
-}
-
-async function git(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await run("git", args, { cwd });
-  return stdout.trim();
-}
-
-/** `git` for the questions whose answer is the exit code — `rev-parse
- *  --verify`, `--show-toplevel` — where a non-zero exit is information. */
-async function tryGit(cwd: string, args: string[]): Promise<string | null> {
-  try {
-    return await git(cwd, args);
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -228,7 +228,7 @@ export function serializeWorktreeMutation<T>(
  * could then race as before (#203).
  */
 export async function mutationKey(root: string): Promise<string> {
-  const common = await tryGit(root, ["rev-parse", "--git-common-dir"]);
+  const common = await tryGitLine(root, ["rev-parse", "--git-common-dir"]);
   const key = common === null ? root : resolve(root, common);
   // `realpath`, because two spellings of one directory — a symlinked `.git`,
   // or macOS's `/var` and `/private/var` — must share one queue (#85).
@@ -251,7 +251,7 @@ export async function mutationKey(root: string): Promise<string> {
 export async function stateDirRoot(
   cwd: string,
 ): Promise<{ root: string; isRepo: boolean }> {
-  const root = await tryGit(cwd, ["rev-parse", "--show-toplevel"]);
+  const root = await tryGitLine(cwd, ["rev-parse", "--show-toplevel"]);
   if (root === null) return { root: cwd, isRepo: false };
   return { root, isRepo: true };
 }
@@ -297,14 +297,23 @@ export async function fastForwardCheckout(
   sourceRef: string,
   expectedBranch: string,
 ): Promise<{ sha: string; moved: boolean }> {
-  const on = await tryGit(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  const on = await tryGitLine(cwd, [
+    "symbolic-ref",
+    "--quiet",
+    "--short",
+    "HEAD",
+  ]);
   if (on !== expectedBranch) {
     throw new NotFastForward(
       `the checkout is on ${on === null ? "a detached HEAD" : `branch ${on}`}, ` +
         `not ${expectedBranch}; refusing to move a branch it is not on.`,
     );
   }
-  const target = await tryGit(cwd, ["rev-parse", "--verify", "HEAD^{commit}"]);
+  const target = await tryGitLine(cwd, [
+    "rev-parse",
+    "--verify",
+    "HEAD^{commit}",
+  ]);
   if (target === null) {
     throw new BadBase(
       `the target branch ${JSON.stringify(expectedBranch)} does not resolve ` +
@@ -319,7 +328,7 @@ export async function fastForwardCheckout(
         "Commit or stash them first.",
     );
   }
-  const source = await tryGit(cwd, [
+  const source = await tryGitLine(cwd, [
     "rev-parse",
     "--verify",
     `${sourceRef}^{commit}`,
@@ -336,17 +345,16 @@ export async function fastForwardCheckout(
         "this is a merge, not a fast-forward.",
     );
   }
-  const before = await git(cwd, ["rev-parse", "HEAD"]);
+  const before = await gitLine(cwd, ["rev-parse", "HEAD"]);
   try {
     // `LC_ALL=C` so the stderr pattern below is the one Git prints; a
     // localized message would otherwise read as a 500, not `dirty_worktree`.
-    await run("git", ["merge", "--ff-only", source], {
-      cwd,
+    await git(cwd, ["merge", "--ff-only", source], {
+      ...GIT,
       env: { ...process.env, LC_ALL: "C" },
     });
   } catch (err) {
-    const stderr = (err as { stderr?: unknown }).stderr;
-    const text = typeof stderr === "string" ? stderr : "";
+    const text = err instanceof GitError ? err.stderr : "";
     if (
       /would be overwritten|untracked working tree files|local changes/i.test(
         text,
@@ -359,7 +367,7 @@ export async function fastForwardCheckout(
     }
     throw err;
   }
-  const sha = await git(cwd, ["rev-parse", "HEAD"]);
+  const sha = await gitLine(cwd, ["rev-parse", "HEAD"]);
   return { sha, moved: sha !== before };
 }
 
@@ -421,7 +429,7 @@ export async function checkoutIdentity(
   cwd: string,
   expected?: string,
 ): Promise<CheckoutIdentity | null> {
-  const branch = await tryGit(cwd, [
+  const branch = await tryGitLine(cwd, [
     "symbolic-ref",
     "--quiet",
     "--short",
@@ -431,7 +439,7 @@ export async function checkoutIdentity(
   // 500 entries is far more than one turn can write, and enough to reach the
   // last rebase after a long run of commits. A missing or unreadable reflog
   // is not an error: the branch alone is still the answer.
-  const reflog = await tryGit(cwd, [
+  const reflog = await tryGitLine(cwd, [
     "reflog",
     "show",
     "--format=%H%x00%gs",
@@ -457,7 +465,7 @@ export async function checkoutIdentity(
       if (match?.[1] === expected && match[2] === branch) {
         // A pre-existing branch can carry a rename entry from the same old
         // name; only a rename that removed that old ref is this checkout's.
-        const previous = await tryGit(cwd, [
+        const previous = await tryGitLine(cwd, [
           "rev-parse",
           "--verify",
           "--quiet",
@@ -480,7 +488,7 @@ export async function checkoutIdentity(
     if (NEUTRAL_REFLOG.test(subject)) continue;
     const onto = REBASE_ONTO.exec(subject)?.[1];
     if (onto === undefined) break;
-    const base = await tryGit(cwd, [
+    const base = await tryGitLine(cwd, [
       "rev-parse",
       "--verify",
       `${onto}^{commit}`,
@@ -762,13 +770,11 @@ async function planLinkSource(
 ): Promise<LinkSource | undefined> {
   // Tracked is a refusal even when the working copy is missing: the new
   // checkout would check the path out and collide with the link.
-  const listed = await git(root, [
-    "--literal-pathspecs",
-    "ls-files",
-    "-z",
-    "--",
-    path,
-  ]);
+  const listed = await git(
+    root,
+    ["--literal-pathspecs", "ls-files", "-z", "--", path],
+    GIT,
+  );
   if (listed !== "") {
     throw new LinkPathError(
       `${where} is tracked by git; a new checkout would collide with it.`,
@@ -905,14 +911,18 @@ async function applyLinkSources(
         created.push(target);
       }
 
-      const dirty = await git(checkout, [
-        "--literal-pathspecs",
-        "status",
-        "--porcelain",
-        "--untracked-files=all",
-        "--",
-        targetPath,
-      ]);
+      const dirty = await git(
+        checkout,
+        [
+          "--literal-pathspecs",
+          "status",
+          "--porcelain",
+          "--untracked-files=all",
+          "--",
+          targetPath,
+        ],
+        GIT,
+      );
       if (dirty !== "") {
         throw new LinkPathError(
           `${plan.where} is not ignored in a new checkout: git status ` +
@@ -1016,7 +1026,7 @@ export async function openWorktrees(
   // An unborn HEAD is a repository with nothing to branch from. Same fallback
   // as no repository at all: `git worktree add` would fail per task, and one
   // notice up front beats N identical spawn failures.
-  if ((await tryGit(root, ["rev-parse", "--verify", "HEAD"])) === null) {
+  if ((await tryGitLine(root, ["rev-parse", "--verify", "HEAD"])) === null) {
     return {
       worktrees: null,
       root,
@@ -1050,7 +1060,7 @@ export async function openWorktrees(
       ? undefined
       : `${dirty} uncommitted ${dirty === 1 ? "file" : "files"} in ${root} ` +
         `will not reach any task — tasks branch from HEAD ` +
-        `(${await git(root, ["rev-parse", "--short", "HEAD"])}).`;
+        `(${await gitLine(root, ["rev-parse", "--short", "HEAD"])}).`;
 
   // Where `cwd` sits inside the repository, so each task's checkout can be
   // entered at the same place. Empty for a run started at the repo root, which
@@ -1085,7 +1095,7 @@ export async function openWorktrees(
         // Resolved to a sha, and the worktree created from the sha: a branch
         // used as a base could move between two tasks of the same run, which
         // would silently give them different starting points.
-        const baseSha = await tryGit(root, [
+        const baseSha = await tryGitLine(root, [
           "rev-parse",
           "--verify",
           `${baseRef}^{commit}`,
@@ -1101,7 +1111,7 @@ export async function openWorktrees(
         // Keep its full name so HEAD means the repository's branch. Detached
         // HEAD prints HEAD; a revision such as HEAD~1 prints nothing. Both
         // stay pinned to the SHA above.
-        const symbolic = await tryGit(root, [
+        const symbolic = await tryGitLine(root, [
           "rev-parse",
           "--verify",
           "--symbolic-full-name",
@@ -1112,7 +1122,7 @@ export async function openWorktrees(
 
         const path = join(stateDirFor(root), "wt", runId, taskId);
         await mutateWorktrees(() =>
-          git(root, ["worktree", "add", "-b", branch, path, baseSha]),
+          git(root, ["worktree", "add", "-b", branch, path, baseSha], GIT),
         );
         held.set(taskId, { path, branch, baseSha, baseRef: configuredRef });
 
@@ -1214,7 +1224,7 @@ export async function openWorktrees(
         // not create clears the flag, so that name is never deleted.
         const original = branchName(runId, taskId);
         const ours = task.branch === original || task.renamed === true;
-        const on = await tryGit(task.path, [
+        const on = await tryGitLine(task.path, [
           "symbolic-ref",
           "--quiet",
           "--short",
@@ -1231,7 +1241,7 @@ export async function openWorktrees(
         }
 
         const dirty = (await changedPaths(task.path)).length > 0;
-        const head = await git(task.path, ["rev-parse", "HEAD"]);
+        const head = await gitLine(task.path, ["rev-parse", "HEAD"]);
         const untouched = !dirty && head === task.baseSha;
 
         // Nothing was produced, so there is nothing to inspect. The branch
@@ -1245,7 +1255,7 @@ export async function openWorktrees(
             // `branch -D` reads every checkout to refuse a branch in use, so
             // a concurrent `worktree add` can hand it a half-written entry.
             await mutateWorktrees(() =>
-              git(root, ["branch", "-D", task.branch]),
+              git(root, ["branch", "-D", task.branch], GIT),
             );
           }
           return null;
@@ -1258,13 +1268,12 @@ export async function openWorktrees(
         // throws the work away, and M1c-3 would later merge a branch sitting
         // at its own base ref.
         if (dirty) {
-          await git(task.path, ["add", "-A"]);
-          await git(task.path, [
-            "commit",
-            "--no-verify",
-            "-m",
-            `kapelle: ${taskId} (${runId})`,
-          ]);
+          await git(task.path, ["add", "-A"], GIT);
+          await git(
+            task.path,
+            ["commit", "--no-verify", "-m", `kapelle: ${taskId} (${runId})`],
+            GIT,
+          );
         }
         await mutateWorktrees(() => removeWorktree(root, task.path));
         return null;
@@ -1282,7 +1291,7 @@ export async function openWorktrees(
  *  `openWorktrees` — because `remove` races a concurrent `add` on the shared
  *  `.git/worktrees/` directory (#203). */
 function removeWorktree(root: string, path: string): Promise<string> {
-  return git(root, ["worktree", "remove", "--force", path]);
+  return git(root, ["worktree", "remove", "--force", path], GIT);
 }
 
 /**
@@ -1352,7 +1361,7 @@ export async function moveWorkspace(
   }
   if (checkouts.length > 0) {
     await serializeWorktreeMutation(await mutationKey(to), () =>
-      git(to, ["worktree", "repair", ...checkouts]),
+      git(to, ["worktree", "repair", ...checkouts], GIT),
     );
   }
 
