@@ -3,6 +3,34 @@
 What changed in each version that a user can see. A release writes its section;
 `docs/RELEASING.md` says how.
 
+## 0.3.0
+
+### Added
+
+- The hall: a room the daemon always keeps, with no orchestrator. Its agents show as
+  chats under `── chats ──` in the sidebar. `/chat` starts one from any view, and
+  `kapelle chat list` prints each as `@name (hall)` (#519).
+- `kapelle chat attach @name` on a pipe opens one hall chat (#525).
+- `kapelle chat scratch [clean [--yes]]` lists the kept hall scratch folders, and
+  removes the stale ones (#528).
+- `/chat` and `/add` take `--cwd`, and their forms have a folder field. Each agent can
+  work in its own repository, or in a folder with no git (#523).
+- Pick an agent's thinking level: `@name /level` lists the model's levels, and
+  `@name /level <id>` picks one (#508). `kapelle room add` takes `--level <id>` (#521).
+- The TUI status line shows the thinking level (#512).
+- `/config` opens a form for the project config, `.kapelle/config.json` (#503).
+
+### Changed
+
+- `/config` opens a config file whose content is not valid. It shows the error, and a
+  save replaces the whole file (#529).
+- A chat refuses `/title` and `/cap`, as it refuses `/add` (#522).
+
+### Fixed
+
+- When a room is deleted, the other chat screens say "the room was deleted". They no
+  longer mark it as lost (#513).
+
 ## 0.2.0
 
 ### Added
