@@ -4581,8 +4581,8 @@ M12-10b and M12-11, which change it on purpose.
 - **D2. The scope.** In: one git helper, the import rule, the DTOs, the permission scope,
   the async listener, the run writer, the daemon and room splits, the security parts of
   `protocol/agent.ts`, the CLI parser, and a bound on a kept title. To the backlog, each
-  with a trigger: dropping old runs, rooms and decisions from memory, a neutral folder for the
-  contract, and splitting the TUI files.
+  with a trigger: dropping old runs, rooms and decisions from memory, a neutral folder
+  for the contract, and splitting the TUI files.
 - **D3. `ask` and `safe` never send `allow_always`.** One "allow" is one write on our
   side (#310), but the harness that hears "always" may stop asking for that tool. Only
   `auto` may send it. M1a-5 recorded two option lists (2026-09-02, #13): claude-agent-acp
@@ -4618,9 +4618,10 @@ newline reads as two (seen on 2026-11-24 with git 2.43). The sweep deletes, so i
 not guess. Two calls stay as they are: `cli.ts`'s one `git` call is synchronous
 (`execFileSync`), and `client/loop.ts`'s `gitTop` is in `client/`, which may not import
 `core/`. `AGENTS.md`'s table gets a row for `core/git.ts`.
-**Gap:** `git worktree list --porcelain -z` (`-z` works only with `--porcelain`) needs git 2.36, and no doc names the oldest git kapelle
-supports. The pickup names it in the README, and decides what the sweep does with an
-older git: refuse to reap and say why, or keep today's read.
+**Gap:** `git worktree list --porcelain -z` (`-z` works only with `--porcelain`) needs
+git 2.36, and no doc names the oldest git kapelle supports. The pickup names it in the
+README, and decides what the sweep does with an older git: refuse to reap and say why,
+or keep today's read.
 *Done when* tests cover a worktree path with a newline, a path with spaces and non-ASCII
 letters, leading and trailing spaces kept, exit code 1 accepted for `diff` and refused
 elsewhere, a folder that is not a repository, output larger than the default buffer, and
@@ -4658,8 +4659,8 @@ request it was measured to send. claude, copilot, codex and kimi
 root: it asks for that one, though its flag is `false` (§M9-1 re-measure, and
 `AGENTS.md`). claude and copilot are measured again, because M1a-5's record
 (2026-09-02, issue #13) is on older builds; the new section becomes the owner, and
-M1a-5's lines point to it. This matters where a yes would become a refusal: under `safe`, a read-only tool is
-allowed with no question, and under `ask`, a person may say yes to opencode's outside
+M1a-5's lines point to it. This matters where a yes would become a refusal: under
+`safe`, a read-only tool is allowed with no question, and under `ask`, a person may say yes to opencode's outside
 write. If a harness offers only `allow_always` there, the person decides before the
 change lands.
 A policy answers `true` or `false`, so `pickOption` cannot tell which mode said yes,
@@ -4674,8 +4675,9 @@ the bytes the person saw (#310). The top of `protocol/agent.ts` states the rule,
 *Done when* `docs/FINDINGS.md` records the option kinds of every entry that sends a
 permission request, opencode's outside write included, and M1a-5's record points to it;
 and tests cover the `always-menu` attack (`hostile-agent.mjs`) refused under
-`ask` with no write; a read-only tool with only `allow_always` on offer refused under
-`safe`; the same attack under `auto` given `allow_always`, with the one-write rule still
+`ask` with no write; a new `hostile-agent.mjs` scenario, one attack as `AGENTS.md` asks,
+that offers only `allow_always` for a read-only tool, refused under `safe`; the
+`always-menu` attack under `auto` given `allow_always`, with the one-write rule still
 held; and a room switched from `auto` to `ask` refusing the next such request.
 
 **M12-5 · The bus catches an async listener's rejection · XS · needs nothing**
@@ -4802,8 +4804,11 @@ event log still holds the whole line.
 A client sees the change: `GET /permissions/:id` sends a settled decision's `title`
 (`PendingDecision.title` in `client/contract.ts`). So `docs/CLIENT-API.md` says the title
 is cut, as it already says for `input` and `diff`, and `CHANGELOG.md` gets a line.
-**Gap:** the length, which the pickup picks from what the screens show; and whether the
-cut takes a contract version step under `docs/CLIENT-API.md`'s rules.
+`GET /permissions/:id` is a stable part, so the cut bumps the contract version
+(`docs/CLIENT-API.md`).
+**Gap:** the length, which the pickup picks from what the screens show; and which
+number the cut bumps. `major` is for a change that can break a client and `minor` for
+an addition, and a shorter field is neither.
 *Done when* tests cover a long title cut in both maps, a short title kept whole, a
 question about a live call with the whole title, a late question about a settled call
 with the cut title, the event log line unchanged, and `GET /permissions/:id`
