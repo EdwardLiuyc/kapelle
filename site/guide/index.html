@@ -18,7 +18,7 @@ try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === 
 </head>
 <body>
 
-<div class="strip"><span class="lvl">[info]</span>kapelle 0.2.0 is out: <code>kapelle demo</code>, a starter loop, and <code>--model</code> for loops. <a href="https://github.com/EdwardLiuyc/kapelle/releases/tag/v0.2.0">Release notes</a></div>
+<div class="strip"><span class="lvl">[info]</span>kapelle 0.3.0 is out: chats with one agent, a folder for each agent, the thinking level, and <code>/config</code>. <a href="https://github.com/EdwardLiuyc/kapelle/releases/tag/v0.3.0">Release notes</a></div>
 
 <header class="site-header">
 <div class="wrap" style="max-width: 1240px;">
@@ -47,6 +47,7 @@ try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === 
 <p>ROOMS</p>
 <a href="#rooms">Open a room</a>
 <a href="#talk">Talk to agents</a>
+<a href="#chats">Chat with one agent</a>
 <a href="#commands">Room commands</a>
 <a href="#keys">Keys and marks</a>
 <a href="#take-work">Take the work</a>
@@ -151,6 +152,7 @@ kimi    not installed: no kimi on the daemon's PATH</pre>
 <li><strong>Install an adapter.</strong> When an agent is there but its ACP adapter is not, check it in the list and choose <strong>setup</strong>. The daemon runs <code>npm i -g</code> with the version kapelle was tested on. If npm fails, for example because it needs <code>sudo</code>, the list shows the command for you to run.</li>
 <li><strong>The login check.</strong> kapelle opens a session with each ready agent, with no prompt, so it spends no tokens. It saves the agent's models and whether it is logged in. A logged-out agent shows its own login command. kapelle never logs in for you.</li>
 <li><strong>Pick a model.</strong> <code>/new</code> and <code>/add</code> take <code>--model &lt;id&gt;</code>, and their form lists the saved models. <code>@name /model</code> changes it during a chat. If the agent refuses the model, it keeps its own, and a notice says so.</li>
+<li><strong>Pick a thinking level.</strong> <code>@name /level</code> lists the levels of the agent's model, and <code>@name /level &lt;id&gt;</code> picks one. The status line shows it. <code>kapelle room add</code> takes <code>--level &lt;id&gt;</code>.</li>
 </ul>
 </section>
 
@@ -176,10 +178,11 @@ kimi    not installed: no kimi on the daemon's PATH</pre>
 <p>Then open a room:</p>
 <pre><span class="p">$ </span>kapelle chat new --agent pi     # open a room and chat in it
 <span class="p">$ </span>kapelle chat                    # every room, on a terminal
-<span class="p">$ </span>kapelle chat list               # every room, as text
+<span class="p">$ </span>kapelle chat list               # every room, then every chat, as text
 <span class="p">$ </span>kapelle chat attach &lt;roomId&gt;     # rejoin a room; its history replays
 <span class="p">$ </span>kapelle chat dismiss &lt;roomId&gt;    # stop the room's agents</pre>
 <p>Each agent in a room works on its own branch, <code>kapelle/&lt;roomId&gt;/&lt;agentId&gt;</code>.</p>
+<p>An agent can work in another folder: <code>/add</code> takes <code>--cwd &lt;dir&gt;</code>, and its form has a folder field. In a repository with a commit, the agent gets its own checkout and branch there. In a folder with no git, it works in that folder.</p>
 <p>A new checkout has none of your untracked folders, such as <code>node_modules</code>. List them as <code>linkPaths</code> in <a href="#config">your repository's file</a>, and each new checkout links them from yours.</p>
 <p>The room API is new, and it can still change.</p>
 </section>
@@ -192,6 +195,16 @@ kimi    not installed: no kimi on the daemon's PATH</pre>
 <pre>/add pi --name rev --mode safe</pre>
 <p>Then talk to it by name:</p>
 <pre>@rev review the last commit on dev's branch</pre>
+</section>
+
+<section id="chats">
+<h2>Chat with one agent</h2>
+<p>A chat is one agent of its own, outside every room, like a person you message. <code>/chat &lt;agent&gt;</code>, or "new chat …" in the <code>ctrl+o</code> menu, starts one from any view. In a chat, the box always starts with the agent's <code>@name</code>, and <code>/add</code>, <code>/title</code>, <code>/cap</code> and <code>/config</code> refuse.</p>
+<p>A chat agent gets an empty folder of its own, with no git. Give it <code>--cwd &lt;dir&gt;</code> to work in your repository instead. When you remove the agent, its folder goes if it is still empty, and stays if the agent used it. To list or remove the folders that stay:</p>
+<pre><span class="p">$ </span>kapelle chat scratch               # the kept folders
+<span class="p">$ </span>kapelle chat scratch clean         # show what clean would remove
+<span class="p">$ </span>kapelle chat scratch clean --yes   # remove the stale ones</pre>
+<p>On a pipe, <code>kapelle chat attach @name</code> opens one chat as plain lines.</p>
 </section>
 
 <section id="commands">
@@ -207,25 +220,28 @@ kimi    not installed: no kimi on the daemon's PATH</pre>
 <tr><td><code>/help</code></td><td>Show the commands on the screen.</td></tr>
 <tr><td><code>/setup</code></td><td>Open the <a href="#setup">setup list</a>.</td></tr>
 <tr><td><code>/new [agent]</code></td><td>Open a new room. Options: <code>--cmd</code>, <code>--name</code>, <code>--model</code>, <code>--title</code>, <code>--cwd</code>.</td></tr>
-<tr><td><code>/add &lt;agent&gt;</code></td><td>Add an agent to the room. Options: <code>--cmd</code>, <code>--name</code>, <code>--role</code>, <code>--mode</code>, <code>--model</code>, <code>--base @name|ref</code>.</td></tr>
+<tr><td><code>/add &lt;agent&gt;</code></td><td>Add an agent to the room. Options: <code>--cmd</code>, <code>--name</code>, <code>--role</code>, <code>--mode</code>, <code>--model</code>, <code>--base @name|ref</code>, <code>--cwd</code>.</td></tr>
+<tr><td><code>/chat &lt;agent&gt;</code></td><td>Start a <a href="#chats">chat</a>. Options: <code>--cmd</code>, <code>--name</code>, <code>--mode</code>, <code>--model</code>, <code>--cwd</code>.</td></tr>
 <tr><td><code>/loop &lt;recipe&gt; &lt;task&gt; ["note"]</code></td><td>Start a <a href="#loop">loop</a> in a new room. Options: <code>--agent</code>, <code>--cmd</code>, <code>--model</code>, <code>--cwd</code>.</td></tr>
 <tr><td><code>/title &lt;new title&gt;</code></td><td>Rename the room.</td></tr>
 <tr><td><code>/cap &lt;n&gt;</code></td><td>Raise the orchestrator's <a href="#lead">turn cap</a> for this room.</td></tr>
+<tr><td><code>/config</code></td><td>Open a form with your <a href="#config">repository's file</a>: see every value and change it.</td></tr>
 <tr><td><code>@name /mode &lt;m&gt;</code></td><td>Set the agent's mode: <code>ask</code>, <code>safe</code> or <code>auto</code>.</td></tr>
 <tr><td><code>@name /role &lt;r&gt;</code></td><td>Set the agent's role, or <code>none</code>.</td></tr>
 <tr><td><code>@name /model [id]</code></td><td>Change the agent's model. With no id, it shows the model in use and the agent's list.</td></tr>
+<tr><td><code>@name /level [id]</code></td><td>Change the agent's thinking level. With no id, it shows the level in use and the model's levels.</td></tr>
 <tr><td><code>@name /rename &lt;new&gt;</code></td><td>Rename the agent.</td></tr>
 <tr><td><code>@name /cancel</code></td><td>Cancel the agent's turn.</td></tr>
 <tr><td><code>@name /remove</code></td><td>Remove the agent from the room.</td></tr>
 </tbody>
 </table>
 </div>
-<p><code>/new</code>, <code>/add</code> or <code>/loop</code> alone opens a form.</p>
+<p><code>/new</code>, <code>/add</code>, <code>/chat</code> or <code>/loop</code> alone opens a form, as <code>/config</code> does.</p>
 </section>
 
 <section id="keys">
 <h2>Keys and marks</h2>
-<p>On a terminal, a sidebar lists every room and its agents.</p>
+<p>On a terminal, a sidebar lists every room and its agents, then every chat.</p>
 <div class="table-box">
 <table>
 <thead><tr><th scope="col">Key</th><th scope="col">What it does</th></tr></thead>
@@ -465,19 +481,19 @@ kapelle workspace move &lt;old-repo&gt; &lt;new-repo&gt;
 kapelle daemon start [--port n] [--permission-timeout s]
 kapelle daemon stop
 kapelle daemon add &lt;path&gt;
-kapelle chat [new | attach | list | dismiss]</pre>
+kapelle chat [new | attach | list | dismiss | scratch]</pre>
 <p><code>kapelle room</code> is the lead's: it runs in an agent's checkout, and finds its room from there.</p>
 <p><code>kapelle --help</code> and <code>kapelle chat --help</code> print the full list.</p>
 </section>
 
 <section id="config">
 <h2>Configuration</h2>
-<p>Two optional JSON files, and <code>KAPELLE_*</code> environment variables. Nothing creates the files for you. Both are strict: an unknown key or a wrong type is refused, and the error names the file and the key.</p>
+<p>Two optional JSON files, and <code>KAPELLE_*</code> environment variables. Only <code>/config</code> creates your repository's file, and nothing creates your user file. Both are strict: an unknown key or a wrong type is refused, and the error names the file and the key.</p>
 <h3>Your user file</h3>
 <p><code>~/.config/kapelle/config.json</code> holds the daemon's settings:</p>
 <pre>{ "port": 4719, "permissionTimeoutMs": 120000 }</pre>
 <h3>Your repository's file</h3>
-<p><code>.kapelle/config.json</code> in your repository holds the run defaults, and the paths each new checkout links. It is the only file kapelle reads from your repository. You may commit it.</p>
+<p><code>.kapelle/config.json</code> in your repository holds the run defaults, and the paths each new checkout links. It is the only file kapelle reads from your repository. You may commit it. Type <code>/config</code> in the chat to see every value and change it, or write the file by hand. When the file has a wrong value, <code>/config</code> still opens: it shows the error, and a save replaces the whole file.</p>
 <div class="table-box">
 <table>
 <thead><tr><th scope="col">Key</th><th scope="col">What it sets</th></tr></thead>

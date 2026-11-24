@@ -21,7 +21,7 @@ try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === 
 </head>
 <body>
 
-<div class="strip"><span class="lvl">[info]</span>kapelle 0.2.0 is out: <code>kapelle demo</code>, a starter loop, and <code>--model</code> for loops. <a href="https://github.com/EdwardLiuyc/kapelle/releases/tag/v0.2.0">Release notes</a></div>
+<div class="strip"><span class="lvl">[info]</span>kapelle 0.3.0 is out: chats with one agent, a folder for each agent, the thinking level, and <code>/config</code>. <a href="https://github.com/EdwardLiuyc/kapelle/releases/tag/v0.3.0">Release notes</a></div>
 
 <header class="site-header">
 <div class="wrap">
@@ -303,7 +303,7 @@ starter  …/kapelle/assets/loops/starter.md
 <div>
 <p class="kicker"><b>06</b> daemon</p>
 <h2 id="keep"><em>Rooms always stay.</em></h2>
-<p>One background daemon holds every room for all your repositories. Type <code>kapelle</code>, and it starts the daemon when none runs. Close the terminal and come back tomorrow: the agents, their branches and the whole history are still there.</p>
+<p>One background daemon holds every room for all your repositories. Type <code>kapelle</code>, and it starts the daemon when none runs. Close the terminal and come back tomorrow: the agents, their branches and the whole history are still there. The chats stay too: one agent each, outside every room, like a person you message.</p>
 </div>
 <div class="shell">
 <div class="shell-bar"><span>~/src/kapelle</span><span>zsh</span></div>
@@ -319,7 +319,7 @@ starter  …/kapelle/assets/loops/starter.md
 <div>
 <p class="kicker"><b>07</b> setup</p>
 <h2 id="setup" class="h2">It finds <em>your agents.</em></h2>
-<p>At the first start, kapelle lists the agents it finds, and what is missing. Check an agent whose ACP adapter is missing, and kapelle installs the pinned version for you. It checks each agent's login with no prompt, so it spends no tokens, and keeps each agent's models. Pick one with <code>--model</code> when an agent joins. kapelle never logs in for you.</p>
+<p>At the first start, kapelle lists the agents it finds, and what is missing. Check an agent whose ACP adapter is missing, and kapelle installs the pinned version for you. It checks each agent's login with no prompt, so it spends no tokens, and keeps each agent's models. Pick one with <code>--model</code> when an agent joins, and its thinking level with <code>@name /level</code>. kapelle never logs in for you.</p>
 </div>
 <div class="shell">
 <div class="shell-bar"><span>~/src/kapelle</span><span>zsh</span></div>
