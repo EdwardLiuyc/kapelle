@@ -4585,8 +4585,10 @@ M12-10b and M12-11, which change it on purpose.
   contract, and splitting the TUI files.
 - **D3. `ask` and `safe` never send `allow_always`.** One "allow" is one write on our
   side (#310), but the harness that hears "always" may stop asking for that tool. Only
-  `auto` may send it. No doc records which options each harness offers, so nobody knows
-  yet whether one offers `allow_always` alone. M12-4 measures that first.
+  `auto` may send it. M1a-5 recorded two option lists (2026-09-02, #13): claude-agent-acp
+  0.49.0 and copilot 1.0.80 both offered `allow_once` beside `allow_always`. Those builds
+  are older than the registry's pins, and codex, kimi and opencode's ask for a write
+  outside the root have no record. M12-4 measures them first.
 - **D4. Only the run writer is fixed now.** A daemon that boots beside a live CLI run
   shows it as `killed` until its next restart. M12-6 fixes that. Two processes can also
   race on `git worktree` commands for one repository, but nobody has seen it, so it goes
@@ -4650,11 +4652,16 @@ report already goes through `toTaskDto`. No reply changes.
 shape and find it in no reply, and every existing daemon test passes unchanged.
 
 **M12-4 · `ask` and `safe` never send `allow_always` · M · needs nothing**
-D3. First, each registry entry that asks (`measured.asksPermission`) runs one edit and
-one read, and `docs/FINDINGS.md` records which option kinds it offers for each. This
-matters most under `safe`: a read-only tool is allowed there with no question, so a
-harness that offers only `allow_always` for a read goes from allowed to refused. If the
-measurement finds one, the person decides before the change lands.
+D3. First, `docs/FINDINGS.md` records which option kinds each harness offers, for every
+request it was measured to send. claude, copilot, codex and kimi
+(`measured.asksPermission`) run one edit and one read. opencode runs a write outside the
+root: it asks for that one, though its flag is `false` (§M9-1 re-measure, and
+`AGENTS.md`). claude and copilot are measured again, because M1a-5's record
+(2026-09-02, issue #13) is on older builds; the new section becomes the owner, and
+M1a-5's lines point to it. This matters where a yes would become a refusal: under `safe`, a read-only tool is
+allowed with no question, and under `ask`, a person may say yes to opencode's outside
+write. If a harness offers only `allow_always` there, the person decides before the
+change lands.
 A policy answers `true` or `false`, so `pickOption` cannot tell which mode said yes,
 and it takes `allow_always` when no `allow_once` is offered. A policy answer gains a
 scope: `once` or `session`. `true` still means `once`. `ask` and `safe` answer `once`;
@@ -4664,8 +4671,9 @@ scope: `once` or `session`. `true` still means `once`. `ask` and `safe` answer `
 counts from the next request. Our own rule does not change: one approval is one write of
 the bytes the person saw (#310). The top of `protocol/agent.ts` states the rule, and
 `CHANGELOG.md` gets a line.
-*Done when* `docs/FINDINGS.md` records the option kinds of each entry that asks; and
-tests cover the `always-menu` attack (`hostile-agent.mjs`) refused under
+*Done when* `docs/FINDINGS.md` records the option kinds of every entry that sends a
+permission request, opencode's outside write included, and M1a-5's record points to it;
+and tests cover the `always-menu` attack (`hostile-agent.mjs`) refused under
 `ask` with no write; a read-only tool with only `allow_always` on offer refused under
 `safe`; the same attack under `auto` given `allow_always`, with the one-write rule still
 held; and a room switched from `auto` to `ask` refusing the next such request.
@@ -4786,15 +4794,19 @@ the refusal.
 D2. A tool call's title comes from the harness, and only the 32 MiB line limit bounds it.
 `AcpAgent` keeps each settled tool call's title for the life of a room, and
 `core/permissions.ts` keeps each settled decision's title for the life of the daemon (its
-`ponytail:` note). Both cut the title to a fixed length when the entry settles. An open
-question still shows the whole title, and the event log still holds the whole line.
+`ponytail:` note). Both cut the title to a fixed length when the entry settles. A
+question about a live call still shows the whole title. A late question, about a call
+that has already settled, shows the cut title: `#requestPermission` reads the kept title
+when the request carries none (`protocol/agent.ts`). That is the cost of the bound. The
+event log still holds the whole line.
 A client sees the change: `GET /permissions/:id` sends a settled decision's `title`
 (`PendingDecision.title` in `client/contract.ts`). So `docs/CLIENT-API.md` says the title
 is cut, as it already says for `input` and `diff`, and `CHANGELOG.md` gets a line.
 **Gap:** the length, which the pickup picks from what the screens show; and whether the
 cut takes a contract version step under `docs/CLIENT-API.md`'s rules.
-*Done when* tests cover a long title cut in both maps, a short title kept whole, an open
-question with the whole title, the event log line unchanged, and `GET /permissions/:id`
+*Done when* tests cover a long title cut in both maps, a short title kept whole, a
+question about a live call with the whole title, a late question about a settled call
+with the cut title, the event log line unchanged, and `GET /permissions/:id`
 for a settled decision with a long title; `docs/CLIENT-API.md` states the cut; and the
 `ponytail:` note in `core/permissions.ts` says what is bounded now.
 
