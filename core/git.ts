@@ -10,10 +10,7 @@
  * sides differ".
  */
 
-import { execFile, spawn } from "node:child_process";
-import { promisify } from "node:util";
-
-const run = promisify(execFile);
+import { spawn } from "node:child_process";
 
 export interface GitOptions {
   /** Exit codes that answer the question rather than fail the call. */
@@ -27,7 +24,7 @@ export class GitError extends Error {
   readonly exitCode: number | null;
   readonly stdout: string;
   readonly stderr: string;
-  /** True when the caller's options, not git, made the call fail. */
+  /** True when `exitCodes` refuses git's successful exit 0. */
   readonly callerError: boolean;
 
   constructor(
@@ -113,47 +110,7 @@ export async function git(
   args: readonly string[],
   options: GitOptions,
 ): Promise<string> {
-  let stdout: string;
-  let stderr: string;
-  try {
-    ({ stdout, stderr } = await run("git", args, {
-      cwd,
-      env: options.env,
-      maxBuffer: options.maxBuffer,
-      encoding: "utf8",
-    }));
-  } catch (err) {
-    const failure = err as {
-      code?: unknown;
-      stdout?: unknown;
-      stderr?: unknown;
-      message?: string;
-    };
-    const exitCode = typeof failure.code === "number" ? failure.code : null;
-    const failedStdout =
-      typeof failure.stdout === "string" ? failure.stdout : String();
-    const stderr =
-      typeof failure.stderr === "string" ? failure.stderr : String();
-    if (exitCode !== null && options.exitCodes.includes(exitCode)) {
-      return failedStdout;
-    }
-    throw new GitError(
-      exitCode,
-      failedStdout,
-      stderr,
-      failure.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
-        ? bufferMessage(
-            args,
-            options.maxBuffer,
-            String(failure.message).includes("stderr") ? "stderr" : "stdout",
-          )
-        : failureMessage(args, exitCode, stderr, failure.message),
-    );
-  }
-  if (!options.exitCodes.includes(0)) {
-    throw successNotAccepted(args, stdout, stderr);
-  }
-  return stdout;
+  return gitWithInput(cwd, args, "", options);
 }
 
 /** `git`, with one trailing line ending removed. */
@@ -165,7 +122,7 @@ export async function gitLine(
   return line(await git(cwd, args, options));
 }
 
-/** `git`, with any `GitError` treated as a negative answer. */
+/** `git`, with its own failure treated as a negative answer. A caller error is rethrown. */
 export async function tryGit(
   cwd: string,
   args: readonly string[],

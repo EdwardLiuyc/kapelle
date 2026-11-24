@@ -230,7 +230,7 @@ fi
   }
 });
 
-test("gitWithInput keeps a multibyte overflow prefix valid", async (t) => {
+test("both helpers keep a multibyte overflow prefix valid", async (t) => {
   const root = await gitRepo(t);
   await scriptedGit(
     t,
@@ -239,25 +239,41 @@ if [ "$1" = "unicode" ]; then
   printf '\\303\\251x\\n'
   exit 0
 fi
+if [ "$1" = "emoji" ]; then
+  printf '\\360\\237\\230\\200\\n'
+  exit 0
+fi
 `,
   );
+  const run = (command: string, maxBuffer: number) => [
+    () => git(root, [command], { ...GIT, maxBuffer }),
+    () => gitWithInput(root, [command], "", { ...GIT, maxBuffer }),
+  ];
+  const rejectedPair = async (calls: Array<() => Promise<string>>) => {
+    const errors: GitError[] = [];
+    for (const call of calls) errors.push(await rejectedGit(call));
+    return errors;
+  };
 
-  const narrow = await rejectedGit(() =>
-    gitWithInput(root, ["unicode"], "", { ...GIT, maxBuffer: 1 }),
-  );
-  assert.equal(narrow.stdout, "");
-  assert.equal(narrow.stdout.includes("\uFFFD"), false);
-
-  const partial = await rejectedGit(() =>
-    gitWithInput(root, ["unicode"], "", { ...GIT, maxBuffer: 2 }),
-  );
-  assert.equal(partial.stdout, "é");
-  assert.equal(partial.stdout.includes("\uFFFD"), false);
-
-  assert.equal(
-    await gitWithInput(root, ["unicode"], "", { ...GIT, maxBuffer: 4 }),
-    "éx\n",
-  );
+  for (const err of await rejectedPair(run("unicode", 1))) {
+    assert.equal(err.stdout, "");
+    assert.equal(err.stdout.includes("\uFFFD"), false);
+  }
+  for (const err of await rejectedPair(run("unicode", 2))) {
+    assert.equal(err.stdout, "é");
+    assert.equal(err.stdout.includes("\uFFFD"), false);
+  }
+  for (const err of await rejectedPair(run("emoji", 1))) {
+    assert.equal(err.stdout, "");
+    assert.equal(err.stdout.includes("\uFFFD"), false);
+    assert.equal(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(err.stdout), false);
+  }
+  for (const call of run("unicode", 4)) {
+    assert.equal(await call(), "éx\n");
+  }
+  for (const call of run("emoji", 5)) {
+    assert.equal(await call(), "😀\n");
+  }
 });
 
 test("gitWithInput sends stdin and keeps the raw answer", async (t) => {
