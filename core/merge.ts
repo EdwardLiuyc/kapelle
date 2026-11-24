@@ -18,24 +18,16 @@
 
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { type GitOptions, git, tryGit } from "./git.ts";
+import { type GitOptions, git, gitLine, tryGitLine } from "./git.ts";
 import { assertRunId } from "./ids.ts";
 import { stateDirFor } from "./runtime.ts";
 import { changedPaths } from "./worktree.ts";
 
 const GIT = { exitCodes: [0], maxBuffer: 1024 * 1024 } satisfies GitOptions;
-const DIFF = {
-  exitCodes: [0, 1],
+const GIT_LARGE = {
+  exitCodes: [0],
   maxBuffer: 64 * 1024 * 1024,
 } satisfies GitOptions;
-const line = (text: string): string => text.replace(/\r?\n$/, "");
-const tryGitLine = async (
-  cwd: string,
-  args: readonly string[],
-): Promise<string | null> => {
-  const text = await tryGit(cwd, args, GIT);
-  return text === null ? null : line(text);
-};
 
 interface RecordTask {
   id: string;
@@ -154,7 +146,7 @@ export async function mergeRun(runId: string, cwd: string): Promise<void> {
 
 async function readRunRecord(runId: string, cwd: string): Promise<RunRecord> {
   assertRunId(runId);
-  const root = await tryGitLine(cwd, ["rev-parse", "--show-toplevel"]);
+  const root = await tryGitLine(cwd, ["rev-parse", "--show-toplevel"], GIT);
   if (root === null) {
     throw new Error(`${cwd} is not a git repository.`);
   }
@@ -233,7 +225,7 @@ async function changedFilesBetween(
     const stdout = await git(
       root,
       ["diff", "--name-status", "-z", from, to],
-      DIFF,
+      GIT_LARGE,
     );
     const entries = stdout.split("\0");
     const files: string[] = [];
@@ -303,9 +295,7 @@ async function restoreTouched(root: string, touched: string[]): Promise<void> {
   // A squash merge can leave .git/SQUASH_MSG even when it fails. After a rollback
   // there is no squash commit to make, so remove the stale message or a later
   // unrelated `git commit` would consume it as its default message.
-  const gitDir = line(
-    await git(root, ["rev-parse", "--absolute-git-dir"], GIT),
-  );
+  const gitDir = await gitLine(root, ["rev-parse", "--absolute-git-dir"], GIT);
   await rm(join(gitDir, "SQUASH_MSG"), { force: true });
 }
 

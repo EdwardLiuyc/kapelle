@@ -17,6 +17,7 @@ import { promisify } from "node:util";
 import {
   gitRepo,
   isolateStateHome,
+  scriptedGit,
   tempDir,
 } from "../../integration/helpers.ts";
 import { newRoomId } from "../ids.ts";
@@ -1090,6 +1091,48 @@ test("worktrees that cannot be listed stop the reap, not just the list", async (
   );
   assert.ok(notices.some((n) => n.includes("cannot reconcile worktrees")));
   assert.ok(notices.some((n) => n.includes("skipping reap")));
+});
+
+test("an unsupported worktree -z keeps an expired run and its branch", async (t) => {
+  const root = await gitRepo(t);
+  const path = await addWorktree(root, "a");
+  const dir = await writeRun(root, {
+    runId: RUN_ID,
+    root,
+    cwd: root,
+    status: "failed",
+    startedAt: "2026-08-01T00:00:00.000Z",
+    endedAt: "2026-08-01T00:10:00.000Z",
+    tasks: [{ id: "a", status: "failed", branch: `kapelle/${RUN_ID}/a` }],
+  });
+  const log = join(await tempDir(t), "calls");
+  await scriptedGit(
+    t,
+    () => `
+printf '%s\\n' "$*" >> ${JSON.stringify(log)}
+if [ "$1" = "worktree" ] && [ "$2" = "list" ] && [ "$3" = "--porcelain" ] && [ "$4" = "-z" ]; then
+  printf '%s\\n' "error: unknown option 'z'" >&2
+  exit 129
+fi
+`,
+  );
+
+  const notices = await sweep(root, join(await tempDir(t), "children.json"));
+
+  assert.ok(
+    notices.some((notice) => notice.includes("Git 2.36 or newer")),
+    notices.join("\n"),
+  );
+  assert.ok(
+    notices.some((notice) =>
+      notice.includes("skipping reap and orphan cleanup"),
+    ),
+  );
+  assert.equal(existsSync(path), true, "the checkout is kept");
+  assert.equal(existsSync(join(dir, "run.json")), true, "the record is kept");
+  assert.equal(await hasBranch(root, `kapelle/${RUN_ID}/a`), true);
+  const calls = (await readFile(log, "utf8")).split("\n").filter(Boolean);
+  assert.ok(!calls.includes("worktree prune"));
 });
 
 test("a failed worktree removal keeps the run and its checkout", async (t) => {

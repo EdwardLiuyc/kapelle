@@ -54,20 +54,25 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import type { PolicyEdit } from "../protocol/agent.ts";
 import type { Diff } from "../protocol/types.ts";
-import { GitError, type GitOptions, git } from "./git.ts";
+import { GitError, type GitOptions, git, gitLine } from "./git.ts";
 
 const GIT = { exitCodes: [0], maxBuffer: 1024 * 1024 } satisfies GitOptions;
 const DIFF = {
   exitCodes: [0, 1],
   maxBuffer: 64 * 1024 * 1024,
 } satisfies GitOptions;
-const line = (text: string): string => text.replace(/\r?\n$/, "");
 const gitIn = (
   cwd: string,
   args: readonly string[],
   options: GitOptions,
 ): Promise<string> =>
   git(cwd, ["-c", "core.quotepath=false", ...args], options);
+const gitInLine = (
+  cwd: string,
+  args: readonly string[],
+  options: GitOptions,
+): Promise<string> =>
+  gitLine(cwd, ["-c", "core.quotepath=false", ...args], options);
 
 const QUESTION_CAP = 32 * 1024;
 const ROUTE_CAP = 512 * 1024;
@@ -188,12 +193,10 @@ async function resolveCommit(
   ref: string,
 ): Promise<string | undefined> {
   try {
-    return line(
-      await gitIn(
-        dir,
-        ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`],
-        GIT,
-      ),
+    return await gitInLine(
+      dir,
+      ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`],
+      GIT,
     );
   } catch (err) {
     if (err instanceof GitError && err.exitCode === 1) return undefined;
@@ -234,7 +237,7 @@ export async function mergeBase(
 ): Promise<string | undefined> {
   const base = await resolveCommit(dir, baseRef);
   if (base === undefined) return undefined;
-  return line(await gitIn(dir, ["merge-base", base, ref], GIT));
+  return gitInLine(dir, ["merge-base", base, ref], GIT);
 }
 
 /**
@@ -248,10 +251,10 @@ export async function checkoutDiff(
   ref: string,
   cap = ROUTE_CAP,
 ): Promise<Diff> {
-  const top = line(await gitIn(dir, ["rev-parse", "--show-toplevel"], GIT));
+  const top = await gitInLine(dir, ["rev-parse", "--show-toplevel"], GIT);
   const index = resolve(
     top,
-    line(await gitIn(top, ["rev-parse", "--git-path", "index"], GIT)),
+    await gitInLine(top, ["rev-parse", "--git-path", "index"], GIT),
   );
   const tmp = await mkdtemp(join(tmpdir(), "kapelle-index-"));
   try {

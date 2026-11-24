@@ -2,12 +2,12 @@
  * The one place `core/` starts git.
  *
  * Stdout is returned exactly as git wrote it. A caller that wants one-line
- * text strips the line ending itself, and a path keeps its leading or trailing
+ * text uses `gitLine` or `tryGitLine`, and a path keeps its leading or trailing
  * spaces. A failed command is a `GitError` with the exit code and both streams.
  *
- * Every call states the exit codes it accepts and its output buffer. `0` is not
- * implied, so a caller that expects only success passes `[0]`; a diff passes
- * `[0, 1]`, because git uses 1 for "the sides differ".
+ * Every call states the exit codes it accepts and its output buffer. Calls that
+ * expect success list 0; a diff also lists 1, because git uses it for "the
+ * sides differ".
  */
 
 import { execFile, spawn } from "node:child_process";
@@ -43,6 +43,15 @@ export class GitError extends Error {
 }
 
 const commandName = (args: readonly string[]): string => args[0] ?? "command";
+const line = (text: string): string => text.replace(/\r?\n$/, "");
+
+function bufferMessage(
+  args: readonly string[],
+  maxBuffer: number,
+  stream: "stdout" | "stderr",
+): string {
+  return `git ${commandName(args)} exceeded its ${maxBuffer}-byte ${stream} buffer`;
+}
 
 function failureMessage(
   args: readonly string[],
@@ -91,9 +100,24 @@ export async function git(
       exitCode,
       stdout,
       stderr,
-      failureMessage(args, exitCode, stderr, failure.message),
+      failure.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
+        ? bufferMessage(
+            args,
+            options.maxBuffer,
+            String(failure.message).includes("stderr") ? "stderr" : "stdout",
+          )
+        : failureMessage(args, exitCode, stderr, failure.message),
     );
   }
+}
+
+/** `git`, with one trailing line ending removed. */
+export async function gitLine(
+  cwd: string,
+  args: readonly string[],
+  options: GitOptions,
+): Promise<string> {
+  return line(await git(cwd, args, options));
 }
 
 /** `git`, with any `GitError` treated as a negative answer. */
@@ -108,6 +132,16 @@ export async function tryGit(
     if (err instanceof GitError) return null;
     throw err;
   }
+}
+
+/** `tryGit`, with one trailing line ending removed. */
+export async function tryGitLine(
+  cwd: string,
+  args: readonly string[],
+  options: GitOptions,
+): Promise<string | null> {
+  const text = await tryGit(cwd, args, options);
+  return text === null ? null : line(text);
 }
 
 /** Run git with `input` on stdin and return raw stdout. */
@@ -145,8 +179,7 @@ export function gitWithInput(
             null,
             stdout(),
             stderr(),
-            `git ${commandName(args)} exceeded its ${options.maxBuffer}-byte ` +
-              `${stream} buffer`,
+            bufferMessage(args, options.maxBuffer, stream),
           ),
         );
         child.kill();

@@ -13,8 +13,10 @@ import {
   GitError,
   type GitOptions,
   git,
+  gitLine,
   gitWithInput,
   tryGit,
+  tryGitLine,
 } from "../git.ts";
 import { newRoomId } from "../ids.ts";
 import { stateDirFor } from "../runtime.ts";
@@ -32,6 +34,10 @@ test("git keeps raw stdout and GitError carries the exit streams", async (t) => 
   assert.equal(
     await git(root, ["config", "--get", "test.raw"], GIT),
     "  keep  \n",
+  );
+  assert.equal(
+    await gitLine(root, ["config", "--get", "test.raw"], GIT),
+    "  keep  ",
   );
 
   await writeFile(join(root, "a.txt"), "a\n");
@@ -60,6 +66,10 @@ test("git keeps raw stdout and GitError carries the exit streams", async (t) => 
   );
   assert.equal(
     await tryGit(outside, ["rev-parse", "--show-toplevel"], GIT),
+    null,
+  );
+  assert.equal(
+    await tryGitLine(outside, ["rev-parse", "--show-toplevel"], GIT),
     null,
   );
 });
@@ -111,7 +121,7 @@ test("git and gitWithInput reject a stream past maxBuffer", async (t) => {
     (err: unknown) => {
       assert.ok(err instanceof GitError);
       assert.equal(err.exitCode, null);
-      assert.match(err.message, /maxBuffer/);
+      assert.match(err.message, /16-byte stdout buffer/);
       return true;
     },
   );
@@ -192,6 +202,20 @@ fi
   const calls = (await readFile(log, "utf8")).split("\n").filter(Boolean);
   assert.ok(calls.includes("worktree list --porcelain -z"));
   assert.ok(!calls.includes("worktree prune"));
+});
+
+test("a non-repository does not read as an old-git refusal", async (t) => {
+  const root = await tempDir(t);
+  const roomId = newRoomId();
+  await mkdir(join(stateDirFor(root), "wt", roomId), { recursive: true });
+
+  await assert.rejects(roomCheckouts(root, roomId), (err: unknown) => {
+    assert.ok(err instanceof GitError);
+    assert.equal(err.exitCode, 128);
+    assert.doesNotMatch(err.message, /Git 2\.36/);
+    assert.match(err.stderr, /not a git repository/);
+    return true;
+  });
 });
 
 test("only core/git.ts starts git", async () => {
