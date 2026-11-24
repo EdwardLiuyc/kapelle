@@ -24,8 +24,8 @@
  * different token), because the stale record is still readable for the few
  * milliseconds before the new daemon claims the file.
  *
- * **A pid is not an identity.** `daemon/main.ts` writes
- * `${daemon.json}.identity` with its `ps` start time. Before treating a live
+ * **A pid is not an identity.** The daemon's claim (`daemon/record.ts`)
+ * writes `${daemon.json}.identity` with its `ps` start time. Before treating a live
  * pid as a daemon, this module compares that time. A recycled pid is then
  * stale: it is never signalled by `daemon stop`, and it does not block a
  * fresh start. A missing identity falls back to a verified `/version` answer

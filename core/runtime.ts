@@ -191,8 +191,7 @@ export function stateDirFor(root: string): string {
  *
  * Entries are canonical realpaths — `daemon/app.ts` realpaths at
  * `POST /repos`, matching what `stateDirFor` keys on — because a path that is
- * gone cannot be
- * re-resolved to check it against anything else.
+ * gone cannot be re-resolved to check it against anything else.
  */
 export function readRepos(): string[] {
   // Outside the `try`, so the directory guard is never swallowed: a state

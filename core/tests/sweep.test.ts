@@ -1321,10 +1321,10 @@ async function stranded(t: TestContext): Promise<{
 }> {
   // Canonicalized: `repos.json` entries are realpaths (`daemon/app.ts`
   // realpaths at `POST /repos`), and `stateDirFor` keys on
-  // `realpathSync(root)`. Passing
-  // `gitRepo`'s unresolved spelling would disagree with that key whenever the
-  // tmpdir chain contains a symlink (macOS: `tmpdir()` is `/var`, realpath is
-  // `/private/var`), and `sweepStranded` would find nothing to strand.
+  // `realpathSync(root)`. Passing `gitRepo`'s unresolved spelling would
+  // disagree with that key whenever the tmpdir chain contains a symlink
+  // (macOS: `tmpdir()` is `/var`, realpath is `/private/var`), and
+  // `sweepStranded` would find nothing to strand.
   const root = realpathSync(await gitRepo(t));
   const { worktrees } = await openWorktrees(root, RUN_ID);
   assert.ok(worktrees);
