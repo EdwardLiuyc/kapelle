@@ -1720,9 +1720,6 @@ export function createDaemonApp(deps: DaemonDeps) {
     }
   }
 
-  /** A parse base for `req.url`, which is a path, not a URL. Never fetched;
-   *  named as a constant so it is not mistaken for a configurable endpoint. */
-
   async function route(req: IncomingMessage, res: ServerResponse) {
     // Before the token and every route: a forged, duplicated or missing Host is
     // refused here. requireHostHeader: false lets this guard handle the last.

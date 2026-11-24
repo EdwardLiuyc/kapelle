@@ -176,6 +176,7 @@ export async function main(): Promise<void> {
 
   const dir = orExit(runtimeDir);
   const file = join(dir, "daemon.json");
+  const childrenFile = join(dir, "children.json");
   // Read before the claim, and through `orExit` like every other startup
   // refusal: a state directory somebody else owns stops the daemon with one
   // line rather than a stack, and stops it before `daemon.json` exists, so a
@@ -207,7 +208,7 @@ export async function main(): Promise<void> {
 
   await sweepBoot({
     repos: addedRepos,
-    childrenFile: join(dir, "children.json"),
+    childrenFile,
     onNotice: (text) => console.error(text),
     // Only on a TTY — `kapelle daemon start` has one, a background daemon does
     // not, and a question nobody can answer would hang the boot. Without it
@@ -224,15 +225,16 @@ export async function main(): Promise<void> {
     repos: addedRepos,
     expected: digest(token),
     daemonFile: file,
-    childrenFile: join(dir, "children.json"),
+    childrenFile,
     permissionTimeoutMs,
   });
   const { server } = app;
 
-  // Before the port opens: a request must never meet a half-restored list. ponytail: synchronous and O(runs ever kept) — one `readdir` plus one
-  // small `readFile` per run, on the boot path only. Move it behind `listen` (or
-  // read the newest N) if a repository with thousands of kept runs makes the
-  // daemon slow to answer.
+  // Before the port opens: a request must never meet a half-restored list.
+  // ponytail: synchronous and O(runs ever kept) — one `readdir` plus one
+  // small `readFile` per run, on the boot path only. Move it behind `listen`
+  // (or read the newest N) if a repository with thousands of kept runs makes
+  // the daemon slow to answer.
   app.restoreRuns();
 
   let recordWatch: NodeJS.Timeout | undefined;
