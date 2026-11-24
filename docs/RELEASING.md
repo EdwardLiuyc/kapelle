@@ -57,10 +57,10 @@ The record:
 
 | Field | Value |
 | --- | --- |
-| Date | 2026-11-16, before `v0.2.0` |
+| Date | 2026-11-24, before `v0.3.0` |
 | Tool | gitleaks 8.30.1, `gitleaks_8.30.1_linux_x64.tar.gz`, SHA-256 `551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb`, pinned as `sum` in the command above; the digest was first taken from the release's checksums file |
-| Range | a mirror of `origin` taken at 17:37 UTC, before this record was pushed: 23 branches, 255 `refs/pull/*` refs and the tag `v0.1.0`; from the root commit `6186a5f` to every ref's tip, 1242 commits. Then this record's own commit, scanned in the PR's checkout as `d108de1..HEAD` before its push |
-| Covers | every ref in that mirror: `master` at `a7eae4b`, and PR #498's head `d108de1`; and the commit that adds this record, whose parent is `d108de1`. A later commit is not covered |
+| Range | a mirror of `origin` taken at 12:56 UTC, before this record was pushed: 23 branches, 272 `refs/pull/*` refs and the tags `v0.1.0` and `v0.2.0`; from the root commit `6186a5f` to every ref's tip, 1355 commits. Then this record's own commit, scanned in the PR's checkout as `00172bc..HEAD` before its push |
+| Covers | every ref in that mirror: `master` at `1012987`, and PR #530's head `00172bc`; and the commit that adds this record, whose parent is `00172bc`. A later commit is not covered |
 | Result | with `.gitleaksignore` and its 2 false positives below, no leaks (exit 0) in both scans |
 
 The false positives:
