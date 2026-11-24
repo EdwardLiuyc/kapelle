@@ -4588,7 +4588,7 @@ M12-10b and M12-11, which change it on purpose.
   `auto` may send it. M1a-5 recorded two option lists (2026-09-02, #13): claude-agent-acp
   0.49.0 and copilot 1.0.80 both offered `allow_once` beside `allow_always`. Those builds
   are older than the registry's pins, and codex, kimi and opencode's ask for a write
-  outside the root have no record. M12-4 measures them first.
+  outside the root have no record. M12-4 measures all five first.
 - **D4. Only the run writer is fixed now.** A daemon that boots beside a live CLI run
   shows it as `killed` until its next restart. M12-6 fixes that. Two processes can also
   race on `git worktree` commands for one repository, but nobody has seen it, so it goes
@@ -4660,10 +4660,13 @@ approves with no question: `READ_ONLY_KINDS` in `core/policy.ts`, today `read`, 
 and `fetch`. opencode runs a write outside the root: it asks for that one, though its
 flag is `false` (§M9-1 re-measure, and `AGENTS.md`). claude and copilot are measured
 again, because M1a-5's record (2026-09-02, issue #13) is on older builds; the new
-section becomes the owner, and M1a-5's lines point to it. This matters where a yes
-would become a refusal: under `safe` and `ask`, a read-only kind is allowed with no
-question, and under `ask`, a person may say yes to opencode's outside write. If a
-harness offers only `allow_always` there, the person decides before the change lands.
+section becomes the owner, and M1a-5's lines point to it. The same edit fixes the
+`asksPermission` line near the top of `docs/FINDINGS.md`, which still says the policy
+has no jurisdiction over opencode: §M9-1 re-measure found that it does, for that one
+request. This matters where a yes would become a refusal: under `safe` and `ask`, a
+read-only kind is allowed with no question, and under `ask`, a person may say yes to
+opencode's outside write. If a harness offers only `allow_always` there, the person
+decides before the change lands.
 A policy answers `true` or `false`, so `pickOption` cannot tell which mode said yes,
 and it takes `allow_always` when no `allow_once` is offered. A policy answer gains a
 scope: `once` or `session`. `true` still means `once`. `ask` and `safe` answer `once`;
@@ -4675,7 +4678,8 @@ the bytes the person saw (#310). The top of `protocol/agent.ts` states the rule,
 `CHANGELOG.md` gets a line.
 *Done when* `docs/FINDINGS.md` records the option kinds of every entry that sends a
 permission request, for an edit and for each kind in `READ_ONLY_KINDS`, opencode's
-outside write included, and M1a-5's record points to it;
+outside write included, M1a-5's record points to it, and the `asksPermission` line no
+longer says the policy has no jurisdiction over opencode;
 and tests cover the `always-menu` attack (`hostile-agent.mjs`) refused under
 `ask` with no write; a new `hostile-agent.mjs` scenario, one attack as `AGENTS.md` asks,
 that offers only `allow_always` for a read-only tool, refused under `safe`; the
