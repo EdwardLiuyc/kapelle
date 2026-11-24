@@ -4581,7 +4581,7 @@ M12-10b and M12-11, which change it on purpose.
 - **D2. The scope.** In: one git helper, the import rule, the DTOs, the permission scope,
   the async listener, the run writer, the daemon and room splits, the security parts of
   `protocol/agent.ts`, the CLI parser, and a bound on a kept title. To the backlog, each
-  with a trigger: dropping old runs and decisions from memory, a neutral folder for the
+  with a trigger: dropping old runs, rooms and decisions from memory, a neutral folder for the
   contract, and splitting the TUI files.
 - **D3. `ask` and `safe` never send `allow_always`.** One "allow" is one write on our
   side (#310), but the harness that hears "always" may stop asking for that tool. Only
@@ -4597,8 +4597,8 @@ M12-10b and M12-11, which change it on purpose.
   unknown key for the same reason. The change gets a `CHANGELOG.md` line.
 
 **The build order:** M12-1..M12-6 first, in any order. M12-7a → M12-7b and M12-8a →
-M12-8b can run side by side, each before its M11 story. M12-9 after M12-4. M12-10a,
-M12-10b and M12-11 at any time.
+M12-8b can run side by side, each before its M11 story. M12-9 after M12-4. M12-10a →
+M12-10b, and M12-11, at any time.
 
 ### Part 1 — Small fixes
 
@@ -4613,9 +4613,10 @@ code, stdout and stderr. Each call names the exit codes it accepts and its buffe
 that a program reads uses `-z`. `git worktree list` is the one that does not today:
 `core/sweep.ts`'s `listWorktrees` splits it on newlines, so a worktree path with a
 newline reads as two (seen on 2026-11-24 with git 2.43). The sweep deletes, so it must
-not guess. `cli.ts`'s one sync `git` call and `client/loop.ts`'s `gitTop` stay as they
-are: `client/` may not import `core/`. `AGENTS.md`'s table gets a row for `core/git.ts`.
-**Gap:** `git worktree list -z` needs git 2.36, and no doc names the oldest git kapelle
+not guess. Two calls stay as they are: `cli.ts`'s one `git` call is synchronous
+(`execFileSync`), and `client/loop.ts`'s `gitTop` is in `client/`, which may not import
+`core/`. `AGENTS.md`'s table gets a row for `core/git.ts`.
+**Gap:** `git worktree list --porcelain -z` (`-z` works only with `--porcelain`) needs git 2.36, and no doc names the oldest git kapelle
 supports. The pickup names it in the README, and decides what the sweep does with an
 older git: refuse to reap and say why, or keep today's read.
 *Done when* tests cover a worktree path with a newline, a path with spaces and non-ASCII
@@ -4714,9 +4715,11 @@ one table of `{ method, pattern, handler }`. The handlers move to
 `daemon/routes/runs.ts`, `daemon/routes/rooms.ts` and `daemon/routes/harnesses.ts`
 (`routes/`, because `daemon/run.ts` and `daemon/rooms.ts` already exist). The `Host`
 check and the token check stay in front of every route, in one place. An unknown path or
-a wrong method answers as today. No framework.
-*Done when* every route's tests pass unchanged, and a test walks the table and shows that
-each route is reached only after the `Host` and token checks.
+a wrong method answers as today. No framework. `AGENTS.md`'s `daemon/` row names
+`daemon/routes/`.
+*Done when* every route's tests pass unchanged, a test walks the table and shows that
+each route is reached only after the `Host` and token checks, and `AGENTS.md`'s table
+names `daemon/routes/`.
 
 **M12-8a · `core/room.ts`: the types, the checks and the record in their own files · M · needs nothing**
 `core/room/types.ts` takes the shared types, the constants and `RoomRefusal`, and imports
@@ -4725,9 +4728,11 @@ nothing from `core/room.ts`. It comes first, because the checks throw `RoomRefus
 `check*` functions. `core/room/record.ts` takes `roomFile`, `writeRoomRecord`,
 `readRoomRecord`, `crashed` and the tombstone functions. Callers import from the new
 files. Each new file's header takes the rules of `core/room.ts`'s header that are about
-it, and `core/room.ts`'s header keeps the rest.
-*Done when* the suite passes unchanged, the import test finds no new loop, and
-`core/room.ts` holds no check and no record function.
+it, and `core/room.ts`'s header keeps the rest. `AGENTS.md`'s table gets a row for
+`core/room/`.
+*Done when* the suite passes unchanged, the import test finds no new loop,
+`core/room.ts` holds no check and no record function, and `AGENTS.md`'s table names the
+new files.
 
 **M12-8b · `core/room.ts`: turns and participants · L · needs M12-8a**
 `buildRoom` (about 845 lines) and `createParticipant` (about 970) share state through
@@ -4736,10 +4741,12 @@ sight. The shared state gets names, in small types with one job each, not one bi
 object. Then `core/room/turns.ts` takes the queue, the busy refusal and the turn cap, and
 `core/room/participant.ts` takes the spawn, the revive with `session/load`, the mode sent
 again, the model and the level. `Room` stays the one public interface. Checkout work
-still calls `core/worktree.ts`.
+still calls `core/worktree.ts`. `AGENTS.md`'s `core/room/` row names the two new files,
+and its rules that say "see the top of `core/room.ts`" point to the file that now holds
+each rule.
 *Done when* the suite passes unchanged, including the multi-turn and revive tests
-against `mock-agent.mjs`, and each rule in today's header of `core/room.ts` sits in
-exactly one header.
+against `mock-agent.mjs`; each rule in today's header of `core/room.ts` sits in exactly
+one header; and `AGENTS.md`'s table and rules point to the right files.
 
 ### Part 3 — The protocol and the CLI
 
@@ -4750,10 +4757,12 @@ pure, and the path guard move to their own files. The guard calls `realpath`, so
 and header say that it reads the disk. The JSON-RPC framing moves too. `AcpAgent` stays
 the one public class, and the `toolCallId` map and `#writeDecisions` stay in it
 (`AGENTS.md`). Check every step against `mock-agent.mjs` and `hostile-agent.mjs` first.
-The 32 MiB line check stays as its `ponytail:` note says.
+The 32 MiB line check stays as its `ponytail:` note says. `AGENTS.md` changes too: its
+table gets a row for each new `protocol/` file, and each of its rules that says "see the
+top of `protocol/agent.ts`" points to the file that now holds that rule.
 *Done when* every `mock-agent.mjs` and `hostile-agent.mjs` test passes unchanged, the guard
-and `pickOption` have tests of their own, and each `AGENTS.md` rule that says "see the top
-of `protocol/agent.ts`" points to the file that now holds that rule.
+and `pickOption` have tests of their own, and `AGENTS.md`'s table and rules point to the
+right files.
 
 **M12-10a · The CLI's flags today, pinned by tests · S · needs nothing**
 `cli.ts` parses its flags by hand. Before that changes, tests record what each verb does
