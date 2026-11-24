@@ -4569,14 +4569,15 @@ and a hall shared by adding a member.
 `core/room.ts` (3,222 lines), `daemon.ts` (2,804), `cli.ts` (2,003) and
 `protocol/agent.ts` (1,355). Some rules are written down but not checked, and a few
 small holes are known. M12 splits the two biggest files before M11 makes them bigger,
-and closes the holes. Every story keeps behaviour the same, except M12-4, M12-6 and
-M12-10b, which change it on purpose.
+and closes the holes. Every story keeps behaviour the same, except M12-4, M12-6,
+M12-10b and M12-11, which change it on purpose.
 
 **Decided 2026-11-24** (with the person):
 
 - **D1. M12 runs beside M11.** The small stories go first. M12-8a and M12-8b land before
   M11-3, which changes `core/room.ts` a lot. M12-7a and M12-7b land before M11-8, which
-  adds keys to the daemon. M11-4..M11-7 touch other files and need neither.
+  adds keys to the daemon. M11-4..M11-6 touch other files and need neither. M11-7
+  follows M11-8, so it waits for M12-7b too.
 - **D2. The scope.** In: one git helper, the import rule, the DTOs, the permission scope,
   the async listener, the run writer, the daemon and room splits, the security parts of
   `protocol/agent.ts`, the CLI parser, and a bound on a kept title. To the backlog, each
@@ -4584,8 +4585,8 @@ M12-10b, which change it on purpose.
   contract, and splitting the TUI files.
 - **D3. `ask` and `safe` never send `allow_always`.** One "allow" is one write on our
   side (#310), but the harness that hears "always" may stop asking for that tool. Only
-  `auto` may send it. No measured harness offers `allow_always` without `allow_once`
-  today, so this closes a hole nobody uses yet.
+  `auto` may send it. No doc records which options each harness offers, so nobody knows
+  yet whether one offers `allow_always` alone. M12-4 measures that first.
 - **D4. Only the run writer is fixed now.** A daemon that boots beside a live CLI run
   shows it as `killed` until its next restart. M12-6 fixes that. Two processes can also
   race on `git worktree` commands for one repository, but nobody has seen it, so it goes
@@ -4648,7 +4649,12 @@ report already goes through `toTaskDto`. No reply changes.
 shape and find it in no reply, and every existing daemon test passes unchanged.
 
 **M12-4 · `ask` and `safe` never send `allow_always` · M · needs nothing**
-D3. A policy answers `true` or `false`, so `pickOption` cannot tell which mode said yes,
+D3. First, each registry entry that asks (`measured.asksPermission`) runs one edit and
+one read, and `docs/FINDINGS.md` records which option kinds it offers for each. This
+matters most under `safe`: a read-only tool is allowed there with no question, so a
+harness that offers only `allow_always` for a read goes from allowed to refused. If the
+measurement finds one, the person decides before the change lands.
+A policy answers `true` or `false`, so `pickOption` cannot tell which mode said yes,
 and it takes `allow_always` when no `allow_once` is offered. A policy answer gains a
 scope: `once` or `session`. `true` still means `once`. `ask` and `safe` answer `once`;
 `auto` answers `session`. Under `once`, `pickOption` takes only `allow_once`, and returns
@@ -4657,7 +4663,8 @@ scope: `once` or `session`. `true` still means `once`. `ask` and `safe` answer `
 counts from the next request. Our own rule does not change: one approval is one write of
 the bytes the person saw (#310). The top of `protocol/agent.ts` states the rule, and
 `CHANGELOG.md` gets a line.
-*Done when* tests cover the `always-menu` attack (`hostile-agent.mjs`) refused under
+*Done when* `docs/FINDINGS.md` records the option kinds of each entry that asks; and
+tests cover the `always-menu` attack (`hostile-agent.mjs`) refused under
 `ask` with no write; a read-only tool with only `allow_always` on offer refused under
 `safe`; the same attack under `auto` given `allow_always`, with the one-write rule still
 held; and a room switched from `auto` to `ask` refusing the next such request.
@@ -4772,10 +4779,15 @@ D2. A tool call's title comes from the harness, and only the 32 MiB line limit b
 `core/permissions.ts` keeps each settled decision's title for the life of the daemon (its
 `ponytail:` note). Both cut the title to a fixed length when the entry settles. An open
 question still shows the whole title, and the event log still holds the whole line.
-**Gap:** the length. The pickup picks it from what the screens show.
+A client sees the change: `GET /permissions/:id` sends a settled decision's `title`
+(`PendingDecision.title` in `client/contract.ts`). So `docs/CLIENT-API.md` says the title
+is cut, as it already says for `input` and `diff`, and `CHANGELOG.md` gets a line.
+**Gap:** the length, which the pickup picks from what the screens show; and whether the
+cut takes a contract version step under `docs/CLIENT-API.md`'s rules.
 *Done when* tests cover a long title cut in both maps, a short title kept whole, an open
-question with the whole title, and the event log line unchanged; and the `ponytail:` note
-in `core/permissions.ts` says what is bounded now.
+question with the whole title, the event log line unchanged, and `GET /permissions/:id`
+for a settled decision with a long title; `docs/CLIENT-API.md` states the cut; and the
+`ponytail:` note in `core/permissions.ts` says what is bounded now.
 
 ---
 
