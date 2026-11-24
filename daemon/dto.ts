@@ -137,8 +137,8 @@ export function toTaskDto(task: { id: string; status: string }): TaskDto {
 
 /** One run as the daemon holds it. The wire reply is `RunDto`, built by
  *  `toRunDto`: a live run's `report` and the record-level fields stay off the
- *  wire. Live runs are built in `daemon.ts`; finished ones are read back from
- *  their `run.json` at boot (M2-6, #36). Notices keep every line, containment
+ *  wire. Live runs are built in `daemon/app.ts`; finished ones are read back
+ *  from their `run.json` at boot (M2-6, #36). Notices keep every line, containment
  *  included: #13 says those are never suppressed, and with no terminal this
  *  record is where they survive. */
 export interface RunState {

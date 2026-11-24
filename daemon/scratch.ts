@@ -198,3 +198,59 @@ export async function cleanScratch(
   }
   return results;
 }
+
+/** The daemon's scratch lock (M12-7a moved it here). Hall adds and removes
+ *  are readers of the scratch tree, through `change`; listing and cleaning
+ *  are writers, through `snapshot`. Readers may run together, but a writer
+ *  waits for every in-flight reader and keeps new readers out until it
+ *  finishes. An add makes a folder before its participant joins the roster,
+ *  so a scratch snapshot must not run beside it. */
+export function createScratchLock() {
+  let scratchReaders = 0;
+  let scratchWriting = false;
+  let scratchWriters: Promise<void> = Promise.resolve();
+  const scratchDrain: (() => void)[] = [];
+
+  async function afterScratchWriter(
+    previous: Promise<void>,
+    mine: Promise<void>,
+  ): Promise<void> {
+    await previous;
+    await mine;
+  }
+
+  async function change<T>(work: () => Promise<T>): Promise<T> {
+    while (scratchWriting) await scratchWriters;
+    scratchReaders++;
+    try {
+      return await work();
+    } finally {
+      scratchReaders--;
+      if (scratchReaders === 0) {
+        for (const wake of scratchDrain.splice(0)) wake();
+      }
+    }
+  }
+
+  async function snapshot<T>(work: () => Promise<T>): Promise<T> {
+    const previous = scratchWriters;
+    let finish!: () => void;
+    const mine = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    scratchWriters = afterScratchWriter(previous, mine);
+    await previous;
+    scratchWriting = true;
+    try {
+      if (scratchReaders > 0) {
+        await new Promise<void>((resolve) => scratchDrain.push(resolve));
+      }
+      return await work();
+    } finally {
+      scratchWriting = false;
+      finish();
+    }
+  }
+
+  return { change, snapshot };
+}
