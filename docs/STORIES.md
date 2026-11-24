@@ -4655,14 +4655,15 @@ shape and find it in no reply, and every existing daemon test passes unchanged.
 **M12-4 · `ask` and `safe` never send `allow_always` · M · needs nothing**
 D3. First, `docs/FINDINGS.md` records which option kinds each harness offers, for every
 request it was measured to send. claude, copilot, codex and kimi
-(`measured.asksPermission`) run one edit and one read. opencode runs a write outside the
-root: it asks for that one, though its flag is `false` (§M9-1 re-measure, and
-`AGENTS.md`). claude and copilot are measured again, because M1a-5's record
-(2026-09-02, issue #13) is on older builds; the new section becomes the owner, and
-M1a-5's lines point to it. This matters where a yes would become a refusal: under
-`safe`, a read-only tool is allowed with no question, and under `ask`, a person may
-say yes to opencode's outside write. If a harness offers only `allow_always` there,
-the person decides before the change lands.
+(`measured.asksPermission`) run one edit, and one request of each kind the policy
+approves with no question: `READ_ONLY_KINDS` in `core/policy.ts`, today `read`, `search`
+and `fetch`. opencode runs a write outside the root: it asks for that one, though its
+flag is `false` (§M9-1 re-measure, and `AGENTS.md`). claude and copilot are measured
+again, because M1a-5's record (2026-09-02, issue #13) is on older builds; the new
+section becomes the owner, and M1a-5's lines point to it. This matters where a yes
+would become a refusal: under `safe` and `ask`, a read-only kind is allowed with no
+question, and under `ask`, a person may say yes to opencode's outside write. If a
+harness offers only `allow_always` there, the person decides before the change lands.
 A policy answers `true` or `false`, so `pickOption` cannot tell which mode said yes,
 and it takes `allow_always` when no `allow_once` is offered. A policy answer gains a
 scope: `once` or `session`. `true` still means `once`. `ask` and `safe` answer `once`;
@@ -4673,7 +4674,8 @@ counts from the next request. Our own rule does not change: one approval is one 
 the bytes the person saw (#310). The top of `protocol/agent.ts` states the rule, and
 `CHANGELOG.md` gets a line.
 *Done when* `docs/FINDINGS.md` records the option kinds of every entry that sends a
-permission request, opencode's outside write included, and M1a-5's record points to it;
+permission request, for an edit and for each kind in `READ_ONLY_KINDS`, opencode's
+outside write included, and M1a-5's record points to it;
 and tests cover the `always-menu` attack (`hostile-agent.mjs`) refused under
 `ask` with no write; a new `hostile-agent.mjs` scenario, one attack as `AGENTS.md` asks,
 that offers only `allow_always` for a read-only tool, refused under `safe`; the
