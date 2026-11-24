@@ -759,7 +759,7 @@ for (const how of ["a crash", "a clean stop"]) {
     await until(() => said.lines.length === 1);
 
     // A clean stop takes no new connection, then pauses the room, which
-    // ends its stream normally, then removes `daemon.json` (`daemon.ts`,
+    // ends its stream normally, then removes `daemon.json` (`daemon/main.ts`,
     // `shutdown`). A crash only cuts the stream.
     if (how === "a clean stop") {
       old.refuse();

@@ -8,8 +8,8 @@
  * ACP event types that ride inside the stream are re-exported below, so a
  * client never has to know `protocol/` exists.
  *
- * `daemon.ts` declares its runs and rooms with these types and checks every
- * other reply with `satisfies`, so a removed or renamed field fails
+ * `daemon/app.ts` declares its runs and rooms with these types and checks
+ * every other reply with `satisfies`, so a removed or renamed field fails
  * `npm run check`, and so does a field added where the daemon builds the
  * reply itself. Four parts come from `core/`, which may not import this
  * file, and are checked for assignability only — an added field there is not

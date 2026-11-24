@@ -367,7 +367,7 @@ export function createEventLog(
 /**
  * A finished run's log, read back from disk (M2-6, #36).
  *
- * The same `EventLog` a live run hands out, so `daemon.ts` serves
+ * The same `EventLog` a live run hands out, so `daemon/app.ts` serves
  * `GET /runs/:id/events` for a run from before a restart through the one code
  * path. Read-only on purpose: a run that is over gets no more lines.
  * `reopenEventLog` is the one that appends.

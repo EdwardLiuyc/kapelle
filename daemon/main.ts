@@ -240,16 +240,22 @@ export async function main(): Promise<void> {
   let stopping = false;
 
   /**
-   * SIGTERM, SIGINT or a lost record: the app cancels every run, pauses every
-   * room and waits for each to settle (`stop` in `daemon/app.ts`), then
-   * `daemon.json` is removed and the process exits 0 (M2-4, #34). Record loss
-   * deliberately exits 0 too: this is a clean shutdown, not a crash, and a
-   * later client can start a fresh daemon.
+   * SIGTERM, SIGINT or a lost record: the server stops accepting, the app
+   * cancels every run, pauses every room and waits for each to settle (`stop`
+   * in `daemon/app.ts`), then `daemon.json` is removed and the process exits 0
+   * (M2-4, #34). Record loss deliberately exits 0 too: this is a clean
+   * shutdown, not a crash, and a later client can start a fresh daemon.
    */
   async function shutdown(signal: string): Promise<void> {
     if (stopping) return;
     stopping = true;
     if (recordWatch !== undefined) clearInterval(recordWatch);
+    // Before the pause: a chat screen whose room stream ends must then find no
+    // daemon, and wait for the next one (`readRoom` in `client/roomset.ts`).
+    // The SSE response closes its own socket (`daemon/sse.ts`); close idle
+    // pooled sockets too so the reconcile cannot ride one back in.
+    server.close();
+    server.closeIdleConnections();
     await app.stop(signal);
     removeDaemonFilesIfMine(file, published);
     process.exit(0);

@@ -228,8 +228,8 @@
  * ponytail: nothing caps the live harness count across runs and rooms (R40).
  * `runs + Σ(busy participants)` is unbounded, with the default mode `auto`,
  * and so is the `agents` list of one `POST /rooms`, which starts them in turn.
- * A daemon-wide cap belongs in `daemon.ts`, where both spawners meet; add one
- * when a machine actually runs out of memory or file handles, not before.
+ * A daemon-wide cap belongs in `daemon/app.ts`, where both spawners meet; add
+ * one when a machine actually runs out of memory or file handles, not before.
  */
 
 import {

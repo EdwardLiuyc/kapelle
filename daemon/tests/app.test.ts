@@ -56,7 +56,20 @@ test("createDaemonApp serves a run and a room over real HTTP, then stops", async
   app.restoreRuns();
   await app.restoreRooms();
   await new Promise<void>((ok) => app.server.listen(0, "127.0.0.1", ok));
-  t.after(() => app.stop("test"));
+  const closeServer = async () => {
+    app.server.closeIdleConnections();
+    if (!app.server.listening) return;
+    await new Promise<void>((ok, fail) =>
+      app.server.close((err) => (err ? fail(err) : ok())),
+    );
+  };
+  t.after(async () => {
+    try {
+      await app.stop("test");
+    } finally {
+      await closeServer();
+    }
+  });
   const { port } = app.server.address() as AddressInfo;
   // SAFETY: `api` and the polling helpers read only `url` and `token`; the
   // other fields describe a spawned daemon, and there is none.
@@ -93,6 +106,9 @@ test("createDaemonApp serves a run and a room over real HTTP, then stops", async
 
   // A stop pauses the room and stops its harness: the record goes with it.
   await app.stop("test");
+  // The boot owns the listener, not the app; this test is that caller here.
+  assert.equal(app.server.listening, true);
+  await closeServer();
   assert.equal(app.server.listening, false);
   await until("children.json removed", () => !existsSync(childrenFile));
 });
