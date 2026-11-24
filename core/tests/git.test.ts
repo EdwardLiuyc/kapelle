@@ -121,6 +121,7 @@ test("git and gitWithInput reject a stream past maxBuffer", async (t) => {
     (err: unknown) => {
       assert.ok(err instanceof GitError);
       assert.equal(err.exitCode, null);
+      assert.equal(err.stdout.length, 16);
       assert.match(err.message, /16-byte stdout buffer/);
       return true;
     },
@@ -130,10 +131,45 @@ test("git and gitWithInput reject a stream past maxBuffer", async (t) => {
     (err: unknown) => {
       assert.ok(err instanceof GitError);
       assert.equal(err.exitCode, null);
+      assert.equal(err.stdout.length, 16);
       assert.match(err.message, /16-byte stdout buffer/);
       return true;
     },
   );
+});
+
+test("git and gitWithInput name the stderr buffer", async (t) => {
+  const root = await gitRepo(t);
+  const tiny = { ...GIT, maxBuffer: 16 };
+
+  for (const run of [
+    () => git(root, ["worktree", "list", "--bogus"], tiny),
+    () => gitWithInput(root, ["worktree", "list", "--bogus"], "", tiny),
+  ]) {
+    await assert.rejects(run(), (err: unknown) => {
+      assert.ok(err instanceof GitError);
+      assert.equal(err.exitCode, null);
+      assert.match(err.message, /16-byte stderr buffer/);
+      return true;
+    });
+  }
+});
+
+test("both helpers require exit 0 to be accepted", async (t) => {
+  const root = await gitRepo(t);
+  const noSuccess = { ...GIT, exitCodes: [1] };
+
+  for (const run of [
+    () => git(root, ["rev-parse", "HEAD"], noSuccess),
+    () => gitWithInput(root, ["rev-parse", "HEAD"], "", noSuccess),
+  ]) {
+    await assert.rejects(run(), (err: unknown) => {
+      assert.ok(err instanceof GitError);
+      assert.equal(err.exitCode, 0);
+      assert.match(err.stdout, /^[0-9a-f]{40}\n$/);
+      return true;
+    });
+  }
 });
 
 test("gitWithInput sends stdin and keeps the raw answer", async (t) => {

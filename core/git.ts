@@ -73,14 +73,14 @@ export async function git(
   args: readonly string[],
   options: GitOptions,
 ): Promise<string> {
+  let stdout: string;
   try {
-    const { stdout } = await run("git", args, {
+    ({ stdout } = await run("git", args, {
       cwd,
       env: options.env,
       maxBuffer: options.maxBuffer,
       encoding: "utf8",
-    });
-    return stdout;
+    }));
   } catch (err) {
     const failure = err as {
       code?: unknown;
@@ -89,16 +89,16 @@ export async function git(
       message?: string;
     };
     const exitCode = typeof failure.code === "number" ? failure.code : null;
-    const stdout =
+    const failedStdout =
       typeof failure.stdout === "string" ? failure.stdout : String();
     const stderr =
       typeof failure.stderr === "string" ? failure.stderr : String();
     if (exitCode !== null && options.exitCodes.includes(exitCode)) {
-      return stdout;
+      return failedStdout;
     }
     throw new GitError(
       exitCode,
-      stdout,
+      failedStdout,
       stderr,
       failure.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
         ? bufferMessage(
@@ -109,6 +109,10 @@ export async function git(
         : failureMessage(args, exitCode, stderr, failure.message),
     );
   }
+  if (!options.exitCodes.includes(0)) {
+    throw new GitError(0, stdout, "", failureMessage(args, 0, ""));
+  }
+  return stdout;
 }
 
 /** `git`, with one trailing line ending removed. */
@@ -172,8 +176,14 @@ export function gitWithInput(
       stream: "stdout" | "stderr",
     ) => {
       if (settled) return;
-      const size = (stream === "stdout" ? outBytes : errBytes) + chunk.length;
-      if (size > options.maxBuffer) {
+      const used = stream === "stdout" ? outBytes : errBytes;
+      const room = Math.max(0, options.maxBuffer - used);
+      if (chunk.length > room) {
+        if (room > 0) {
+          chunks.push(chunk.subarray(0, room));
+          if (stream === "stdout") outBytes += room;
+          else errBytes += room;
+        }
         fail(
           new GitError(
             null,
@@ -185,8 +195,8 @@ export function gitWithInput(
         child.kill();
         return;
       }
-      if (stream === "stdout") outBytes = size;
-      else errBytes = size;
+      if (stream === "stdout") outBytes += chunk.length;
+      else errBytes += chunk.length;
       chunks.push(chunk);
     };
 
