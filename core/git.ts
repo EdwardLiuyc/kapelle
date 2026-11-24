@@ -27,23 +27,63 @@ export class GitError extends Error {
   readonly exitCode: number | null;
   readonly stdout: string;
   readonly stderr: string;
+  /** True when the caller's options, not git, made the call fail. */
+  readonly callerError: boolean;
 
   constructor(
     exitCode: number | null,
     stdout: string,
     stderr: string,
     message: string,
+    callerError = false,
   ) {
     super(message);
     this.name = "GitError";
     this.exitCode = exitCode;
     this.stdout = stdout;
     this.stderr = stderr;
+    this.callerError = callerError;
   }
 }
 
 const commandName = (args: readonly string[]): string => args[0] ?? "command";
 const line = (text: string): string => text.replace(/\r?\n$/, "");
+
+/** Drop an incomplete UTF-8 sequence left by a byte-boundary cut. */
+function utf8Prefix(data: Buffer): Buffer {
+  let start = data.length - 1;
+  while (start >= 0) {
+    const byte = data[start];
+    if (byte === undefined || (byte & 0xc0) !== 0x80) break;
+    start--;
+  }
+  if (start < 0) return data;
+  const lead = data[start];
+  if (lead === undefined) return data;
+  const width =
+    (lead & 0x80) === 0
+      ? 1
+      : (lead & 0xe0) === 0xc0
+        ? 2
+        : (lead & 0xf0) === 0xe0
+          ? 3
+          : (lead & 0xf8) === 0xf0
+            ? 4
+            : 1;
+  return data.length - start < width ? data.subarray(0, start) : data;
+}
+
+function successNotAccepted(
+  args: readonly string[],
+  stdout: string,
+  stderr: string,
+): GitError {
+  const detail = stderr.trim();
+  const reason = detail
+    ? `${detail} (git exited with code 0; exitCodes does not accept 0)`
+    : `git ${commandName(args)} exited with code 0; exitCodes does not accept 0`;
+  return new GitError(0, stdout, stderr, reason, true);
+}
 
 function bufferMessage(
   args: readonly string[],
@@ -74,8 +114,9 @@ export async function git(
   options: GitOptions,
 ): Promise<string> {
   let stdout: string;
+  let stderr: string;
   try {
-    ({ stdout } = await run("git", args, {
+    ({ stdout, stderr } = await run("git", args, {
       cwd,
       env: options.env,
       maxBuffer: options.maxBuffer,
@@ -110,7 +151,7 @@ export async function git(
     );
   }
   if (!options.exitCodes.includes(0)) {
-    throw new GitError(0, stdout, "", failureMessage(args, 0, ""));
+    throw successNotAccepted(args, stdout, stderr);
   }
   return stdout;
 }
@@ -133,7 +174,7 @@ export async function tryGit(
   try {
     return await git(cwd, args, options);
   } catch (err) {
-    if (err instanceof GitError) return null;
+    if (err instanceof GitError && !err.callerError) return null;
     throw err;
   }
 }
@@ -163,8 +204,8 @@ export function gitWithInput(
     let errBytes = 0;
     let settled = false;
 
-    const stdout = () => Buffer.concat(out).toString("utf8");
-    const stderr = () => Buffer.concat(err).toString("utf8");
+    const stdout = () => utf8Prefix(Buffer.concat(out)).toString("utf8");
+    const stderr = () => utf8Prefix(Buffer.concat(err)).toString("utf8");
     const fail = (error: GitError) => {
       if (settled) return;
       settled = true;
@@ -219,6 +260,10 @@ export function gitWithInput(
       if (code !== null && options.exitCodes.includes(code)) {
         settled = true;
         resolve(output);
+        return;
+      }
+      if (code === 0) {
+        fail(successNotAccepted(args, output, errors));
         return;
       }
       fail(

@@ -27,6 +27,16 @@ isolateStateHome();
 const GIT = { exitCodes: [0], maxBuffer: 1024 * 1024 } satisfies GitOptions;
 const DIFF = { exitCodes: [0, 1], maxBuffer: 1024 * 1024 } satisfies GitOptions;
 
+async function rejectedGit(run: () => Promise<unknown>): Promise<GitError> {
+  try {
+    await run();
+  } catch (err) {
+    assert.ok(err instanceof GitError);
+    return err;
+  }
+  assert.fail("expected git to reject");
+}
+
 test("git keeps raw stdout and GitError carries the exit streams", async (t) => {
   const root = await gitRepo(t);
   await git(root, ["config", "test.raw", "  keep  "], GIT);
@@ -163,13 +173,91 @@ test("both helpers require exit 0 to be accepted", async (t) => {
     () => git(root, ["rev-parse", "HEAD"], noSuccess),
     () => gitWithInput(root, ["rev-parse", "HEAD"], "", noSuccess),
   ]) {
-    await assert.rejects(run(), (err: unknown) => {
-      assert.ok(err instanceof GitError);
-      assert.equal(err.exitCode, 0);
-      assert.match(err.stdout, /^[0-9a-f]{40}\n$/);
-      return true;
-    });
+    const err = await rejectedGit(run);
+    assert.equal(err.exitCode, 0);
+    assert.match(err.stdout, /^[0-9a-f]{40}\n$/);
   }
+});
+
+test("an unaccepted exit 0 carries the same stderr from both helpers", async (t) => {
+  const root = await gitRepo(t);
+  await scriptedGit(
+    t,
+    () => `
+if [ "$1" = "diagnostic" ]; then
+  printf '%s\\n' "out"
+  printf '%s\\n' "err" >&2
+  exit 0
+fi
+`,
+  );
+  const noSuccess = { ...GIT, exitCodes: [1] };
+  const fromGit = await rejectedGit(() => git(root, ["diagnostic"], noSuccess));
+  const fromInput = await rejectedGit(() =>
+    gitWithInput(root, ["diagnostic"], "", noSuccess),
+  );
+
+  for (const err of [fromGit, fromInput]) {
+    assert.equal(err.exitCode, 0);
+    assert.equal(err.stdout, "out\n");
+    assert.equal(err.stderr, "err\n");
+    assert.equal(err.message, fromGit.message);
+    assert.equal(err.callerError, true);
+  }
+});
+
+test("tryGit does not swallow an unaccepted-success caller error", async (t) => {
+  const root = await gitRepo(t);
+  await scriptedGit(
+    t,
+    () => `
+if [ "$1" = "diagnostic" ]; then
+  printf '%s\\n' "out"
+  printf '%s\\n' "err" >&2
+  exit 0
+fi
+`,
+  );
+  const noSuccess = { ...GIT, exitCodes: [1] };
+
+  for (const run of [
+    () => tryGit(root, ["diagnostic"], noSuccess),
+    () => tryGitLine(root, ["diagnostic"], noSuccess),
+  ]) {
+    const err = await rejectedGit(run);
+    assert.equal(err.callerError, true);
+    assert.equal(err.stderr, "err\n");
+  }
+});
+
+test("gitWithInput keeps a multibyte overflow prefix valid", async (t) => {
+  const root = await gitRepo(t);
+  await scriptedGit(
+    t,
+    () => `
+if [ "$1" = "unicode" ]; then
+  printf '\\303\\251x\\n'
+  exit 0
+fi
+`,
+  );
+
+  const narrow = await rejectedGit(() =>
+    gitWithInput(root, ["unicode"], "", { ...GIT, maxBuffer: 1 }),
+  );
+  assert.equal(narrow.stdout, "");
+  assert.equal(narrow.stdout.includes("\uFFFD"), false);
+
+  const partial = await rejectedGit(() =>
+    gitWithInput(root, ["unicode"], "", { ...GIT, maxBuffer: 2 }),
+  );
+  assert.equal(partial.stdout, "é");
+  assert.equal(partial.stdout.includes("\uFFFD"), false);
+
+  assert.equal(
+    await gitWithInput(root, ["unicode"], "", { ...GIT, maxBuffer: 4 }),
+    "éx\n",
+  );
 });
 
 test("gitWithInput sends stdin and keeps the raw answer", async (t) => {
