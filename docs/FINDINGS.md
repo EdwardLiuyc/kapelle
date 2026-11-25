@@ -503,9 +503,11 @@ avoid.
 `tool_call` is still `shell` with `rawInput` `{cwd}` or `{}`. The first
 `tool_call_update` then carries the command as the title and as `rawInput.command`, as
 claude-agent-acp's does. So opencode's `argvChannel` is `notification` (late), not
-`none`. It still never asks permission, so the policy still cannot gate it. The 1.18.18
-measurement above stays as it was. On 2.0.18 the last update of a call carries only
-`status: completed`, with no title, input or location (measured 2026-10-31, see
+`none`. It still asks nothing for a write inside the root, so the policy cannot gate
+that work; on 2.0.18 it asks for a write outside the root, and a refusal binds (§M12-4).
+The 1.18.18 measurement above stays as it was. On 2.0.18 the last update of a call
+carries only `status: completed`, with no title, input or location (measured 2026-10-31,
+see
 [§Repeat by tool title](#repeat-by-tool-title--room-logs--measured-2026-10-31-354)).
 
 ### Why nothing called it — checked, not assumed

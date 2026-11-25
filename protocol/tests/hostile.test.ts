@@ -207,6 +207,11 @@ test("auto sends an allow-only menu's allow_always, and it still grants one writ
     run.decisions[1] ?? "",
     /^edit:fs\/write_text_file .*notes\.md$/,
   );
+  assert.equal(
+    run.text.match(/OUTCOME=allowed/g)?.length,
+    2,
+    "both writes land: the first from the menu, the second after a new decision",
+  );
   assert.equal(run.stopReason, "end_turn");
 });
 

@@ -23,6 +23,7 @@ import type { TestContext } from "node:test";
 import { test } from "node:test";
 
 import { MOCK_AGENT } from "../../integration/helpers.ts";
+import type { Policy } from "../agent.ts";
 import { AcpAgent } from "../agent.ts";
 
 /**
@@ -1696,7 +1697,7 @@ type AskResult = {
 
 async function permissionAgent(
   t: TestContext,
-  policy: () => boolean,
+  policy: Policy,
   onEvent?: (e: CapturedEvent) => void,
 ): Promise<AcpAgent> {
   const agent = new AcpAgent({
@@ -1778,6 +1779,17 @@ test("a matching reject option is preferred over cancelling", async (t) => {
 
 test("an approval takes allow_once even when allow_always is listed first", async (t) => {
   const agent = await permissionAgent(t, () => true);
+  const res = await agent.request<AskResult>("debug/ask", { allowOnly: true });
+  assert.deepEqual(res.outcome, { outcome: "selected", optionId: "once" });
+});
+
+test("a session approval still takes allow_once when both options are offered", async (t) => {
+  // M12-4: only a `session` yes may reach allow_always, and it still prefers
+  // the narrower option whenever the harness offers one.
+  const agent = await permissionAgent(t, () => ({
+    allow: true,
+    scope: "session",
+  }));
   const res = await agent.request<AskResult>("debug/ask", { allowOnly: true });
   assert.deepEqual(res.outcome, { outcome: "selected", optionId: "once" });
 });
