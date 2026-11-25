@@ -326,4 +326,7 @@ test("toConfigView copies every row, its array values, and drops unknown fields"
   assert.notEqual(dtoRow.value, sourceRow.value);
   assert.notEqual(dtoRow.default, sourceRow.default);
   assert.notEqual(dtoRow.file, sourceRow.file);
+
+  const withoutInvalid = toConfigView("/repo", { ...view, invalid: undefined });
+  assert.equal("invalid" in withoutInvalid, false);
 });
