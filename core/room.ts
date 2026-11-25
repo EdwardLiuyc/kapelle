@@ -72,11 +72,12 @@
  * sweep's retention reap removes the room (`removeRoom`, #235).
  *
  * **A roster that changes** (M6-3). `add`, `update` and `remove` change it
- * after the room opens. An add still in flight
- * holds its name and role, so two racing adds cannot both take one. A
- * removed participant leaves the roster. Its checkout is released as at
- * dismiss, and a release notice goes to the room's notices, since the
- * participant that would show it is gone. Each change is on the log —
+ * after the room opens. An add still in flight holds its name and role, so
+ * two racing adds cannot both take the same name or the orchestrator role
+ * (`core/room/validate.ts`). A removed participant leaves the roster. Its
+ * checkout is released as at dismiss, and a release notice goes to the room's
+ * notices, since the participant that would show it is gone. Each change is
+ * on the log —
  * `_client_participant_added`, `_changed` and `_removed`, starters included —
  * so a client builds the roster from the stream alone (M6-10).
  *
@@ -100,7 +101,8 @@
  *
  * **A message names its participant, and a busy one queues it** (M6-4).
  * `send` starts a turn, or puts the message in a FIFO queue behind the live
- * one (R32a); 16 wait at most, and the next is refused `queue_full` (R41).
+ * one (R32a); `QUEUE_BOUND` messages wait at most, and the next is refused
+ * `queue_full` (R41).
  * The queue is in memory only, so a daemon restart loses it. `cancel` drops
  * the queue, then cancels the live turn; the session stays (S5a). A dropped
  * message is never sent, and `_client_queue_cleared` says how many. A

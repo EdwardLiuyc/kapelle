@@ -1,7 +1,7 @@
 /**
  * The room's shared types, limits and refusal (M12-8a).
  *
- * **The orchestrator is a label, not a slot** (R44). A participant has the
+ * **The orchestrator is a label, not a slot**. A participant has the
  * role it was given and no other; nothing is promoted by default.
  */
 
