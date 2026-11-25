@@ -286,7 +286,9 @@ export function createPermissionQueue(timeoutMs: number) {
     },
 
     /** Answers everything one room participant has open: its mode left
-     *  `ask`, so `auto` allows and `safe` denies (decided 2026-09-29, #194). */
+     *  `ask`, so `auto` allows and `safe` denies (decided 2026-09-29, #194).
+     *  The yes is `true`, a yes `once`, because the question was asked under
+     *  `ask`: a menu with no `allow_once` is refused (M12-4). */
     answerParticipant(
       roomId: string,
       participantId: string,

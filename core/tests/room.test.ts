@@ -1164,6 +1164,33 @@ test("a room switched from auto to ask refuses the next allow-only menu (M12-4)"
   assert.ok(!existsSync(notes), "and the writes after it are refused");
 });
 
+test("a switch to auto answers an open question with a yes once, so an allow-only menu is refused (M12-4)", async (t) => {
+  const { room, p, of } = await modeRoom(
+    t,
+    { mode: "ask" },
+    { scenario: "always-menu", script: HOSTILE_AGENT },
+  );
+  const turn = p.send("go");
+  await queued(of, 1);
+  // The question was asked under `ask`, so the switch's yes is for one request.
+  room.update(p.id, { mode: "auto" });
+  await turn;
+  assert.deepEqual(
+    of("_client_permission").map((e) => e.update),
+    [
+      {
+        sessionUpdate: "_client_permission",
+        allow: false,
+        title: "Write notes.md",
+        kind: "edit",
+        optionId: undefined,
+      },
+    ],
+    "no allow_once on the menu, so the yes is a refusal",
+  );
+  assert.ok(!existsSync(join(p.worktree, "notes.md")));
+});
+
 test("a safe participant's write is refused, and it reads nothing outside", async (t) => {
   const { room, p, of } = await modeRoom(t, {
     mode: "safe",
