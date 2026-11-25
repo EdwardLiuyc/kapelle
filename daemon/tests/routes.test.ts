@@ -132,6 +132,14 @@ async function serve(t: TestContext) {
 test("every row is reached only after the Host and token checks", async (t) => {
   const { routes, calls, call } = await serve(t);
   assert.equal(SAMPLES.length, routes.length, "one sample per row");
+  // `route` calls `exec` once per request: a `g` or `y` pattern would keep
+  // `lastIndex` between requests and miss every other match.
+  for (const { method, pattern } of routes) {
+    assert.ok(
+      !pattern.global && !pattern.sticky,
+      `${method} ${pattern} has no g or y flag`,
+    );
+  }
 
   for (const [method, path] of SAMPLES) {
     const forged = await call(method, path, { host: "evil.example" });

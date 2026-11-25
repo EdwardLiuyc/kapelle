@@ -9,13 +9,13 @@
  * client never has to know `protocol/` exists.
  *
  * The daemon's routes (`daemon/app.ts`, `daemon/routes/`) declare their runs
- * and rooms with these types and check every other reply with `satisfies`, so a removed or renamed field fails
- * `npm run check`, and so does a field added where the daemon builds the
- * reply itself. Four parts come from `core/`, which may not import this
- * file, and are checked for assignability only — an added field there is not
- * caught: a finished run's `report` (`core/run.ts`), `GET /permissions` and
- * `GET /permissions/:id` (`core/permissions.ts`), and the rows of
- * `GET /config` (`core/config.ts`). Which shapes are stable and
+ * and rooms with these types and check every other reply with `satisfies`, so a
+ * removed or renamed field fails `npm run check`, and so does a field added
+ * where the daemon builds the reply itself. Four parts come from `core/`, which
+ * may not import this file, and are checked for assignability only — an added
+ * field there is not caught: a finished run's `report` (`core/run.ts`),
+ * `GET /permissions` and `GET /permissions/:id` (`core/permissions.ts`), and
+ * the rows of `GET /config` (`core/config.ts`). Which shapes are stable and
  * which will change is the stability table in the doc, not this file.
  *
  * Types only, plus two constants (decided 2026-09-22, B7): a JSON Schema can

@@ -97,7 +97,8 @@ export interface DaemonDeps {
 
 /** The app. `server` is made, not listening; `restoreRuns` and
  *  `restoreRooms` run once, before the port opens; `stop` ends it. `routes`
- *  is the table, for a test that walks it. */
+ *  is the live table, for a test that walks it and swaps its handlers for
+ *  spies: `route` reads each row at every request. */
 export function createDaemonApp(deps: DaemonDeps) {
   const repos = new Set<string>(deps.repos);
   const runs = createRuns();
@@ -113,6 +114,8 @@ export function createDaemonApp(deps: DaemonDeps) {
   /** Set once SIGTERM/SIGINT has begun: no new run, room, check or install
    *  may start. */
   let stopping = false;
+  /** Shared live, not copied. `repos` is written only by `POST /repos`
+   *  (`daemon/routes/repos.ts`); the other route files take it read-only. */
   const shared = {
     repos,
     children,

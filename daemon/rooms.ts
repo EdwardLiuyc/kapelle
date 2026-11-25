@@ -24,7 +24,8 @@
  *
  * It also keeps the ids of deleted rooms, the room creates and deletes that a
  * shutdown must wait for, and the scratch lock that serializes hall adds and
- * removes against scratch snapshots (M12-7a).
+ * removes against scratch snapshots (M12-7a). And it names the hall's folder,
+ * `hallDir`, which the boot sweep needs before any app exists (M12-7b).
  */
 
 import type { ServerResponse } from "node:http";

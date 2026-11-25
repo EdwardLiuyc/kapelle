@@ -4,9 +4,9 @@
  *
  * Everything a request meets before a route reads it: the `Host` guard, the
  * token check, the body reader, the refusal type every route throws, and the
- * shape of a route table row. Kept
- * apart from `daemon.ts` because that file starts a daemon when imported, and
- * this is the security code, which needs tests that call it directly.
+ * shape of a route table row. Kept apart from `daemon.ts` because that file
+ * starts a daemon when imported, and this is the security code, which needs
+ * tests that call it directly.
  */
 
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -202,8 +202,11 @@ export function existingDir(value: unknown, field: string): string {
 
 /**
  * One row of the route table (M12-7b). `pattern` matches the whole path, and
- * its groups are `params`, as sent: not decoded. A row is reached only after
- * the `Host` and token checks, which run once, in `daemon/app.ts`.
+ * its groups are `params`, as sent: not decoded. It never has the `g` or `y`
+ * flag: `route` calls `exec` on it for every request, and either flag keeps
+ * `lastIndex` from one request to the next, so the row would miss a match. A
+ * row is reached only after the `Host` and token checks, which run once, in
+ * `daemon/app.ts`.
  */
 export interface Route {
   method: string;
