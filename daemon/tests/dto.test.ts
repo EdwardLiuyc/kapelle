@@ -3,8 +3,9 @@
  *
  * `tests/contract/run-dto.test.ts` proves the same promise end to end, through
  * a real daemon. This file proves the edge cases that are slow to stage that
- * way: a hand-edited `run.json` with junk in every field, and a live report
- * whose `TaskRun` carries fields the contract never names.
+ * way: a hand-edited `run.json` with junk in every field, a live report, and
+ * permission or config core objects, each carrying fields the contract never
+ * names.
  */
 
 import assert from "node:assert/strict";
@@ -285,8 +286,9 @@ test("toConfigView copies every row, its array values, and drops unknown fields"
       {
         key: "linkPaths",
         value: ["node_modules"],
-        source: "default",
+        source: "config",
         default: [],
+        file: ["node_modules"],
       },
     ],
     invalid: "bad file",
@@ -308,8 +310,9 @@ test("toConfigView copies every row, its array values, and drops unknown fields"
       {
         key: "linkPaths",
         value: ["node_modules"],
-        source: "default",
+        source: "config",
         default: [],
+        file: ["node_modules"],
       },
     ],
     invalid: "bad file",
@@ -320,4 +323,5 @@ test("toConfigView copies every row, its array values, and drops unknown fields"
   assert.ok(sourceRow && dtoRow);
   assert.notEqual(dtoRow.value, sourceRow.value);
   assert.notEqual(dtoRow.default, sourceRow.default);
+  assert.notEqual(dtoRow.file, sourceRow.file);
 });
