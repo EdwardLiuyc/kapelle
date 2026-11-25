@@ -4340,6 +4340,26 @@ daemon, each under their own name.
   **Amended 2026-11-19 (#475):** the hall is a room inside the daemon only. The
   screens hide it: its agents show as chats, one row each, after the rooms, as people
   beside group chats in a chat app.
+  **Amended 2026-11-25, with the person: a chat is not a room.** The hall shares one
+  room's log among chats that have nothing to do with each other. Every TUI start
+  replays all of it, removed agents included, so a removed chat shows for a moment and
+  then goes. A flag on a room would add an `if (hall)` for each new chat feature. So a
+  **chat** becomes one agent with its own record and its own log, built from the same
+  agent parts as a room's participant (M12-8c). Neither one is a kind of the other. A
+  removed chat's folder moves to an archive, which the boot cleanup deletes after
+  `retentionMs`. A start then replays only live chats. It still replays each live chat
+  from its first line, as a room is replayed today (`client/roomset.ts`), so one long
+  chat still costs its whole log. The size of a log was not the problem the person
+  named, so no story here bounds it. Decided with it:
+  - There is no hall record until M11-11. Until then the chats are one list, and the
+    API calls them chats.
+  - No agent moves from the old hall. When the screens switch (M11-15), the old hall's
+    agents stop, and the person removes the old hall's logs, checkouts and branches by
+    hand. Its history is not kept: the new screens cannot read it.
+  - Only kapelle's own screens use the API, so `/rooms/hall` goes with no
+    compatibility layer, and the contract goes to major version 2.
+  - An archived chat is read with a command first (M11-16); a view in the TUI can come
+    later.
 - **D2. An agent in the hall works in a repository, or in none.** In a repository with a
   commit it gets its own worktree, as a room participant does today; a folder with no
   git, or a repository with no commit, runs in the folder, as today. With no `--cwd`, the
@@ -4347,15 +4367,20 @@ daemon, each under their own name.
   agent picks its own repository, so two agents in the hall can work in two
   repositories. Today the repository belongs to the room (`core/room.ts`,
   `RoomOptions.cwd`). D3 needs this too: an agent that walks into a room keeps its
-  repository.
-- **D3. An agent can walk into a room and out again.** It keeps its harness, its memory,
-  its worktree (or scratch folder) and its branch, as a person who changes rooms.
+  repository. **Amended 2026-11-25:** D3 is dropped; a chat needs it all the same (M11-12).
+- ~~**D3. An agent can walk into a room and out again.**~~
+  **Dropped 2026-11-25, with the person.** Its text is in git history. A move needs the agent's history to follow
+  it, which ties the chat's log to the room's, and its runtime, checkout path and branch
+  name all hold the room id. That is too much for what it gives. A way to share context
+  between rooms can be its own story later. M11-3 goes with it.
 - **D4. A person shares rooms with other people, and nothing else.** A room has one
   owner, the person who made it, and members, the other people of this daemon the owner
   added. The owner and the members see the room, talk in it and answer its agents'
   questions. Nobody else sees it. To share one agent with another person, move the agent
   into a small room and add that person as a member. There is no permission for each
   agent.
+  **Amended 2026-11-25 (D3 dropped):** start the agent in a small room instead of
+  moving it there.
 - **D5. A person is a name, with many keys.** Each key has a label the person picks,
   such as "laptop" or "my bot". A key is not tied to a device. Each key can be cancelled
   alone, and a key stays the same after a restart.
@@ -4388,8 +4413,13 @@ then M11-8, then M11-7, then M11-9, then part 4 (M11-10, M11-11). M11-7 needs ke
 stay the same after a restart, and M11-8 makes them.
 **Amended 2026-11-24 (M12 D1):** M11-3 waits for M12-8b, and M11-8 waits for M12-7b, so
 neither grows a file M12 splits. M11-4..M11-6 need neither.
+**Amended 2026-11-25 (D1, D3):** M11-3 is dropped. The chats come after M12-8c:
+M11-12, then M11-14, then M11-13, then M11-15. M11-16 needs only M11-13.
+Each one leaves `master` working: the old hall stays until M11-15. M11-14 comes before
+M11-13 because the API makes chat checkouts, and a sweep that does not know chats would
+call them orphans at the next boot.
 
-### Part 1 — The hall
+### Part 1 — The hall and its chats
 
 **M11-1 · The hall: a room that always exists · M · needs nothing**
 The daemon makes the operator's hall when it starts, and keeps it across restarts. It has
@@ -4410,6 +4440,8 @@ bare message means the orchestrator, and the hall has none.
 `kapelle chat attach @name`. It prints only that agent's thread; a message or
 participant command with no mention goes to that agent. The hall room id is not a chat on
 a pipe: `attach hall` is refused with the command to list and attach a chat.
+**Amended 2026-11-25 (D1):** M11-15 replaces this hall room with chats. Until then it
+stays as it is.
 *Done when* tests cover: the hall after a first start and after a restart; a refused
 dismiss and delete; a message with no `@name` refused; a message to `@name` delivered;
 the TUI's rooms then chats with no hall row, `/chat`, the `/add`, `/title` and
@@ -4434,24 +4466,135 @@ removes the checkouts and branches in each repository its participants work in.
 scratch` lists every scratch folder and its contents; `kapelle chat scratch clean`
 previews without deleting; `kapelle chat scratch clean --yes` removes only the folders
 no live hall agent owns.
+**Amended 2026-11-25 (D1):** a chat keeps these rules (M11-12), with its scratch
+folders under `<stateDir>/scratch/chats/`. The person removes the old hall's
+`scratch/hall/` by hand (M11-15).
 *Done when* tests cover an agent in a repository with a commit, in a folder with no git,
 in a repository with no commit, and with no `--cwd`; an untouched scratch folder removed
 with its agent and a used one kept; and two agents in one room in two different
 repositories.
 
-**M11-3 · Move an agent into a room and out again · L · needs M11-2, M12-8b**
-`/move <name> <room>` moves an agent, from the hall or from a room. It keeps the same
-harness process, so it keeps its memory, its folder and its branch. Its old messages
-stay in the old room's log. Both rooms show a line: the agent left, the agent came in.
-A move is refused while the agent is in a turn, where a second message would queue
-(M6-4), and when the target room already has an agent of that name. An orchestrator
-cannot be moved. The contract gets a minor version.
-**Gap:** a branch name holds the room id (`kapelle/<room>/<participant>`), so after a
-move the name goes stale. The pickup decides whether it is renamed or kept.
-*Done when* tests cover a move from the hall into a room and back, the agent's memory
-kept (one turn before the move and one after, against `mock-agent.mjs`), the two lines,
-a refused move during a turn, a refused name clash, and a refused move of an
-orchestrator; and a restart after a move restores the agent in its new room.
+~~**M11-3 · Move an agent into a room and out again · L · needs M11-2, M12-8b**~~
+**Dropped 2026-11-25, with D3.** Its text is in git history.
+
+**M11-12 · A chat: one agent with its own log · M · needs M12-8c**
+`core/chat.ts` holds one agent outside every room (D1). It is built from M12-8c's parts,
+and it is not a room: no roster, no orchestrator, no title, no turn cap, no `@name`.
+
+- **Identity.** A chat has an id of its own form, `chat-<date>-<time>-<random>`, as a
+  room's id is made. Its one agent keeps a participant id, `p-xxxxxxxx`. An add whose
+  new id is already a folder in `<stateDir>/chats/` or `chats/archive/` is refused, and
+  the comment that owns the id rules in `core/ids.ts` says so.
+- **Its folder.** Its record `chat.json` and its log sit in `<stateDir>/chats/<id>/`.
+  The record names the repository root of each folder the chat opened, as a room's
+  record does (#476), so the sweep and a remove find its checkout and branch.
+- **Status.** Its agent has a participant's statuses: `idle`, `busy`, `exited`,
+  `paused` and `killed`. Apart from that, the record has a lifecycle: `active`,
+  `removing`, `archived`.
+- **Its log.** A log line is `{seq, at, chatId, update}`, and `seq` counts from 1 in
+  each chat. The log file, its index and its reader in `core/eventlog.ts` stay as they
+  are. `append`'s envelope gains this chat form beside the room's and the agent's, and
+  the file's header, which owns the shape of a line, names it.
+- **Where it works.** A chat in a repository gets the checkout
+  `wt/<chatId>/<participantId>` on the branch `kapelle/<chatId>/<participantId>`, the
+  shape a room's has. So each chat is its own owner of branches, and `core/ids.ts`
+  takes the chat id as one. The sweep keys a checkout on its first folder, and a remove
+  deletes every branch under `kapelle/<owner>/` and the folder `wt/<owner>` (`core/sweep.ts`,
+  `removeRoom`). With one owner for each chat, each of these touches one chat only. The
+  old hall's `kapelle/hall/*` stays apart, so removing the old hall by hand never
+  touches a chat. With no folder it gets a scratch folder, as M11-2's, under
+  `<stateDir>/scratch/chats/`. The old hall's `scratch/hall/` is not reused.
+- **Restart.** A daemon restart restores it from `chat.json` with no harness started.
+  Its next message revives it, with `session/load` where the harness keeps one, as in a
+  room.
+- **Remove.** It goes `active` → `removing` → `archived`. The record says `removing`;
+  the turn and the queue are cancelled and its open questions denied; the harness stops;
+  the log closes; the checkout is released as at a room's remove; then the folder moves
+  to `<stateDir>/chats/archive/<id>/` and its record says `archived`. A boot that finds
+  `removing` finishes the remove. A dirty checkout is kept and a notice names it.
+
+Nothing reaches the API yet.
+*Done when* tests against `mock-agent.mjs` cover two turns with memory kept, a restart
+and a revive, the mode, model and level, a remove that moves the folder, a crash before
+and after the move with the record at `removing`, a dirty checkout kept and named, and
+two chats in one repository where removing one leaves the other's checkout and branch.
+
+**M11-13 · The `/chats` API · L · needs M11-14**
+The daemon keeps every chat in one list, opens them at boot and restores them after a
+restart. New routes under `/chats`: the list, an add, one chat, a change (name, mode,
+model, level), a message, a cancel, the event stream with `Last-Event-ID` on the chat's
+own `seq`, the diff, a remove, the scratch folders (today's `/rooms/hall/scratch`
+routes), and the archive: its list and one archive's events, read only. A chat's name is
+unique across all chats under ASCII case folding, and two adds racing for one name cannot
+both take it. A permission question names its chat: `PendingDecision` gets a chat form,
+`{chatId, turn}`, beside the room's and the run's, and `GET /permissions` and its answer
+take it. The old hall stays as it is, and the screens do not use `/chats` yet.
+`docs/CLIENT-API.md` gets a section for chats, and the contract a minor version.
+**Gap:** the error codes for a chat route (a missing chat, a removed one). The pickup
+names them.
+*Done when* daemon tests cover each route, a name clash and a racing add, a question in
+a chat answered, a stream resumed with `Last-Event-ID`, an archive listed and read, and a
+restart that keeps every chat.
+
+**M11-14 · The boot cleanup knows chats · M · needs M11-12**
+The boot sweep (`core/sweep.ts`) reads only rooms: `roomRoots`, `recordedRooms`, and a
+room's id to keep its checkouts. It learns to read chat records and archives in
+`<stateDir>/chats/`, and keeps a checkout whose owner is a chat id that a record names,
+as it does for a room's id. So a chat's checkout and branch are no orphans while a
+record names them. `<stateDir>/chats/` is one folder for the whole daemon, but the sweep
+works one repository at a time. So the chat records are read once per boot, beside
+`recordedRooms`. If they cannot be read, orphan cleanup is skipped in every repository,
+as it is for an unreadable room record. A chat left `removing` is finished first
+(M11-12). An archive past `retentionMs` is reaped once per boot, outside the loop over
+repositories, in each repository its record names: its checkout, its branch, then its
+folder. The reap uses `removeRoom`'s steps, which take the repositories from their
+caller instead of reading `room.json`, so there is no second copy. One with uncommitted
+work is kept and named, as a dismissed room's is. An archive is in no repository, so no
+project file sets its window: it is `KAPELLE_RETENTION_MS`, or else the default.
+`docs/CONFIG.md` says so in its precedence row for `retentionMs`, and in "Where each
+config is read", where `sweepBoot` reads the project file per repository. The old
+hall's record is still read, so its checkouts stay safe.
+*Done when* tests cover a live chat's checkout kept, an archive inside retention kept,
+one past it reaped once with its branch, a dirty one kept and named, a `removing` chat
+finished, a chats folder that cannot be read skipping orphan cleanup, and the old
+hall's checkouts untouched.
+
+**M11-15 · The screens use chats, and the hall room goes · L · needs M11-13, M11-14**
+`chat.ts`, the TUI and the pipe follow rooms and chats as two kinds, each with its own
+type. The room set (`client/roomset.ts`) gets a chat kind, and the reducer
+(`client/room.ts`) takes a chat's line, which has no `participantId`. The `hall` flags
+in `client/` and `chat/` go, with no "is a chat" flag in their place. At start the screen
+reads `GET /chats` and follows only live chats, so a removed chat never shows and its
+events never load. "new chat …", `/chat`, `kapelle chat list`, `kapelle chat attach
+@name`, `kapelle chat scratch` and the question box use `/chats`.
+The daemon stops opening the old hall, and its agents stop: none moves (D1). `/rooms/hall`,
+the `hall` field, `hall_permanent` and the hall-only code go: `refuseHall`,
+`refuseHallOrchestrator` and `scratchDir` in `RoomDeps`. A chat has no roster, title or
+cap, so `/add`, `/title` and `/cap` typed in a chat are still refused, now by the chat's
+own commands instead of a `hall` flag. The boot sweep still reads the old hall's record
+while it exists, so a boot never calls the old checkouts orphans and removes them by
+itself. So `HALL_ID` stays in `core/ids.ts` as an owner of branches: `branchPrefix`,
+`roomCheckouts` and `removeRoom` check the owner id, and would throw on `hall` without it.
+The contract goes to major version 2, with nothing kept for an old client (D1).
+`docs/CLIENT-API.md` changes with it: the hall section, the `hall_permanent` row, the
+hall's refusals at dismiss, delete and its preview, the promise that stable parts hold
+within major version 1, and the example that stops when the major is not 1.
+`CHANGELOG.md` names the break and lists what the person removes by hand: the old hall's
+folder `<stateDir>/hall/`, its record and log in `<stateDir>/repos/hall-<hash>/`, each
+checkout `wt/hall/p-*` with `git worktree remove`, each branch `kapelle/hall/*` with
+`git branch -D`, and its scratch folders in `<stateDir>/scratch/hall/`.
+`AGENTS.md`'s rows for `client/` and `chat/` change.
+*Done when* tests cover a TUI start where a removed chat never shows, a new chat, a
+message, a question in a chat, `/add`, `/title` and `/cap` refused in a chat,
+`kapelle chat list`, the pipe by `@name`, `kapelle chat scratch`, each old `/rooms/hall`
+route answering `404`, and a boot that leaves the old hall's checkouts as they are.
+
+**M11-16 · Read an archived chat · S · needs M11-13**
+`kapelle chat archive list` prints each archived chat: its id, name, harness, folder and
+when it was removed. `kapelle chat archive show <id>` prints its messages as the pipe
+prints a thread, read only. A view in the TUI can come later (D1).
+*Done when* tests cover the list, the show of one archive, an unknown id, and an archive
+already reaped by retention.
 
 ### Part 2 — The remote screen
 
@@ -4559,6 +4702,11 @@ member change by a member; and a question answered by a member.
 **M11-11 · One hall for each person · S · needs M11-10, M11-1**
 Each person has their own hall, made the first time they connect. M11-1's hall is the
 operator's. A person can add members to their hall, as to any room.
+**Amended 2026-11-25 (D1):** a hall is no longer a room, and M11-15 leaves no hall
+record. This story adds one, moves each chat into its person's hall, and changes the
+`/chats` API, so the contract gets a version. A shared hall shares every chat in it, so
+the pickup decides whether a hall takes members at all, or whether a room is the place
+to share.
 *Done when* tests cover two people with two halls, a hall hidden from another person,
 and a hall shared by adding a member.
 
@@ -4579,6 +4727,8 @@ M12-10b and M12-11, which change it on purpose.
   M11-3, which changes `core/room.ts` a lot. M12-7a and M12-7b land before M11-8, which
   adds keys to the daemon. M11-4..M11-6 touch other files and need neither. M11-7
   follows M11-8, so it waits for M12-7b too.
+  **Amended 2026-11-25 (M11 D1, D3):** M11-3 is dropped. M12-8c lands after M12-8b and
+  before M11-12, whose chat is built from the parts M12-8c frees from the room.
 - **D2. The scope.** In: one git helper, the import rule, the DTOs, the permission scope,
   the async listener, the run writer, the daemon and room splits, the security parts of
   `protocol/agent.ts`, the CLI parser, and a bound on a kept title. To the backlog, each
@@ -4602,6 +4752,7 @@ M12-10b and M12-11, which change it on purpose.
 **The build order:** M12-1..M12-6 first, in any order. M12-7a → M12-7b and M12-8a →
 M12-8b can run side by side, each before its M11 story. M12-9 after M12-4. M12-10a →
 M12-10b, and M12-11, at any time.
+**Amended 2026-11-25:** M12-8b → M12-8c, before M11-12.
 
 ### Part 1 — Small fixes
 
@@ -4767,6 +4918,31 @@ each rule.
 against `mock-agent.mjs`; each rule in today's header of `core/room.ts` sits in exactly
 one header; and `AGENTS.md`'s table and rules point to the right files.
 
+**M12-8c · The agent parts work without a room · M · needs M12-8b**
+M11-12's chat is one agent with no room (M11 D1), so it needs the parts M12-8b moves,
+free of the room. Today they still take room things:
+
+- `createParticipant` takes `roomId`, `onAnswer` (the reply to a sender, which looks up
+  the orchestrator), the room's `notices`, `dismissed` and the room's one watchdog.
+- The turn cap sits beside the queue in `core/room/turns.ts`, but only a room's
+  orchestrator has a cap.
+- Adding and removing a participant stay in `buildRoom`: opening its place
+  (`roomPlaces`), the start, the rollback of a failed add, the release of its checkout,
+  and `recordOf`.
+- One participant's record is checked inside `readRoomRecord`, and `ParticipantRecord`
+  is the room's own type.
+
+The parts take an owner instead: an owner id, a hook for a turn's end, the owner's
+notices and its stop flag, and a watchdog of their own or a shared one. The queue and
+the busy refusal stay with the agent; the turn cap goes back to the room. Adding,
+removing and saving one participant move out of `buildRoom`. One participant's record
+gets its own check in `core/room/record.ts`. None of the new files imports
+`core/room.ts`. `Room` works as today.
+*Done when* a test runs one participant with no `Room`, against `mock-agent.mjs`: two
+turns, a pause, a revive with `session/load`, and a remove that releases its checkout;
+the import test shows the new files import nothing from `core/room.ts`; and the rest of
+the suite passes unchanged.
+
 ### Part 3 — The protocol and the CLI
 
 **M12-9 · `protocol/agent.ts`: the security parts in their own files · M · needs M12-4**
@@ -4899,9 +5075,12 @@ another. M10-1 and M10-3 are done.
 
 **M11 (added 2026-11-13)** needs nothing that is open. Its build order is in its own
 section. **Amended 2026-11-24:** M11-3 needs M12-8b, and M11-8 needs M12-7b (M12 D1).
+**Amended 2026-11-25:** M11-3 is dropped, and the chats need M12-8c (M11 D1).
 
 ```text
-M11-1 ─ M11-2 ─ M11-3
+M11-1 ─ M11-2
+M12-8c ─ M11-12 ─ M11-14 ─ M11-13 ─┬─ M11-15
+                                    └─ M11-16
 M11-4 ─┬─ M11-5 ─┬─ M11-7
        └─ M11-6 ─┤
 M11-8 ───────────┘
@@ -4915,7 +5094,7 @@ order is in its own section.
 M12-1, M12-2, M12-3, M12-5, M12-6, M12-11   (need nothing)
 M12-4 ─ M12-9
 M12-7a ─ M12-7b ─ M11-8
-M12-8a ─ M12-8b ─ M11-3
+M12-8a ─ M12-8b ─ M12-8c ─ M11-12
 M12-10a ─ M12-10b
 ```
 
