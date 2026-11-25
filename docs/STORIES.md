@@ -4368,9 +4368,8 @@ daemon, each under their own name.
   repositories. Today the repository belongs to the room (`core/room.ts`,
   `RoomOptions.cwd`). D3 needs this too: an agent that walks into a room keeps its
   repository. **Amended 2026-11-25:** D3 is dropped; a chat needs it all the same (M11-12).
-- ~~**D3. An agent can walk into a room and out again.** It keeps its harness, its memory,
-  its worktree (or scratch folder) and its branch, as a person who changes rooms.~~
-  **Dropped 2026-11-25, with the person.** A move needs the agent's history to follow
+- ~~**D3. An agent can walk into a room and out again.**~~
+  **Dropped 2026-11-25, with the person.** Its text is in git history. A move needs the agent's history to follow
   it, which ties the chat's log to the room's, and its runtime, checkout path and branch
   name all hold the room id. That is too much for what it gives. A way to share context
   between rooms can be its own story later. M11-3 goes with it.
@@ -4465,9 +4464,9 @@ removes the checkouts and branches in each repository its participants work in.
 scratch` lists every scratch folder and its contents; `kapelle chat scratch clean`
 previews without deleting; `kapelle chat scratch clean --yes` removes only the folders
 no live hall agent owns.
-**Amended 2026-11-25 (D1):** a chat keeps these rules (M11-12). Its scratch folder sits
-under the same root as a hall agent's, so `kapelle chat scratch` lists old and new
-folders together.
+**Amended 2026-11-25 (D1):** a chat keeps these rules (M11-12), with its scratch
+folders under `<stateDir>/scratch/chats/`. The person removes the old hall's
+`scratch/hall/` by hand (M11-15).
 *Done when* tests cover an agent in a repository with a commit, in a folder with no git,
 in a repository with no commit, and with no `--cwd`; an untouched scratch folder removed
 with its agent and a used one kept; and two agents in one room in two different
@@ -4481,8 +4480,15 @@ repositories.
 and it is not a room: no roster, no orchestrator, no title, no turn cap, no `@name`.
 
 - **Identity.** A chat has an id of its own form, `chat-<date>-<time>-<random>`, as a
-  room's id is made. Its one agent keeps a participant id, `p-xxxxxxxx`.
+  room's id is made. Its one agent keeps a participant id, `p-xxxxxxxx`. An add whose
+  new id is already a folder in `<stateDir>/chats/` or `chats/archive/` is refused, and
+  the comment that owns the id rules in `core/ids.ts` says so.
 - **Its folder.** Its record `chat.json` and its log sit in `<stateDir>/chats/<id>/`.
+  The record names the repository root of each folder the chat opened, as a room's
+  record does (#476), so the sweep and a remove find its checkout and branch.
+- **Status.** Its agent has a participant's statuses: `idle`, `busy`, `exited`,
+  `paused` and `killed`. Apart from that, the record has a lifecycle: `active`,
+  `removing`, `archived`.
 - **Its log.** A log line is `{seq, at, chatId, update}`, and `seq` counts from 1 in
   each chat. The log file, its index and its reader in `core/eventlog.ts` stay as they
   are. `append`'s envelope gains this chat form beside the room's and the run's, and
@@ -4494,7 +4500,8 @@ and it is not a room: no roster, no orchestrator, no title, no turn cap, no `@na
   deletes every branch under `kapelle/<owner>/` and the folder `wt/<owner>` (`core/sweep.ts`,
   `removeRoom`). With one owner for each chat, each of these touches one chat only. The
   old hall's `kapelle/hall/*` stays apart, so removing the old hall by hand never
-  touches a chat. With no folder it gets a scratch folder, as M11-2's.
+  touches a chat. With no folder it gets a scratch folder, as M11-2's, under
+  `<stateDir>/scratch/chats/`. The old hall's `scratch/hall/` is not reused.
 - **Restart.** A daemon restart restores it from `chat.json` with no harness started.
   Its next message revives it, with `session/load` where the harness keeps one, as in a
   room.
@@ -4534,7 +4541,9 @@ room's id to keep its checkouts. It learns to read chat records and archives in
 as it does for a room's id. So a chat's checkout and branch are no orphans while a
 record names them. A chat left `removing` is finished first (M11-12). An archive past `retentionMs` is
 reaped whole: its checkout, its branch, then its folder. One with uncommitted work is
-kept and named, as a dismissed room's is. The old hall's record is still read, so its
+kept and named, as a dismissed room's is. An archive is in no repository, so no project
+file sets its window: it is `KAPELLE_RETENTION_MS`, or else the default.
+`docs/CONFIG.md`'s retention row says so. The old hall's record is still read, so its
 checkouts stay safe.
 *Done when* tests cover a live chat's checkout kept, an archive inside retention kept,
 one past it reaped with its branch, a dirty one kept and named, a `removing` chat
@@ -4550,19 +4559,25 @@ events never load. "new chat …", `/chat`, `kapelle chat list`, `kapelle chat a
 @name`, `kapelle chat scratch` and the question box use `/chats`.
 The daemon stops opening the old hall, and its agents stop: none moves (D1). `/rooms/hall`,
 the `hall` field, `hall_permanent` and the hall-only code go: `refuseHall`,
-`refuseHallOrchestrator`, `scratchDir` in `RoomDeps`, and the `/add`, `/title` and `/cap`
-refusals in a chat. The boot sweep still reads the old hall's record while it exists, so
-a boot never calls the old checkouts orphans and removes them by itself. The contract
-goes to major version 2, with nothing kept for an old client (D1).
+`refuseHallOrchestrator` and `scratchDir` in `RoomDeps`. A chat has no roster, title or
+cap, so `/add`, `/title` and `/cap` typed in a chat are still refused, now by the chat's
+own commands instead of a `hall` flag. The boot sweep still reads the old hall's record
+while it exists, so a boot never calls the old checkouts orphans and removes them by
+itself. So `HALL_ID` stays in `core/ids.ts` as an owner of branches: `branchPrefix`,
+`roomCheckouts` and `removeRoom` check the owner id, and would throw on `hall` without it.
+The contract goes to major version 2, with nothing kept for an old client (D1).
+`docs/CLIENT-API.md` changes with it: the hall section, the `hall_permanent` row, the
+hall's refusals at dismiss, delete and its preview, the promise that stable parts hold
+within major version 1, and the example that stops when the major is not 1.
 `CHANGELOG.md` names the break and lists what the person removes by hand: the old hall's
 folder `<stateDir>/hall/`, its record and log in `<stateDir>/repos/hall-<hash>/`, each
 checkout `wt/hall/p-*` with `git worktree remove`, each branch `kapelle/hall/*` with
-`git branch -D`, and the scratch folders with `kapelle chat scratch clean --yes`.
+`git branch -D`, and its scratch folders in `<stateDir>/scratch/hall/`.
 `AGENTS.md`'s rows for `client/` and `chat/` change.
 *Done when* tests cover a TUI start where a removed chat never shows, a new chat, a
-message, a question in a chat, `kapelle chat list`, the pipe by `@name`,
-`kapelle chat scratch`, each old `/rooms/hall` route answering `404`, and a boot that
-leaves the old hall's checkouts as they are.
+message, a question in a chat, `/add`, `/title` and `/cap` refused in a chat,
+`kapelle chat list`, the pipe by `@name`, `kapelle chat scratch`, each old `/rooms/hall`
+route answering `404`, and a boot that leaves the old hall's checkouts as they are.
 
 **M11-16 · Read an archived chat · S · needs M11-13**
 `kapelle chat archive list` prints each archived chat: its id, name, harness, folder and
