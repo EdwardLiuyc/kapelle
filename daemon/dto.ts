@@ -1,15 +1,21 @@
 /**
- * The daemon's wire shapes — stories M2-6 and M5-2, split out of `daemon.ts`.
+ * The daemon's wire shapes — stories M2-6, M5-2 and M12-3, split out of
+ * `daemon.ts`.
  *
  * Pure functions from what the daemon holds (a live `TaskRun`, a restored
- * `run.json`, a `RunState`) to what `client/contract.ts` promises. Kept apart
- * from `daemon.ts` because that file starts a daemon when imported, and these
- * need tests of their own. Not in `core/`: `core/` never imports `client/`.
+ * `run.json`, a `RunState`, permission decisions and the project config view)
+ * to what `client/contract.ts` promises. Kept apart from `daemon.ts` because
+ * that file starts a daemon when imported, and these need tests of their own.
+ * Not in `core/`: `core/` never imports `client/`.
  */
 
 import type {
+  ConfigRow,
+  ConfigView,
   Notice,
   ParticipantDto,
+  PendingDecision,
+  PermissionDecision,
   RoomDto,
   RoomListEntry,
   RunDto,
@@ -17,7 +23,12 @@ import type {
   RunStatus,
   TaskDto,
 } from "../client/contract.ts";
+import type { projectConfigView } from "../core/config.ts";
 import { HALL_ID } from "../core/ids.ts";
+import type {
+  PendingDecision as CorePendingDecision,
+  SettledDecision as CoreSettledDecision,
+} from "../core/permissions.ts";
 import type { Participant, Room, RoomMeta, RoomRecord } from "../core/room.ts";
 import type { RunReport, TaskRun } from "../core/run.ts";
 
@@ -195,6 +206,72 @@ export function toRunListEntry(state: RunState): RunListEntry {
   if (state.startedAt !== undefined) entry.startedAt = state.startedAt;
   if (state.endedAt !== undefined) entry.endedAt = state.endedAt;
   return entry;
+}
+
+/** One permission decision as the contract carries it (M12-3). The asker,
+ *  `input` and `diff` are rebuilt so a field added to `core/permissions.ts`
+ *  cannot reach the wire. `input` is a dictionary by contract, so its keys
+ *  stay; `diff` is a fixed shape, so its fields are copied one by one. */
+export function toPendingDecision(
+  decision: CorePendingDecision,
+): PendingDecision {
+  const dto: PendingDecision = {
+    id: decision.id,
+    kind: decision.kind,
+    title: decision.title,
+    ...("runId" in decision
+      ? { runId: decision.runId, taskId: decision.taskId }
+      : {
+          roomId: decision.roomId,
+          participantId: decision.participantId,
+          turn: decision.turn,
+        }),
+  };
+  if (decision.input !== undefined) dto.input = { ...decision.input };
+  if (decision.diff !== undefined) {
+    dto.diff = {
+      text: decision.diff.text,
+      files: decision.diff.files,
+      added: decision.diff.added,
+      removed: decision.diff.removed,
+    };
+  }
+  return dto;
+}
+
+/** `GET /permissions/:id`: an open decision, or a closed one with its answer
+ *  and why it closed (M12-3). */
+export function toPermissionDecision(
+  decision: CorePendingDecision | CoreSettledDecision,
+): PermissionDecision {
+  if (!("allow" in decision)) return toPendingDecision(decision);
+  return {
+    ...toPendingDecision(decision),
+    allow: decision.allow,
+    reason: decision.reason,
+  };
+}
+
+/** The project config view the contract carries (M12-3). Every row and its
+ *  array values are copied so a field added to `core/config.ts` does not
+ *  reach the wire. */
+export function toConfigView(
+  root: string,
+  view: ReturnType<typeof projectConfigView>,
+): ConfigView {
+  const rows: ConfigRow[] = view.rows.map((row) => ({
+    key: row.key,
+    value: Array.isArray(row.value) ? [...row.value] : row.value,
+    source: row.source,
+    default: Array.isArray(row.default) ? [...row.default] : row.default,
+    ...(row.file !== undefined && {
+      file: Array.isArray(row.file) ? [...row.file] : row.file,
+    }),
+    ...(row.env !== undefined && { env: row.env }),
+  }));
+  const dto: ConfigView = { root, path: view.path, rows };
+  if (view.invalid !== undefined) dto.invalid = view.invalid;
+  return dto;
 }
 
 /** What the daemon shows about a room beyond its roster: `Room.meta`, which

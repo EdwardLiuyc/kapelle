@@ -25,6 +25,7 @@ import {
   stateDirRoot,
   validateWorktreeLinks,
 } from "../../core/worktree.ts";
+import { toConfigView } from "../dto.ts";
 import { existingDir, type Route, readBody, refusal, send } from "../http.ts";
 
 const messageOf = (err: unknown) =>
@@ -88,7 +89,7 @@ export function repoRoutes(repos: Set<string>): Route[] {
     } catch (err) {
       throw refusal(400, "invalid_config", messageOf(err));
     }
-    send(res, 200, { root, ...view } satisfies ConfigView);
+    send(res, 200, toConfigView(root, view) satisfies ConfigView);
   }
 
   /** `PATCH /config?cwd=…` (M10-5) saves the changed project keys of an added

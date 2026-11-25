@@ -11,12 +11,13 @@
  * The daemon's routes (`daemon/app.ts`, `daemon/routes/`) declare their runs
  * and rooms with these types and check every other reply with `satisfies`, so a
  * removed or renamed field fails `npm run check`, and so does a field added
- * where the daemon builds the reply itself. Four parts come from `core/`, which
- * may not import this file, and are checked for assignability only — an added
- * field there is not caught: a finished run's `report` (`core/run.ts`),
- * `GET /permissions` and `GET /permissions/:id` (`core/permissions.ts`), and
- * the rows of `GET /config` (`core/config.ts`). Which shapes are stable and
- * which will change is the stability table in the doc, not this file.
+ * where the daemon builds the reply itself. Three shapes come from `core/`,
+ * which may not import this file, and are rebuilt field by field in
+ * `daemon/dto.ts` so an added core field cannot reach a reply: `GET
+ * /permissions` and `GET /permissions/:id` (`core/permissions.ts`), and the
+ * rows of `GET /config` (`core/config.ts`). A finished run's `report` already
+ * goes through `toTaskDto`. Which shapes are stable and which will change is
+ * the stability table in the doc, not this file.
  *
  * Types only, plus two constants (decided 2026-09-22, B7): a JSON Schema can
  * be added for a client in another language once one exists.

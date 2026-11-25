@@ -10,8 +10,21 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import type { projectConfigView } from "../../core/config.ts";
+import type {
+  PendingDecision as CorePendingDecision,
+  SettledDecision as CoreSettledDecision,
+} from "../../core/permissions.ts";
 import type { RunReport } from "../../core/run.ts";
-import { type RunState, toRunDto, toRunListEntry, toTaskDto } from "../dto.ts";
+import {
+  type RunState,
+  toConfigView,
+  toPendingDecision,
+  toPermissionDecision,
+  toRunDto,
+  toRunListEntry,
+  toTaskDto,
+} from "../dto.ts";
 
 test("toTaskDto keeps contract fields with the contract's types", () => {
   const dto = toTaskDto({
@@ -167,4 +180,144 @@ test("toRunListEntry carries id and status per task, and no notices", () => {
     startedAt: "2026-09-23T00:00:00.000Z",
     tasks: [{ id: "t1", status: "done" }],
   });
+});
+
+test("toPendingDecision keeps both askers and drops unknown nested fields", () => {
+  const runDecision = {
+    id: "p1",
+    runId: "r1",
+    taskId: "t1",
+    kind: "edit",
+    title: "Edit notes.md",
+    input: { path: "notes.md" },
+    diff: {
+      text: "diff --git a/notes.md b/notes.md",
+      files: 1,
+      added: 1,
+      removed: 0,
+      secret: "nested",
+    },
+    secret: "top",
+  } as unknown as CorePendingDecision;
+  assert.deepEqual(toPendingDecision(runDecision), {
+    id: "p1",
+    runId: "r1",
+    taskId: "t1",
+    kind: "edit",
+    title: "Edit notes.md",
+    input: { path: "notes.md" },
+    diff: {
+      text: "diff --git a/notes.md b/notes.md",
+      files: 1,
+      added: 1,
+      removed: 0,
+    },
+  });
+
+  const roomDecision = {
+    id: "p2",
+    roomId: "room-1",
+    participantId: "participant-1",
+    turn: 2,
+    kind: "execute",
+    title: "Run tests",
+    secret: "top",
+  } as unknown as CorePendingDecision;
+  assert.deepEqual(toPendingDecision(roomDecision), {
+    id: "p2",
+    roomId: "room-1",
+    participantId: "participant-1",
+    turn: 2,
+    kind: "execute",
+    title: "Run tests",
+  });
+});
+
+test("toPermissionDecision adds an answer only for a settled decision", () => {
+  const open = {
+    id: "p1",
+    runId: "r1",
+    taskId: "t1",
+    kind: "edit",
+    title: "Edit notes.md",
+    diff: { text: "diff", files: 1, added: 1, removed: 0, secret: true },
+    secret: "top",
+  } as unknown as CorePendingDecision;
+  assert.deepEqual(toPermissionDecision(open), {
+    id: "p1",
+    runId: "r1",
+    taskId: "t1",
+    kind: "edit",
+    title: "Edit notes.md",
+    diff: { text: "diff", files: 1, added: 1, removed: 0 },
+  });
+
+  const settled = {
+    ...open,
+    allow: false,
+    reason: "timeout",
+  } as unknown as CoreSettledDecision;
+  assert.deepEqual(toPermissionDecision(settled), {
+    id: "p1",
+    runId: "r1",
+    taskId: "t1",
+    kind: "edit",
+    title: "Edit notes.md",
+    diff: { text: "diff", files: 1, added: 1, removed: 0 },
+    allow: false,
+    reason: "timeout",
+  });
+});
+
+test("toConfigView copies every row, its array values, and drops unknown fields", () => {
+  const view = {
+    path: "/repo/.kapelle/config.json",
+    rows: [
+      {
+        key: "ttlMs",
+        value: 5,
+        source: "env",
+        default: 3,
+        file: 4,
+        env: "KAPELLE_TTL_MS",
+        secret: "nested",
+      },
+      {
+        key: "linkPaths",
+        value: ["node_modules"],
+        source: "default",
+        default: [],
+      },
+    ],
+    invalid: "bad file",
+    secret: "top",
+  } as unknown as ReturnType<typeof projectConfigView>;
+  const dto = toConfigView("/repo", view);
+  assert.deepEqual(dto, {
+    root: "/repo",
+    path: "/repo/.kapelle/config.json",
+    rows: [
+      {
+        key: "ttlMs",
+        value: 5,
+        source: "env",
+        default: 3,
+        file: 4,
+        env: "KAPELLE_TTL_MS",
+      },
+      {
+        key: "linkPaths",
+        value: ["node_modules"],
+        source: "default",
+        default: [],
+      },
+    ],
+    invalid: "bad file",
+  });
+
+  const sourceRow = view.rows[1];
+  const dtoRow = dto.rows[1];
+  assert.ok(sourceRow && dtoRow);
+  assert.notEqual(dtoRow.value, sourceRow.value);
+  assert.notEqual(dtoRow.default, sourceRow.default);
 });

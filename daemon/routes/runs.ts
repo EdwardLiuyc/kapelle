@@ -24,7 +24,14 @@ import { type Run, validateRun } from "../../core/runfile.ts";
 import { LinkPathError, validateWorktreeLinks } from "../../core/worktree.ts";
 import { AGENTS } from "../../protocol/registry.ts";
 import type { createChildren } from "../children.ts";
-import { type RunState, toRunDto, toRunListEntry, toTaskDto } from "../dto.ts";
+import {
+  type RunState,
+  toPendingDecision,
+  toPermissionDecision,
+  toRunDto,
+  toRunListEntry,
+  toTaskDto,
+} from "../dto.ts";
 import { existingDir, type Route, readBody, refusal, send } from "../http.ts";
 import { createIdempotencyKeys } from "../idempotency.ts";
 import { cancelRun, type createRuns, externalLiveWriter } from "../run.ts";
@@ -302,7 +309,11 @@ export function runRoutes({
       method: "GET",
       pattern: /^\/permissions$/,
       handler: ({ res }) =>
-        send(res, 200, permissions.list() satisfies PendingDecision[]),
+        send(
+          res,
+          200,
+          permissions.list().map(toPendingDecision) satisfies PendingDecision[],
+        ),
     },
     {
       method: "GET",
@@ -312,7 +323,11 @@ export function runRoutes({
         if (!found) {
           throw refusal(404, "permission_not_found", `no permission ${id}`);
         }
-        send(res, 200, found satisfies PermissionDecision);
+        send(
+          res,
+          200,
+          toPermissionDecision(found) satisfies PermissionDecision,
+        );
       },
     },
     {
