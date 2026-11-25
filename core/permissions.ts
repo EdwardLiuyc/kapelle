@@ -11,14 +11,14 @@
  *
  * A cancel denies what it reaches: the run's signal covers the whole run, and
  * `denyTask` covers one task the watchdog's TTL cut while its siblings run —
- * `daemon/app.ts` calls it when that task ends, because the per-task abort
- * lives inside `core/run.ts` and never leaves it.
+ * `daemon/routes/runs.ts` calls it when that task ends, because the per-task
+ * abort lives inside `core/run.ts` and never leaves it.
  *
  * Every settle path emits `_client_permission_answered` with the entry's id
  * and why it closed (M5-4, #136), and the entry stays readable through `get`.
  * The run's signal names the reason for its abort — `"cancel"` or
- * `"run_end"`, passed to `abort()` by `daemon/app.ts` — and anything else
- * reads as `cancel`.
+ * `"run_end"`, passed to `abort()` by `daemon/routes/runs.ts` — and anything
+ * else reads as `cancel`.
  *
  * **A room asks through the same queue** (M6-5, S12a). `roomPolicy` hands a
  * participant's turn a `Policy`, and its entries name the room, the
@@ -30,7 +30,7 @@
  *
  * The queue hands `runRun` a plain `Policy` through `RunOptions.askPolicy`,
  * so neither the pool nor `protocol/` knows it exists. It knows no HTTP
- * either; `daemon/app.ts` maps its three answers to status codes.
+ * either; `daemon/routes/runs.ts` maps its three answers to status codes.
  */
 
 import { randomUUID } from "node:crypto";
@@ -147,7 +147,7 @@ export function createPermissionQueue(timeoutMs: number) {
   // closed. The growth term is `title` (`input` and `diff` are cut): it comes from the harness's
   // `tool_call`, bounded only by `MAX_LINE_LENGTH` (32 MiB), so "a couple
   // of hundred bytes" is the typical entry, not the bound, and a harness that
-  // loops on requests grows the map. `daemon/app.ts` never drops a run or a
+  // loops on requests grows the map. The daemon never drops a run or a
   // room from memory either, so all three live equally long; an `ask` room that
   // lives for days is the longest. Drop them with their run or room once the
   // daemon evicts those, or truncate `title` here if a loop shows up.

@@ -1478,7 +1478,7 @@ async function stranded(t: TestContext): Promise<{
   root: string;
   workspace: string;
 }> {
-  // Canonicalized: `repos.json` entries are realpaths (`daemon/app.ts`
+  // Canonicalized: `repos.json` entries are realpaths (`daemon/routes/repos.ts`
   // realpaths at `POST /repos`), and `stateDirFor` keys on
   // `realpathSync(root)`. Passing `gitRepo`'s unresolved spelling would
   // disagree with that key whenever the tmpdir chain contains a symlink

@@ -232,7 +232,7 @@ export async function mutationKey(root: string): Promise<string> {
  * `git rev-parse --show-toplevel`, or `cwd` itself when it is not a
  * repository (`isRepo: false`, the shared-cwd fallback). **Never throws** —
  * since #129 there is nothing about a repository that can refuse a run, so
- * this is the whole of the root preflight. `daemon/app.ts` needs it to answer
+ * this is the whole of the root preflight. `daemon/routes/repos.ts` needs it to answer
  * "is this folder inside an added repository?" (403) without a second git call.
  */
 export async function stateDirRoot(

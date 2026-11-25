@@ -183,7 +183,7 @@ test("onTasks hears every task as queued before runRun first awaits", async () =
     { ...options(), onTasks: (tasks) => heard.push(tasks) },
     async () => ({ stopReason: "end_turn" }),
   );
-  // Nothing awaited yet: `daemon/app.ts` sends its 202 at this point, so a
+  // Nothing awaited yet: `daemon/routes/runs.ts` sends its 202 at this point, so a
   // list that arrived only after the preflight would leave a live run
   // task-less.
   assert.deepEqual(heard, [

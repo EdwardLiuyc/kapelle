@@ -28,9 +28,17 @@
  */
 
 import type { ServerResponse } from "node:http";
+import { join } from "node:path";
 import type { RoomListEntry } from "../client/contract.ts";
 import type { Room, RoomRecord } from "../core/room.ts";
+import { stateDir } from "../core/runtime.ts";
 import { type RoomState, toRecordListEntry, toRoomListEntry } from "./dto.ts";
+
+/** The hall's own folder. A function of the state directory only: the boot
+ *  sweep needs it before any app exists. */
+export function hallDir(): string {
+  return join(stateDir(), "hall");
+}
 
 /** A built room. `dismissed` is set only once a dismiss has *finished*
  *  tearing the room down, so it tells a settled dismiss from one still in
