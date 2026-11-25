@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { Room, RoomRecord } from "../../core/room.ts";
+import type { Room, RoomRecord } from "../../core/room/types.ts";
 import { createRooms, type RoomEntry, type Unbuilt } from "../rooms.ts";
 
 function record(id: string): RoomRecord {

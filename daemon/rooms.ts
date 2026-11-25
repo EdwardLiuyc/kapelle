@@ -31,7 +31,7 @@
 import type { ServerResponse } from "node:http";
 import { join } from "node:path";
 import type { RoomListEntry } from "../client/contract.ts";
-import type { Room, RoomRecord } from "../core/room.ts";
+import type { Room, RoomRecord } from "../core/room/types.ts";
 import { stateDir } from "../core/runtime.ts";
 import { type RoomState, toRecordListEntry, toRoomListEntry } from "./dto.ts";
 

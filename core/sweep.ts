@@ -73,11 +73,11 @@ import {
 import { branchName, branchPrefix } from "./ids.ts";
 import {
   crashed,
-  type RoomRecord,
   readRoomRecord,
   roomFile,
   writeRoomRecord,
-} from "./room.ts";
+} from "./room/record.ts";
+import type { RoomRecord } from "./room/types.ts";
 import { stateDirFor } from "./runtime.ts";
 import {
   changedPaths,

@@ -56,20 +56,19 @@ import { newRoomId } from "../ids.ts";
 import { createPermissionQueue } from "../permissions.ts";
 import {
   crashed,
-  openRoom,
+  readRoomRecord,
+  roomFile,
+  writeRoomRecord,
+} from "../room/record.ts";
+import {
   type Participant,
-  participantChanges,
   QUEUE_BOUND,
   type Room,
   type RoomRecord,
   RoomRefusal,
-  readRoomRecord,
-  restoreRoom,
-  roomAgent,
-  roomAgents,
-  roomFile,
-  writeRoomRecord,
-} from "../room.ts";
+} from "../room/types.ts";
+import { participantChanges, roomAgent, roomAgents } from "../room/validate.ts";
+import { openRoom, restoreRoom } from "../room.ts";
 import { stateDirFor } from "../runtime.ts";
 import { changedPaths, openWorktrees } from "../worktree.ts";
 

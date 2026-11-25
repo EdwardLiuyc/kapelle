@@ -164,6 +164,7 @@ and the person's shell (`chat/tui/term.ts`).
 | `core/harnesses.ts` | Which agents are installed, in `harnesses.json` (M9-3), and their npm install (M9-3b). |
 | `core/check.ts` | The login check and the saved models, in `checks.json` (M9-4). |
 | `core/room.ts` | A chat room: a roster of participants, each one harness kept alive across turns. |
+| `core/room/` | The room's shared types, constants and `RoomRefusal` (`types.ts`); request validation (`validate.ts`); and the `room.json` record and tombstones (`record.ts`). |
 | `core/ids.ts`, `core/markdown.ts` | Ids and branch names; the only file that knows `marked`. |
 | `core/text.ts` | A harness's text made safe for a terminal (#229). |
 | `render.ts` | Terminal drawing of `session/update` events. |

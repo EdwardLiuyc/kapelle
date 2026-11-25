@@ -47,7 +47,11 @@ import type {
   ScratchFolder,
 } from "../client/contract.ts";
 import type { Named } from "../client/mention.ts";
-import { readRoomRecord, roomFile, writeRoomRecord } from "../core/room.ts";
+import {
+  readRoomRecord,
+  roomFile,
+  writeRoomRecord,
+} from "../core/room/record.ts";
 import { stateDirFor } from "../core/runtime.ts";
 import {
   addRepo as added,
