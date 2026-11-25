@@ -64,8 +64,8 @@ const TYPED_KEYS = {
 
 /** The contract fields these DTOs copy (M12-3). A new contract field fails
  *  `npm run check` here until the matching builder copies it. The Pending
- *  decision pin covers the shape both asker variants share; its asker fields
- *  are selected below. */
+ *  decision pin covers the shape both asker variants share; the two pins
+ *  below cover their variant-only fields. */
 const PENDING_KEYS = {
   id: 0,
   kind: 0,
@@ -73,6 +73,23 @@ const PENDING_KEYS = {
   input: 0,
   diff: 0,
 } as const satisfies Record<keyof PendingDecision, 0>;
+type RunAskerKeys = Exclude<
+  keyof Extract<PendingDecision, { runId: string }>,
+  keyof PendingDecision
+>;
+type RoomAskerKeys = Exclude<
+  keyof Extract<PendingDecision, { roomId: string }>,
+  keyof PendingDecision
+>;
+const RUN_ASKER_KEYS = {
+  runId: 0,
+  taskId: 0,
+} as const satisfies Record<RunAskerKeys, 0>;
+const ROOM_ASKER_KEYS = {
+  roomId: 0,
+  participantId: 0,
+  turn: 0,
+} as const satisfies Record<RoomAskerKeys, 0>;
 const DIFF_KEYS = {
   text: 0,
   files: 0,
@@ -273,12 +290,8 @@ export function toPendingDecision(
   return {
     ...shared,
     ...("runId" in decision
-      ? { runId: decision.runId, taskId: decision.taskId }
-      : {
-          roomId: decision.roomId,
-          participantId: decision.participantId,
-          turn: decision.turn,
-        }),
+      ? pick(decision, RUN_ASKER_KEYS)
+      : pick(decision, ROOM_ASKER_KEYS)),
   };
 }
 
