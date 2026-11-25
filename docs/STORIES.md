@@ -4343,12 +4343,14 @@ daemon, each under their own name.
   **Amended 2026-11-25, with the person: a chat is not a room.** The hall shares one
   room's log among chats that have nothing to do with each other. Every TUI start
   replays all of it, removed agents included, so a removed chat shows for a moment and
-  then goes, and the log only grows: 59 MB on the operator's machine. A flag on a room
-  would add an `if (hall)` for each new chat feature. So a **chat** becomes one agent
-  with its own record and its own log, built from the same agent parts as a room's
-  participant (M12-8c). Neither one is a kind of the other. A removed chat's folder
-  moves to an archive, which the boot cleanup deletes after `retentionMs`. Decided with
-  it:
+  then goes. A flag on a room would add an `if (hall)` for each new chat feature. So a
+  **chat** becomes one agent with its own record and its own log, built from the same
+  agent parts as a room's participant (M12-8c). Neither one is a kind of the other. A
+  removed chat's folder moves to an archive, which the boot cleanup deletes after
+  `retentionMs`. A start then replays only live chats. It still replays each live chat
+  from its first line, as a room is replayed today (`client/roomset.ts`), so one long
+  chat still costs its whole log. The size of a log was not the problem the person
+  named, so no story here bounds it. Decided with it:
   - There is no hall record until M11-11. Until then the chats are one list, and the
     API calls them chats.
   - No agent moves from the old hall. When the screens switch (M11-15), the old hall's
@@ -4478,13 +4480,20 @@ repositories.
 `core/chat.ts` holds one agent outside every room (D1). It is built from M12-8c's parts,
 and it is not a room: no roster, no orchestrator, no title, no turn cap, no `@name`.
 
-- **Identity.** A chat's id has the participant form, `p-xxxxxxxx`.
+- **Identity.** A chat has an id of its own form, `chat-<date>-<time>-<random>`, as a
+  room's id is made. Its one agent keeps a participant id, `p-xxxxxxxx`.
 - **Its folder.** Its record `chat.json` and its log sit in `<stateDir>/chats/<id>/`.
 - **Its log.** A log line is `{seq, at, chatId, update}`, and `seq` counts from 1 in
-  each chat. It uses `core/eventlog.ts` unchanged.
-- **Where it works.** A chat in a repository gets the checkout `wt/chat/<id>` on the
-  branch `kapelle/chat/<id>`, so `core/ids.ts` takes `chat` as an owner of branches.
-  The old hall's `kapelle/hall/*` stays apart, so removing the old hall by hand never
+  each chat. The log file, its index and its reader in `core/eventlog.ts` stay as they
+  are. `append`'s envelope gains this chat form beside the room's and the run's, and
+  the file's header, which owns the shape of a line, names it.
+- **Where it works.** A chat in a repository gets the checkout
+  `wt/<chatId>/<participantId>` on the branch `kapelle/<chatId>/<participantId>`, the
+  shape a room's has. So each chat is its own owner of branches, and `core/ids.ts`
+  takes the chat id as one. The sweep keys a checkout on its first folder, and a remove
+  deletes every branch under `kapelle/<owner>/` and the folder `wt/<owner>` (`core/sweep.ts`,
+  `removeRoom`). With one owner for each chat, each of these touches one chat only. The
+  old hall's `kapelle/hall/*` stays apart, so removing the old hall by hand never
   touches a chat. With no folder it gets a scratch folder, as M11-2's.
 - **Restart.** A daemon restart restores it from `chat.json` with no harness started.
   Its next message revives it, with `session/load` where the harness keeps one, as in a
@@ -4499,7 +4508,7 @@ Nothing reaches the API yet.
 *Done when* tests against `mock-agent.mjs` cover two turns with memory kept, a restart
 and a revive, the mode, model and level, a remove that moves the folder, a crash before
 and after the move with the record at `removing`, a dirty checkout kept and named, and
-a branch under `kapelle/chat/`.
+two chats in one repository where removing one leaves the other's checkout and branch.
 
 **M11-13 · The `/chats` API · L · needs M11-12**
 The daemon keeps every chat in one list, opens them at boot and restores them after a
@@ -4521,8 +4530,9 @@ restart that keeps every chat.
 **M11-14 · The boot cleanup knows chats · M · needs M11-12**
 The boot sweep (`core/sweep.ts`) reads only rooms: `roomRoots`, `recordedRooms`, and a
 room's id to keep its checkouts. It learns to read chat records and archives in
-`<stateDir>/chats/`, so a chat's checkout and branch are no orphans while a record names
-them. A chat left `removing` is finished first (M11-12). An archive past `retentionMs` is
+`<stateDir>/chats/`, and keeps a checkout whose owner is a chat id that a record names,
+as it does for a room's id. So a chat's checkout and branch are no orphans while a
+record names them. A chat left `removing` is finished first (M11-12). An archive past `retentionMs` is
 reaped whole: its checkout, its branch, then its folder. One with uncommitted work is
 kept and named, as a dismissed room's is. The old hall's record is still read, so its
 checkouts stay safe.
@@ -4532,8 +4542,9 @@ finished, and the old hall's checkouts untouched.
 
 **M11-15 · The screens use chats, and the hall room goes · L · needs M11-13, M11-14**
 `chat.ts`, the TUI and the pipe follow rooms and chats as two kinds, each with its own
-type. The room set (`client/roomset.ts`) gets a chat kind, and the `hall` flags in
-`client/` and `chat/` go, with no "is a chat" flag in their place. At start the screen
+type. The room set (`client/roomset.ts`) gets a chat kind, and the reducer
+(`client/room.ts`) takes a chat's line, which has no `participantId`. The `hall` flags
+in `client/` and `chat/` go, with no "is a chat" flag in their place. At start the screen
 reads `GET /chats` and follows only live chats, so a removed chat never shows and its
 events never load. "new chat …", `/chat`, `kapelle chat list`, `kapelle chat attach
 @name`, `kapelle chat scratch` and the question box use `/chats`.
