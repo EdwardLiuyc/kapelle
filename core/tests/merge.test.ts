@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { promisify } from "node:util";
-import { isolateStateHome } from "../../integration/helpers.ts";
+import { isolateStateHome, scriptedGit } from "../../integration/helpers.ts";
 import { createEventBus } from "../events.ts";
 import { mergeRun } from "../merge.ts";
 import { runRun, type TaskExecutor } from "../run.ts";
@@ -206,6 +206,31 @@ test("a two-task run writes run.json, then merge lands both changes unstaged", a
   // The merge must not have staged anything: added files are untracked (`??`),
   // not staged (`A `), and there is no new commit.
   assert.doesNotMatch(status, /^A /m);
+});
+
+test("an unexpected exit 1 from the changed-files diff is refused", async (t) => {
+  const root = await repo(t);
+  const report = await runRun(
+    runOf(["a"]),
+    { cwd: root, runId: RUN_ID, bus: createEventBus() },
+    writer("a.txt"),
+  );
+  assert.equal(report.status, "done");
+
+  await scriptedGit(
+    t,
+    () => `
+if [ "$1" = "diff" ] && [ "$2" = "--name-status" ]; then
+  printf '%s\\n' "simulated diff failure" >&2
+  exit 1
+fi
+`,
+  );
+
+  await assert.rejects(
+    mergeRun(RUN_ID, root),
+    /cannot read files changed by a: simulated diff failure/,
+  );
 });
 
 test("an unrelated dirty path is ignored — mergeRun succeeds and leaves it untouched", async (t) => {

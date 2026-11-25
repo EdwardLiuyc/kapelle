@@ -16,28 +16,18 @@
  * paths.
  */
 
-import { execFile } from "node:child_process";
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { promisify } from "node:util";
+import { type GitOptions, git, gitLine, tryGitLine } from "./git.ts";
 import { assertRunId } from "./ids.ts";
 import { stateDirFor } from "./runtime.ts";
 import { changedPaths } from "./worktree.ts";
 
-const run = promisify(execFile);
-
-async function git(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await run("git", args, { cwd });
-  return stdout.trim();
-}
-
-async function tryGit(cwd: string, args: string[]): Promise<string | null> {
-  try {
-    return await git(cwd, args);
-  } catch {
-    return null;
-  }
-}
+const GIT = { exitCodes: [0], maxBuffer: 1024 * 1024 } satisfies GitOptions;
+const GIT_LARGE = {
+  exitCodes: [0],
+  maxBuffer: 64 * 1024 * 1024,
+} satisfies GitOptions;
 
 interface RecordTask {
   id: string;
@@ -126,12 +116,16 @@ export async function mergeRun(runId: string, cwd: string): Promise<void> {
   const branches = release.map((t) => t.branch as string);
   const touched = [...touchedBy.keys()];
   try {
-    await git(record.root, ["merge", "--squash", "--no-commit", ...branches]);
+    await git(
+      record.root,
+      ["merge", "--squash", "--no-commit", ...branches],
+      GIT,
+    );
     // The story's contract is "unstaged": squash merge stages, so reset the
     // touched paths back to the working tree without disturbing unrelated
     // changes that were already staged.
     if (touched.length > 0) {
-      await git(record.root, ["reset", "--", ...touched]);
+      await git(record.root, ["reset", "--", ...touched], GIT);
     }
   } catch (err) {
     const original = err instanceof Error ? err.message : String(err);
@@ -152,7 +146,7 @@ export async function mergeRun(runId: string, cwd: string): Promise<void> {
 
 async function readRunRecord(runId: string, cwd: string): Promise<RunRecord> {
   assertRunId(runId);
-  const root = await tryGit(cwd, ["rev-parse", "--show-toplevel"]);
+  const root = await tryGitLine(cwd, ["rev-parse", "--show-toplevel"], GIT);
   if (root === null) {
     throw new Error(`${cwd} is not a git repository.`);
   }
@@ -228,10 +222,10 @@ async function changedFilesBetween(
     // `--name-status -z` is used instead of `--name-only`: renames report only
     // the destination with `--name-only`, but the preimage is just as touched
     // (a staged deletion after squash, and an overlap a branch really has).
-    const { stdout } = await run(
-      "git",
+    const stdout = await git(
+      root,
       ["diff", "--name-status", "-z", from, to],
-      { cwd: root },
+      GIT_LARGE,
     );
     const entries = stdout.split("\0");
     const files: string[] = [];
@@ -278,15 +272,11 @@ async function restoreTouched(root: string, touched: string[]): Promise<void> {
   if (touched.length > 0) {
     const tracked = new Set(
       (
-        await git(root, [
-          "ls-tree",
-          "-r",
-          "-z",
-          "--name-only",
-          "HEAD",
-          "--",
-          ...touched,
-        ])
+        await git(
+          root,
+          ["ls-tree", "-r", "-z", "--name-only", "HEAD", "--", ...touched],
+          GIT,
+        )
       )
         .split("\0")
         .filter(Boolean),
@@ -294,18 +284,18 @@ async function restoreTouched(root: string, touched: string[]): Promise<void> {
     // Clear index entries for every path the merge touched, including files that
     // only exist in the merge result. Preflight guarantees none of these paths
     // had pre-existing worktree changes we would be clobbering.
-    await git(root, ["reset", "-q", "HEAD", "--", ...touched]);
+    await git(root, ["reset", "-q", "HEAD", "--", ...touched], GIT);
     // Remove files the failed merge created that are not present at HEAD.
-    await git(root, ["clean", "-f", "--", ...touched]);
+    await git(root, ["clean", "-f", "--", ...touched], GIT);
     // Restore files that do exist at HEAD to their committed content.
     if (tracked.size > 0) {
-      await git(root, ["checkout", "--", ...tracked]);
+      await git(root, ["checkout", "--", ...tracked], GIT);
     }
   }
   // A squash merge can leave .git/SQUASH_MSG even when it fails. After a rollback
   // there is no squash commit to make, so remove the stale message or a later
   // unrelated `git commit` would consume it as its default message.
-  const gitDir = await git(root, ["rev-parse", "--absolute-git-dir"]);
+  const gitDir = await gitLine(root, ["rev-parse", "--absolute-git-dir"], GIT);
   await rm(join(gitDir, "SQUASH_MSG"), { force: true });
 }
 

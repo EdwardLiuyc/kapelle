@@ -24,7 +24,7 @@ One `fix-issue` loop, from the issue to the merged PR, in 3 minutes. The real ru
 
 ## Install
 
-You need Node 24 or newer, git, and macOS or Linux. WSL counts as Linux. Windows is not supported.
+You need Node 24 or newer, Git 2.36 or newer, and macOS or Linux. WSL counts as Linux. Windows is not supported.
 
 ### Install from npm
 

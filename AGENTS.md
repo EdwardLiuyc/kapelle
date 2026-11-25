@@ -138,6 +138,7 @@ and the person's shell (`chat/tui/term.ts`).
 | `protocol/types.ts` | Hand-written wire types, and the `_client_*` synthetic events. |
 | `core/policy.ts` | `safe` / `ask` / `auto`, mode negotiation, `resolvePolicy`. |
 | `core/events.ts` | The event bus. |
+| `core/git.ts` | The one place core starts git; raw output, `GitError`, accepted exits and buffers. |
 | `core/runfile.ts` | Run-file validation (`validateRun`). |
 | `core/run.ts` | The task pool, and how a status is worked out. |
 | `core/worktree.ts` | One git worktree per task, and the `linkPaths` mirror into each new checkout. |

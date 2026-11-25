@@ -4618,10 +4618,8 @@ newline reads as two (seen on 2026-11-24 with git 2.43). The sweep deletes, so i
 not guess. Two calls stay as they are: `cli.ts`'s one `git` call is synchronous
 (`execFileSync`), and `client/loop.ts`'s `gitTop` is in `client/`, which may not import
 `core/`. `AGENTS.md`'s table gets a row for `core/git.ts`.
-**Gap:** `git worktree list --porcelain -z` (`-z` works only with `--porcelain`) needs
-git 2.36, and no doc names the oldest git kapelle supports. The pickup names it in the
-README, and decides what the sweep does with an older git: refuse to reap and say why,
-or keep today's read.
+**Decided 2026-11-24:** Git 2.36 is the oldest supported version, and the README
+names it. Below 2.36 the sweep refuses to reap and says why.
 *Done when* tests cover a worktree path with a newline, a path with spaces and non-ASCII
 letters, leading and trailing spaces kept, exit code 1 accepted for `diff` and refused
 elsewhere, a folder that is not a repository, output larger than the default buffer, and
