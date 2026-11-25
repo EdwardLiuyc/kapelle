@@ -7,7 +7,7 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.29** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.30** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
 rooms stable, M6-7b, #179, which added `resumed: "loaded"`, M6-7c, #235, which added
 `DELETE /rooms/:id`, M8-1, #265, which added a message's `from`, M8-2, #266, which
@@ -285,7 +285,7 @@ request that is not valid HTTP gets `400`.
 | `permission_not_found` | `404` | The daemon never gave out this permission id, or it forgot a closed one at a restart. | |
 | `no_event_log` | `404` | The run or room exists, but it has no event log to stream. | Read `GET /runs/:id` for a run, or `GET /rooms/:id` for a room. |
 | `run_ended` | `409` | You cancelled a run that already ended. | Stop. Read its status. |
-| `run_not_owned` | `409` | The id names a live run written by another process. The daemon does not list it and cannot cancel it. Since 1.29. | Stop it where it was started, then read its `run.json`. |
+| `run_not_owned` | `409` | The id names a live run written by another process. The daemon does not list it and cannot cancel it. Since 1.30. | Stop it where it was started, then read its `run.json`. |
 | `already_decided` | `409` | The permission was already closed, for any of the reasons in [Why a question closed](#why-a-question-closed). | Stop. Your answer was not used. `GET /permissions/:id` gives the reason. |
 | `queue_full` | `429` | 16 messages already wait for this participant. | Wait for a `_client_turn_ended`, then send again. Or cancel its live prompt, which drops the queue. |
 | `turn_cap` | `429` | The orchestrator already sent the room's cap of worker messages. Since 1.19. | The person raises the cap with `PATCH /rooms/:id` or `/cap <n>`. |
@@ -393,7 +393,7 @@ the `GET` routes take none.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 29 },
+  "apiVersion": { "major": 1, "minor": 30 },
   "capabilities": ["repos", "runs", "events", "permissions", "rooms", "config"]
 }
 ```
