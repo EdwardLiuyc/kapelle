@@ -49,7 +49,6 @@ const EXEMPT_TOP_LEVEL = new Set([
   "integration",
   "tests",
   "node_modules",
-  ".git",
   "dist",
 ]);
 
@@ -97,7 +96,7 @@ const importsOf = (source: string): ImportEdge[] => {
 
 // A test helper has no recovery path; the test runner reports the read error.
 // The walk and its coverage check are one invariant.
-// pi-lens-ignore: unsafe-boundary, high-complexity
+// pi-lens-ignore: unsafe-boundary, high-complexity, high-fan-out
 const sourceFiles = async (root: string): Promise<string[]> => {
   const files: string[] = [];
   const unexpected: string[] = [];
@@ -122,6 +121,8 @@ const sourceFiles = async (root: string): Promise<string[]> => {
 
   for (const entry of rootEntries) {
     if (!entry.isDirectory()) continue;
+    // Tool worktrees and probe homes are local dot-directories, not source.
+    if (entry.name.startsWith(".")) continue;
     if (SOURCE_DIRS.some((dir) => dir === entry.name)) continue;
     if (EXEMPT_TOP_LEVEL.has(entry.name)) continue;
     for (const nested of await readdir(join(root, entry.name), {
@@ -184,6 +185,15 @@ type TopLevelSource = "cli.ts" | "daemon.ts" | `daemon/${string}`;
 const isTopLevel = (file: string): file is TopLevelSource =>
   file === "cli.ts" || file === "daemon.ts" || file.startsWith("daemon/");
 
+const hasRule = (file: string): boolean =>
+  file === "chat.ts" ||
+  file.startsWith("chat/") ||
+  isTopLevel(file) ||
+  file === "render.ts" ||
+  file.startsWith("protocol/") ||
+  file.startsWith("core/") ||
+  file.startsWith("client/");
+
 const topLevelViolation = (
   file: TopLevelSource,
   target: string | undefined,
@@ -220,6 +230,10 @@ const topLevelViolation = (
 const checkGraph = (graph: SourceGraph): string[] => {
   const problems: string[] = [];
   for (const [file, edges] of graph) {
+    if (!hasRule(file)) {
+      problems.push(`no rule covers ${file}`);
+      continue;
+    }
     for (const edge of edges) {
       const target = targetOf(file, edge.spec);
       const fail = (reason: string) =>
@@ -339,6 +353,29 @@ test("the source walk rejects uncovered top-level sources", async (t) => {
     sourceFiles(root),
     /unexpected top-level source: extra\.ts, widgets\/a\.ts/,
   );
+});
+
+test("the source walk ignores top-level dot-directories", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "kapelle-imports-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  for (const dir of SOURCE_DIRS) await mkdir(join(root, dir));
+  for (const file of ROOT_SOURCE_FILES) await writeFile(join(root, file), "");
+  await mkdir(join(root, ".claude", "worktrees", "agent"), {
+    recursive: true,
+  });
+  await writeFile(
+    join(root, ".claude", "worktrees", "agent", "checkout.ts"),
+    "",
+  );
+  assert.deepEqual(await sourceFiles(root), [...ROOT_SOURCE_FILES].sort());
+});
+
+test("the checker rejects a source file with no rule", () => {
+  const graph = makeGraph({
+    "worker.ts": [["./core/run.ts"]],
+    "core/run.ts": [],
+  });
+  assert.deepEqual(checkGraph(graph), ["no rule covers worker.ts"]);
 });
 
 test("the source reader keeps a mixed type/value import at runtime", () => {
