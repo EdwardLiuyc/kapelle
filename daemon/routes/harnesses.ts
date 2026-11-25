@@ -12,6 +12,7 @@ import {
   dueForCheck,
   readChecks,
   runChecks,
+  stopChecks,
 } from "../../core/check.ts";
 import {
   describe,
@@ -22,6 +23,7 @@ import {
   readSetup,
   runNpm,
   type Setup,
+  stopNpmInstalls,
   writeSetup,
 } from "../../core/harnesses.ts";
 import { AGENTS } from "../../protocol/registry.ts";
@@ -29,7 +31,7 @@ import { type Route, readBody, refusal, send } from "../http.ts";
 
 /** `stopping` is true once a shutdown has begun: no new check or install may
  *  start. */
-export function harnessRoutes(stopping: () => boolean): Route[] {
+export function harnessRoutes(stopping: () => boolean) {
   /** The find in flight, so asks that meet share it. */
   let finding: Promise<Setup> | undefined;
 
@@ -199,7 +201,7 @@ export function harnessRoutes(stopping: () => boolean): Route[] {
     }
   }
 
-  return [
+  const routes: Route[] = [
     {
       method: "GET",
       pattern: /^\/harnesses$/,
@@ -233,4 +235,13 @@ export function harnessRoutes(stopping: () => boolean): Route[] {
       handler: ({ req, res }) => postInstall(req, res),
     },
   ];
+
+  /** The installs and checks are this module's in-flight work; shutdown ends
+   *  it here rather than making `daemon/app.ts` reach into `core/`. */
+  function stop(): Promise<void> {
+    stopNpmInstalls();
+    return stopChecks();
+  }
+
+  return { routes, stop };
 }

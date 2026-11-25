@@ -56,8 +56,6 @@ import {
   type ErrorReply,
   type VersionReply,
 } from "../client/contract.ts";
-import { stopChecks } from "../core/check.ts";
-import { stopNpmInstalls } from "../core/harnesses.ts";
 import { createPermissionQueue } from "../core/permissions.ts";
 import { createChildren } from "./children.ts";
 import {
@@ -123,6 +121,7 @@ export function createDaemonApp(deps: DaemonDeps) {
   };
   const roomApp = roomRoutes(shared);
   const { rooms } = roomApp;
+  const harnessApp = harnessRoutes(shared.stopping);
 
   const routes: Route[] = [
     {
@@ -137,7 +136,7 @@ export function createDaemonApp(deps: DaemonDeps) {
     ...repoRoutes(repos),
     ...runRoutes({ ...shared, runs }),
     ...roomApp.routes,
-    ...harnessRoutes(shared.stopping),
+    ...harnessApp.routes,
   ];
 
   async function route(req: IncomingMessage, res: ServerResponse) {
@@ -229,14 +228,13 @@ export function createDaemonApp(deps: DaemonDeps) {
     console.log(
       `${signal}: cancelling ${runs.inFlight.size} run(s), then exiting`,
     );
-    stopNpmInstalls();
-    const checksStopped = stopChecks();
+    const harnessesStopped = harnessApp.stop();
     for (const canceller of runs.cancels.values()) canceller.abort("cancel");
     await Promise.all([
       ...runs.inFlight,
       ...rooms.changes(),
       ...rooms.built().map(({ room }) => room.pause()),
-      checksStopped,
+      harnessesStopped,
     ]);
   }
 
