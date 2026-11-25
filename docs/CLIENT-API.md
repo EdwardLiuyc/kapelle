@@ -7,7 +7,7 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.28** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.29** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
 rooms stable, M6-7b, #179, which added `resumed: "loaded"`, M6-7c, #235, which added
 `DELETE /rooms/:id`, M8-1, #265, which added a message's `from`, M8-2, #266, which
@@ -23,7 +23,8 @@ an agent's thinking level; #511, which distinguishes a deleted room; M11-1, #475
 which added the hall; M11-2, #476, which added an agent's own `cwd`; #524,
 which added the hall scratch list and cleanup routes; and #504, which added the
 invalid-file view and `PUT /config`; a stable `GET /config` now answers `200` with
-`invalid` instead of `400` for a safe file whose content is invalid).
+`invalid` instead of `400` for a safe file whose content is invalid; and M12-4, #535,
+which made `_client_permission`'s `allow` false for a yes with no matching option).
 
 ## Contents
 
@@ -390,7 +391,7 @@ the `GET` routes take none.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 24 },
+  "apiVersion": { "major": 1, "minor": 29 },
   "capabilities": ["repos", "runs", "events", "permissions", "rooms", "config"]
 }
 ```
@@ -1057,8 +1058,8 @@ with ACP names.
 | --- | --- | --- |
 | `_client_permission_pending` | `title`, `kind` | A decision is about to be taken. It fires for every decision, also ones that need no person. |
 | `_client_permission_queued` | `id`, `title`, `kind`, `input?`, `diff?` | A decision waits for a person. Answer it with `POST /permissions/:id`. `input` is the tool's input, and `diff` what an edit would change: see [`GET /permissions`](#get-permissions). `input` since 1.6, `diff` since 1.7. |
-| `_client_permission_answered` | `id`, `allow`, `reason` | A queued decision closed. `id` is the one from `_client_permission_queued`. `reason` says why: see [Why a question closed](#why-a-question-closed). |
-| `_client_permission` | `allow`, `title`, `kind`, `optionId?` | The decision was taken. |
+| `_client_permission_answered` | `id`, `allow`, `reason` | A queued decision closed. `id` is the one from `_client_permission_queued`. `reason` says why: see [Why a question closed](#why-a-question-closed). A yes here can still end as `allow: false` on the `_client_permission` after it: see that row. |
+| `_client_permission` | `allow`, `title`, `kind`, `optionId?` | The decision was taken. `allow` is false when no option carried it, including a yes with no matching option: a yes is for one request, so it needs an `allow_once` (since 1.29). Only `auto`'s yes may take `allow_always`. |
 
 **Files and cancel:**
 

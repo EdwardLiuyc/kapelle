@@ -29,6 +29,7 @@ const SCENARIOS = {
     "writes through an in-root dangling symlink whose target is outside the root",
   "write-no-ask": "calls fs/write_text_file with no permission request first",
   "always-menu": "offers only allow_always, then writes the same path twice",
+  "always-read": "offers only allow_always for a read-only tool",
   "swap-bytes":
     "asks with a diff for notes.md, then writes other bytes to notes.md",
   "swap-file-text":
@@ -296,6 +297,27 @@ const ATTACKS = {
       });
     outcome(sid, await write());
     outcome(sid, await write());
+  },
+
+  "always-read": async (sid) => {
+    // `safe` and `ask` say yes to a read with no question. That yes is for
+    // one request, so it must not go out as "always" (M12-4).
+    update(sid, {
+      sessionUpdate: "tool_call",
+      toolCallId: "r1",
+      title: "Read notes.md",
+      kind: "read",
+      rawInput: { path: "notes.md" },
+      status: "pending",
+    });
+    const res = await callClient("session/request_permission", {
+      sessionId: sid,
+      toolCall: { toolCallId: "r1" },
+      options: [
+        { optionId: "always", name: "Always allow", kind: "allow_always" },
+      ],
+    });
+    say(sid, `\nATTACK=${scenario} ANSWER=${JSON.stringify(res.result)}\n`);
   },
 
   // #310: an approval is for the text the person saw, not for a path. Both

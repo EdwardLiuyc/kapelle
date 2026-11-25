@@ -34,6 +34,9 @@ const READ_ONLY: Policy = ({ toolCall }) =>
 
 const ALLOW_ALL: Policy = () => true;
 
+/** `autoPolicy`'s answer: yes, and the harness may keep it (M12-4). */
+const ALLOW_SESSION: Policy = () => ({ allow: true, scope: "session" });
+
 interface Run {
   /** Everything the agent streamed, concatenated. */
   text: string;
@@ -43,6 +46,10 @@ interface Run {
   decisions: string[];
   /** The files each of those calls named for a diff (M4-6). */
   edits: unknown[];
+  /** The option each decision sent, from `_client_permission`; `null` for none. */
+  picked: (string | null)[];
+  /** The `allow` each `_client_permission` recorded, in order. */
+  allowed: boolean[];
 }
 
 /**
@@ -61,6 +68,8 @@ async function attack(
   const chunks: string[] = [];
   const decisions: string[] = [];
   const edits: unknown[] = [];
+  const picked: (string | null)[] = [];
+  const allowed: boolean[] = [];
   const agent = new AcpAgent({
     name: `hostile-${scenario}`,
     command: process.execPath,
@@ -77,6 +86,10 @@ async function attack(
     },
     requestTimeoutMs: 10_000,
     onEvent: ({ update }) => {
+      if (update.sessionUpdate === "_client_permission") {
+        picked.push(update.optionId ?? null);
+        allowed.push(update.allow);
+      }
       if (
         update.sessionUpdate === "agent_message_chunk" &&
         update.content.type === "text"
@@ -97,6 +110,8 @@ async function attack(
     cwd,
     decisions,
     edits,
+    picked,
+    allowed,
   };
 }
 
@@ -182,13 +197,13 @@ test("the same write is allowed when the policy allows it", async (t) => {
   assert.equal(run.stopReason, "end_turn");
 });
 
-test("an allow-only menu grants one write, not the whole session", async (t) => {
-  // `pickOption` never picks `allow_always` while an `allow_once` is on offer,
-  // so an "always" answer only ever came from a harness that gave the client no
-  // narrower choice. Keeping it as a standing grant let every later write to
-  // that path skip the policy — the human said yes once, to one write.
-  const run = await attack(t, "always-menu");
+test("auto sends an allow-only menu's allow_always, and it still grants one write", async (t) => {
+  // Only a yes for the `session` may send `allow_always` (M12-4). Even then
+  // the client keeps no standing grant: the human said yes once, to one write.
+  const run = await attack(t, "always-menu", ALLOW_SESSION);
 
+  assert.equal(run.picked[0], "always", "auto may send allow_always");
+  assert.deepEqual(run.allowed, [true, true], "both decisions are allowed");
   assert.equal(
     run.decisions.length,
     2,
@@ -199,6 +214,70 @@ test("an allow-only menu grants one write, not the whole session", async (t) => 
     run.decisions[1] ?? "",
     /^edit:fs\/write_text_file .*notes\.md$/,
   );
+  assert.equal(
+    run.text.match(/OUTCOME=allowed/g)?.length,
+    2,
+    "both writes land: the first from the menu, the second after a new decision",
+  );
+  assert.equal(run.stopReason, "end_turn");
+});
+
+test("a yes once refuses an allow-only menu, and nothing is written", async (t) => {
+  // `ask`'s yes is `true`: one request. The menu has no `allow_once`, so the
+  // request is refused as one with no match is, and the refusal is sticky.
+  const run = await attack(t, "always-menu", ALLOW_ALL);
+
+  assert.deepEqual(run.picked, [null], "no option is sent");
+  assert.deepEqual(
+    run.allowed,
+    [false],
+    "the event records the refusal, not a yes the harness never got",
+  );
+  assert.equal(run.decisions.length, 1, "the writes are refused unasked");
+  assert.equal(await absent(join(run.cwd, "notes.md")), true);
+  assert.equal(run.text.match(/OUTCOME=refused/g)?.length, 2);
+  assert.equal(run.stopReason, "end_turn");
+});
+
+test("safe refuses an allow-only menu for a read-only tool", async (t) => {
+  // `safe` says yes to a read with no question, but only for one request.
+  const run = await attack(t, "always-read", READ_ONLY);
+
+  assert.deepEqual(run.decisions, ["read:Read notes.md"]);
+  assert.deepEqual(run.picked, [null]);
+  assert.deepEqual(run.allowed, [false]);
+  assert.match(run.text, /ANSWER=\{"outcome":\{"outcome":"cancelled"\}\}/);
+  assert.equal(run.stopReason, "end_turn");
+});
+
+test("an answer that is not an explicit yes cannot become a session grant", async (t) => {
+  // A JS caller that falls through the type is a denial, not a session yes
+  // (M12-4). The old truthiness test refused it; the `!== false` shape did not.
+  const run = await attack(
+    t,
+    "always-menu",
+    (() => undefined) as unknown as Policy,
+  );
+
+  assert.deepEqual(run.decisions, ["edit:Write notes.md"]);
+  assert.deepEqual(run.picked, [null]);
+  assert.deepEqual(run.allowed, [false]);
+  assert.equal(await absent(join(run.cwd, "notes.md")), true);
+  assert.equal(run.text.match(/OUTCOME=refused/g)?.length, 2);
+  assert.equal(run.stopReason, "end_turn");
+});
+
+test("an answer that is not an explicit yes refuses a direct write", async (t) => {
+  const run = await attack(
+    t,
+    "write-no-ask",
+    (() => undefined) as unknown as Policy,
+  );
+
+  assert.deepEqual(run.picked, [null]);
+  assert.deepEqual(run.allowed, [false]);
+  assert.match(run.text, /OUTCOME=refused/);
+  assert.equal(await absent(join(run.cwd, "SNEAKY.md")), true);
   assert.equal(run.stopReason, "end_turn");
 });
 

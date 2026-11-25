@@ -230,7 +230,7 @@ canonical URL is, and the bare fragment returns `-32602`, which would have gone 
 into M1a-4's registry as a broken value.
 
 **M0-8 · The `_meta.terminal_output` capability · S · needs M0-3 · DONE (resolved, not probed)**
-**Added 2026-08-23, closed as docs reconciliation 2026-08-23** — `docs/PRIOR-ART-AGENTPOOL.md`
+**Added 2026-08-23, closed as docs reconciliation 2026-08-23** — `docs/archive/PRIOR-ART-AGENTPOOL.md`
 §8c found a second output channel that M0-3 could not have seen by varying only the
 *method*, not the *capability*. AgentPool documents claude-agent-acp checking
 `clientCapabilities._meta["terminal_output"] === true` at `initialize`. With it, a Bash
@@ -348,12 +348,12 @@ the cost of deferring is **not** a refactor — adding the field later is one li
 that every run recorded in the meantime has no `_meta` in its event log. Code is
 recoverable; unrecorded data is not. Outbound is included so M1b-4 finds the door open when
 it wants `_meta.claudeCode.options.systemPrompt.append`
-(`docs/PRIOR-ART-AGENTPOOL.md`, §8d).
+(`docs/archive/PRIOR-ART-AGENTPOOL.md`, §8d).
 *Done when* adding a variant to the union makes `tsc` fail at every unhandled `switch`, and
 a message carrying `_meta` round-trips through the types with it intact — dropping it fails
 a `node:test`, rather than passing silently.
 **Proposed, not decided** — `locations[]` on `tool_call` belongs in the union too
-(`docs/PRIOR-ART-AGENTPOOL.md`, item 5). M0 never recorded whether any harness populates
+(`docs/archive/PRIOR-ART-AGENTPOOL.md`, item 5). M0 never recorded whether any harness populates
 it, so type it and let a probe decide whether `render` ever shows it.
 **Decided 2026-08-30 (issue #10 review loop): the types stay a hand-written subset;
 full-schema coverage is deferred, and the decision fires at M1a-5.**
@@ -448,7 +448,7 @@ the read/write asymmetry under `allowReadOutsideRoot`.
 **On `#guardPath`'s tests, given R2** — M0-1 measured zero `fs/*` traffic, so the guard
 binds nothing in production and the retro asks whether testing it is misplaced effort. Keep
 them: the mock drives them for free, and the cost is minutes. What that same finding does
-settle is that **no pluggable backend goes underneath it** — `docs/PRIOR-ART-AGENTPOOL.md`
+settle is that **no pluggable backend goes underneath it** — `docs/archive/PRIOR-ART-AGENTPOOL.md`
 item 7 considered one and reversed itself, because an abstraction under dead code is R2
 exactly.
 
@@ -544,7 +544,7 @@ auto-resolving half of that idea is explicitly **not** proposed — a launcher t
 fetches "latest" from a CDN is the opposite of what a measured registry needs; it sits in the
 backlog. Second, **name the `_meta` capability flags** the entries carry: AgentPool
 catalogues `terminal_output` and `terminal-auth` on `ClientCapabilities`, with per-harness
-consumers (`docs/PRIOR-ART-AGENTPOOL.md`, §8c–8d). Carry the provenance caveat with them —
+consumers (`docs/archive/PRIOR-ART-AGENTPOOL.md`, §8c–8d). Carry the provenance caveat with them —
 those are their citations into source we have not read, and `87cbfe3` already put the
 `terminal_output` one on the wire (see §M0-3).
 **Check first whether `measuredOn` is nearly free:** `initialize` returns `agentInfo` and
@@ -613,9 +613,10 @@ verbatim from `acp.mjs` — the M1a-3 port preserved it — so it is not introdu
 unlike `#guardPath` this code is live: claude and copilot both send
 `session/request_permission` (M0-1).
 **Decided 2026-09-02 (measured, raw captures on issue #13): return `cancelled` when no
-option matches, and `selected` only when one does.** Measured against claude-agent-acp
-0.49.0, copilot 1.0.80 and opencode 1.18.18, one `edit` request each plus one `execute`
-request from copilot:
+option matches, and `selected` only when one does.** The option lists below are on old
+builds; `docs/FINDINGS.md` §M12-4 owns them now (2026-11-25). Measured against
+claude-agent-acp 0.49.0, copilot 1.0.80 and opencode 1.18.18, one `edit` request each plus
+one `execute` request from copilot:
 
 1. **The tail does not fire today.** Both asking harnesses sent exactly three options and
    always included `reject_once`. opencode sent none at all — zero permission requests, and
@@ -1261,13 +1262,13 @@ became two `ask` prompts and two `_client_permission` events. A write that follo
 approved permission for the same resolved path now reuses that decision. **The approval
 covers one write and is consumed by it**, and there is deliberately no standing grant even
 for `allow_always`: `pickOption` prefers `allow_once` and reaches `allow_always` only when
-the harness offered nothing narrower, so an "always" entry would be a session-long grant
-for a path the human never chose to grant that way — `hostile-agent`'s `always-menu`
-scenario is that shape, and its test counts two decisions for two writes. A *denial* is the
-one sticky entry, so a harness that writes after being refused is refused again without
-re-asking. Approval for one path never covers another: measured, a harness approved for
-`ALLOWED.md` that then wrote `OTHER.md` was put back through the policy under the real
-target's name.
+the harness offered nothing narrower (and, since M12-4, only under `auto`), so an "always"
+entry would be a session-long grant for a path the human never chose to grant that way —
+`hostile-agent`'s `always-menu` scenario is that shape, and its test counts two decisions
+for two writes. A *denial* is the one sticky entry, so a harness that writes after being
+refused is refused again without re-asking. Approval for one path never covers another:
+measured, a harness approved for `ALLOWED.md` that then wrote `OTHER.md` was put back
+through the policy under the real target's name.
 **#310, 2026-11-04.** An approval now binds to the bytes and files the request showed.
 The rule is at `#writeDecisions` in `protocol/agent.ts`. The person took two decisions.
 **D1:** a request that shows no text keeps the one-write path grant, because two
@@ -5001,7 +5002,7 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   **bounds nothing about the shell**, and the docs must keep saying so. Two supporting
   findings: AgentPool's sandboxed execution environments would bind nothing here, since they
   contain only client-served `fs/*` and `terminal/*` operations and our harnesses use
-  neither (`docs/PRIOR-ART-AGENTPOOL.md`); and the platform matrix is real work — `bwrap` is
+  neither (`docs/archive/PRIOR-ART-AGENTPOOL.md`); and the platform matrix is real work — `bwrap` is
   Linux-only and macOS's `sandbox-exec` is deprecated — which is a second reason not to
   inline it into a milestone that already needs shrinking.
   **Trigger fired 2026-09-11 (M2-1, #31) — still deferred.** `POST /runs` ships behind a
@@ -5052,7 +5053,7 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   trajectory and the reason M2's API has to be complete rather than observability-only.
 - **Registry-resolved, zero-install harness spawn.** The ACP registry publishes per-platform
   distributions and AgentPool resolves them to `npx -y <pkg>` / `uvx` / a downloaded binary
-  (`docs/PRIOR-ART-AGENTPOOL.md`, item 2), which would delete the `npm i -g` / `EACCES`
+  (`docs/archive/PRIOR-ART-AGENTPOOL.md`, item 2), which would delete the `npm i -g` / `EACCES`
   section of `README.md`. Deliberately **not** taken: silently resolving "latest" from a CDN
   contradicts a registry whose labels are measured per build. The *pinning* half is proposed
   inside M1a-4 instead. *Trigger:* a target harness with no stable install path, or a second

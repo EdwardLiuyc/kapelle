@@ -900,7 +900,11 @@ const MEASURED = {
 async function modeRoom(
   t: TestContext,
   fields: Record<string, unknown>,
-  { scenario, spec }: { scenario?: string; spec?: object } = {},
+  {
+    scenario,
+    spec,
+    script = MOCK_AGENT,
+  }: { scenario?: string; spec?: object; script?: string } = {},
 ) {
   const repo = await gitRepo(t);
   const roomId = newRoomId();
@@ -910,7 +914,7 @@ async function modeRoom(
     events.push(e);
   });
   const request = roomAgent({
-    cmd: `node ${MOCK_AGENT}${scenario ? ` --scenario ${scenario}` : ""}`,
+    cmd: `node ${script}${scenario ? ` --scenario ${scenario}` : ""}`,
     name: "alice",
     ...fields,
   });
@@ -1128,6 +1132,64 @@ for (const [how, end] of [
     assert.equal((queue.get(id) as { reason: string }).reason, "cancel");
   });
 }
+
+test("a room switched from auto to ask refuses the next allow-only menu (M12-4)", async (t) => {
+  const { room, p, of } = await modeRoom(
+    t,
+    { mode: "auto" },
+    { scenario: "always-menu", script: HOSTILE_AGENT },
+  );
+  const picked = () =>
+    of("_client_permission").map(
+      (e) => (e.update as { optionId?: string }).optionId,
+    );
+  const notes = join(p.worktree, "notes.md");
+  await p.send("one");
+  assert.equal(picked()[0], "always", "auto may send allow_always");
+  assert.ok(existsSync(notes));
+  await rm(notes);
+
+  // The mode is read at each request, so the change counts from the next one.
+  room.update(p.id, { mode: "ask" });
+  const before = picked().length;
+  const turn = p.send("two");
+  const { id } = await queued(of, 1);
+  assert.equal(queue.answer(id, true), "ok");
+  await turn;
+  assert.deepEqual(
+    picked().slice(before),
+    [undefined],
+    "the person's yes is for one request, and the menu has no allow_once",
+  );
+  assert.ok(!existsSync(notes), "and the writes after it are refused");
+});
+
+test("a switch to auto answers an open question with a yes once, so an allow-only menu is refused (M12-4)", async (t) => {
+  const { room, p, of } = await modeRoom(
+    t,
+    { mode: "ask" },
+    { scenario: "always-menu", script: HOSTILE_AGENT },
+  );
+  const turn = p.send("go");
+  await queued(of, 1);
+  // The question was asked under `ask`, so the switch's yes is for one request.
+  room.update(p.id, { mode: "auto" });
+  await turn;
+  assert.deepEqual(
+    of("_client_permission").map((e) => e.update),
+    [
+      {
+        sessionUpdate: "_client_permission",
+        allow: false,
+        title: "Write notes.md",
+        kind: "edit",
+        optionId: undefined,
+      },
+    ],
+    "no allow_once on the menu, so the yes is a refusal",
+  );
+  assert.ok(!existsSync(join(p.worktree, "notes.md")));
+});
 
 test("a safe participant's write is refused, and it reads nothing outside", async (t) => {
   const { room, p, of } = await modeRoom(t, {

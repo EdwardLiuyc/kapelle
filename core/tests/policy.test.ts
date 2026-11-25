@@ -14,6 +14,7 @@ import { test } from "node:test";
 
 import type { AcpAgent } from "../../protocol/agent.ts";
 import type { AgentEntry } from "../../protocol/registry.ts";
+import type { ToolKind } from "../../protocol/types.ts";
 import {
   makeAskPolicy,
   negotiateMode,
@@ -172,14 +173,29 @@ test("safe allows exactly the read-only kinds", async () => {
 
 test("ask falls back to safe, since a policy cannot invent a TTY", async () => {
   assert.equal(policyFor("ask"), policyFor("safe"));
-  assert.equal(
-    await policyFor("auto")({
-      agent: "a",
-      toolCall: { title: "t", kind: "delete" },
-      options: [],
-    }),
-    true,
-  );
+});
+
+test("only auto answers for the session; safe and ask answer once (M12-4)", async () => {
+  const req = (kind: ToolKind) => ({
+    agent: "a",
+    toolCall: { title: "t", kind },
+    options: [],
+  });
+  assert.deepEqual(await policyFor("auto")(req("delete")), {
+    allow: true,
+    scope: "session",
+  });
+  assert.equal(await policyFor("safe")(req("read")), true);
+  const input = new PassThrough();
+  const asker = makeAskPolicy({ input, output: new PassThrough() });
+  try {
+    assert.equal(await asker.policy(req("read")), true);
+    const answer = asker.policy(req("edit"));
+    input.write("y\n");
+    assert.equal(await answer, true);
+  } finally {
+    asker.close();
+  }
 });
 
 // --- negotiation -------------------------------------------------------------

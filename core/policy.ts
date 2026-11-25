@@ -13,10 +13,11 @@
  * **Neither half is a sandbox. Neither one enforces anything.** They fail
  * differently, though, and the difference is worth keeping straight:
  *
- * - The **filter** has no jurisdiction wherever `measured.asksPermission` is
- *   false. opencode never sends `session/request_permission`, so no policy
- *   value is ever consulted and none changes what it does: it wrote the file
- *   under `safe`, over a denial (`docs/FINDINGS.md` §M0-1).
+ * - The **filter** reaches only what a harness asks. Where
+ *   `measured.asksPermission` is false, the harness does not ask for its
+ *   usual work: opencode wrote a file under `safe`, over a denial
+ *   (`docs/FINDINGS.md` §M0-1). It does ask for a write outside the root, and
+ *   a refusal of that request binds (§M9-1 re-measure).
  * - **Negotiation** did change what opencode does — measured 2026-09-02, the
  *   same prompt wrote the file without it and was refused with it. What it
  *   does not do is *bind*: the refusal arrived as agent prose, so the harness
@@ -35,7 +36,12 @@
 
 import { createInterface } from "node:readline";
 
-import type { AcpAgent, Policy, PolicyRequest } from "../protocol/agent.ts";
+import type {
+  AcpAgent,
+  Policy,
+  PolicyAnswer,
+  PolicyRequest,
+} from "../protocol/agent.ts";
 import type { AgentEntry, ClientMode } from "../protocol/registry.ts";
 import type { ToolKind } from "../protocol/types.ts";
 import { oneLine } from "./text.ts";
@@ -63,11 +69,14 @@ export async function safePolicy({
 /**
  * Everything allowed. Path guards still apply to fs/* requests.
  *
+ * The one policy that answers for the `session` (M12-4), so the only one that
+ * may send `allow_always`. `safe` and `ask` answer `true`, which is `once`.
+ *
  * Not exported: `policyFor` is the only way in, so there is one place that
  * maps a resolved mode to a decider and no second copy of that map to drift.
  */
-async function autoPolicy(): Promise<boolean> {
-  return true;
+async function autoPolicy(): Promise<PolicyAnswer> {
+  return { allow: true, scope: "session" };
 }
 
 /** Read-only auto-approved; mutations prompt on the terminal. `io` is for a
@@ -77,7 +86,7 @@ export function makeAskPolicy(
     input: process.stdin,
     output: process.stdout,
   },
-): { close: () => void; policy: Policy } {
+): { close: () => void; policy: (req: PolicyRequest) => Promise<boolean> } {
   const rl = createInterface(io);
   // On a TTY readline reads ^C as a key, not a signal, and with no listener it
   // closes itself: the open question never answers and the process's own

@@ -47,7 +47,9 @@ interface LaunchSpec {
 interface MeasuredLabels {
   shell: "terminal" | "internal" | "unknown";
   argvChannel: "terminal" | "notification" | "permission" | "none";
-  /** False means the policy has no jurisdiction at all — not reduced reach. */
+  /** False means the harness asks nothing for its usual work. It may still
+   *  ask for some requests: `docs/FINDINGS.md` §M9-1 re-measure and
+   *  §M12-4 record which. */
   asksPermission: boolean;
   /** Harness-side mode ids, per client mode. Vocabularies do not align.
    *  Optional because a measured harness may expose no safety/behaviour modes:
@@ -482,8 +484,8 @@ export function warningsFor(
     out.push({
       kind: "containment",
       text:
-        `${name}: never asks permission — the policy has no jurisdiction over ` +
-        `it in any mode, so --mode ${mode} does not bound what it does.`,
+        `${name}: never asks permission for its usual work, so --mode ${mode} ` +
+        `does not bound what it does.`,
       onceKey: `never-asks:${name}`,
     });
   } else if (mode !== "auto" && m.shell !== "terminal") {
