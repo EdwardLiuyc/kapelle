@@ -115,10 +115,10 @@ export interface SweepOptions {
   /**
    * Asks the operator a yes/no question, when there is one to ask (#129).
    *
-   * Only `sweepStranded` uses it, and only `daemon.ts` supplies it — and only
-   * on a TTY, which `kapelle daemon start` has and a background daemon does
-   * not. Absent, every stranded workspace is reported and kept: this is the
-   * one place the sweep would delete a checkout it cannot prove is debris,
+   * Only `sweepStranded` uses it, and only `daemon/main.ts` supplies it —
+   * and only on a TTY, which `kapelle daemon start` has and a background daemon
+   * does not. Absent, every stranded workspace is reported and kept: this is
+   * the one place the sweep would delete a checkout it cannot prove is debris,
    * and it does not guess.
    */
   ask?: (question: string) => Promise<boolean>;
@@ -136,8 +136,8 @@ export interface SweepOptions {
  * so a locale- or timezone-formatted start time compares equal across daemon
  * processes and a recycled pid does not.
  *
- * **Asynchronous because of its other caller.** `daemon.ts` records the
- * identity from the `_client_harness_spawned` listener, and a synchronous
+ * **Asynchronous because of its other caller.** `daemon/children.ts` records
+ * the identity from the `_client_harness_spawned` listener, and a synchronous
  * fork+exec there blocks the event loop for every other run — SSE writes and
  * permission answers included — on the spawn of each task's harness.
  */
@@ -1251,7 +1251,7 @@ export async function sweepBoot(options: SweepOptions): Promise<void> {
 
   // Caught like a repository: `sweepChildren` removes files and signals
   // processes, and the file header's promise is that nothing here throws — an
-  // unhandled rejection out of the boot path would exit past `daemon.ts`'s
+  // unhandled rejection out of the boot path would exit past `daemon/main.ts`'s
   // `orExit` and leave the claim file behind.
   try {
     await sweepChildren(childrenFile, onNotice);

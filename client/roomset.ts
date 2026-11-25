@@ -14,8 +14,8 @@
  * **A restart is waited out** (M6-7d, #236). A daemon that stops, cleanly or
  * not, gets `waitMs` (30 s) to come back; then the set ends as before. A
  * clean stop closes the listener first, then pauses each room, which ends
- * its stream normally (`daemon.ts`, `shutdown`). So a stream that ends when
- * no daemon answers is a stop, and it waits too.
+ * its stream normally (`daemon/main.ts`, `shutdown`). So a stream that ends
+ * when no daemon answers is a stop, and it waits too.
  * `followDaemon` reads `daemon.json` on every call, through `address`,
  * because `client/` may not import `core/runtime.ts` (S8). A new token gets
  * `GET /version` once, then the screen's one address object takes it in
@@ -120,7 +120,7 @@ export function followDaemon(
  * answers is a stop, and it waits too. Throws when no daemon came back, or
  * when one refuses the stream or its version.
  *
- * **This rests on the shutdown order** (`daemon.ts`, `shutdown`): the
+ * **This rests on the shutdown order** (`daemon/main.ts`, `shutdown`): the
  * listener closes before the rooms pause. The SSE response closes its own
  * socket (`daemon/sse.ts`), and shutdown closes idle pooled sockets, so the
  * reconcile after a clean stop finds no old daemon. A daemon that still

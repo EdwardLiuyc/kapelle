@@ -40,7 +40,8 @@
   // as a subprocess, never imported, so nothing reaches it through the graph.
   //
   // daemon.ts (M2-1) is the second production root: `node daemon.ts` runs it,
-  // and nothing imports it — the daemon suites spawn it as a subprocess.
+  // the daemon suites spawn it as a subprocess, and `kapelle daemon start`
+  // imports it.
   // chat.ts (chat MVP) is the third, for the same reason: `node chat.ts`, spawned
   // by tests/chat-*.test.ts, imported by nothing.
   // demo-agent.mjs (#463) ships in the package: `kapelle demo` spawns it as the

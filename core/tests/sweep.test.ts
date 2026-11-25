@@ -951,8 +951,8 @@ test("a pid that no longer matches its identity is not signalled", async (t) => 
 test("a pid recorded without an identity is left alone, but named", async (t) => {
   const child = sleeper(t);
   const childrenFile = join(await tempDir(t), "children.json");
-  // What `daemon.ts` writes when `ps` could not answer at spawn: `startedAt`
-  // is absent, so nothing here can tell this pid from a reused one.
+  // What `daemon/children.ts` writes when `ps` could not answer at spawn:
+  // `startedAt` is absent, so nothing here can tell this pid from a reused one.
   await writeFile(
     childrenFile,
     JSON.stringify({
@@ -1362,11 +1362,12 @@ async function stranded(t: TestContext): Promise<{
   root: string;
   workspace: string;
 }> {
-  // Canonicalized: `repos.json` entries are realpaths (`daemon.ts` realpaths
-  // at `POST /repos`), and `stateDirFor` keys on `realpathSync(root)`. Passing
-  // `gitRepo`'s unresolved spelling would disagree with that key whenever the
-  // tmpdir chain contains a symlink (macOS: `tmpdir()` is `/var`, realpath is
-  // `/private/var`), and `sweepStranded` would find nothing to strand.
+  // Canonicalized: `repos.json` entries are realpaths (`daemon/app.ts`
+  // realpaths at `POST /repos`), and `stateDirFor` keys on
+  // `realpathSync(root)`. Passing `gitRepo`'s unresolved spelling would
+  // disagree with that key whenever the tmpdir chain contains a symlink
+  // (macOS: `tmpdir()` is `/var`, realpath is `/private/var`), and
+  // `sweepStranded` would find nothing to strand.
   const root = realpathSync(await gitRepo(t));
   const { worktrees } = await openWorktrees(root, RUN_ID);
   assert.ok(worktrees);

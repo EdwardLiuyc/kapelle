@@ -21,8 +21,13 @@
  *
  * One map for both kinds, so `GET /rooms` keeps the boot's order: `set` on a
  * key already there keeps its place.
+ *
+ * It also keeps the ids of deleted rooms, the room creates and deletes that a
+ * shutdown must wait for, and the scratch lock that serializes hall adds and
+ * removes against scratch snapshots (M12-7a).
  */
 
+import type { ServerResponse } from "node:http";
 import type { RoomListEntry } from "../client/contract.ts";
 import type { Room, RoomRecord } from "../core/room.ts";
 import { type RoomState, toRecordListEntry, toRoomListEntry } from "./dto.ts";
@@ -52,6 +57,11 @@ export function createRooms(
 ) {
   const slots = new Map<string, RoomEntry | Unbuilt>();
   const building = new Map<string, Promise<RoomEntry | undefined>>();
+  const deleted = new Set<string>();
+  /** A room create or delete still unanswered (#316). Neither room is in
+   *  `slots` for the shutdown to pause, so it waits for the work and its
+   *  reply instead. */
+  const changes = new Set<Promise<void>>();
   return {
     set: (id: string, entry: RoomEntry) => void slots.set(id, entry),
     /** Keep a dismissed room's record; nothing is built until `get`. */
@@ -89,5 +99,75 @@ export function createRooms(
       }
       return pending;
     },
+    /** Rooms deleted since this daemon started. Memory-only by design:
+     *  after a restart the id is unknown again. */
+    deleted,
+    /** Holds the shutdown until `work` has settled and `res` is sent. A
+     *  client that has gone does not end it: the work goes on without the
+     *  client. Answers `work`, so its refusal still reaches the route. */
+    hold(res: ServerResponse, work: Promise<void>) {
+      const sent = new Promise<void>((ok) => res.once("close", ok));
+      const held = Promise.all([work.catch(() => {}), sent]).then(() => {});
+      changes.add(held);
+      void held.then(() => changes.delete(held));
+      return work;
+    },
+    /** Each held room create or delete still unanswered (#316). */
+    changes: () => [...changes],
   };
+}
+
+/** Hall adds and removes are readers of the scratch tree, through `change`;
+ *  listing and cleaning are writers, through `snapshot`. Readers may run
+ *  together, but a writer waits for every in-flight reader and keeps new
+ *  readers out until it finishes. An add makes a folder before its participant
+ *  joins the roster, so a scratch snapshot must not run beside it. */
+export function createScratchLock() {
+  let scratchReaders = 0;
+  let scratchWriting = false;
+  let scratchWriters: Promise<void> = Promise.resolve();
+  const scratchDrain: (() => void)[] = [];
+
+  async function afterScratchWriter(
+    previous: Promise<void>,
+    mine: Promise<void>,
+  ): Promise<void> {
+    await previous;
+    await mine;
+  }
+
+  async function change<T>(work: () => Promise<T>): Promise<T> {
+    while (scratchWriting) await scratchWriters;
+    scratchReaders++;
+    try {
+      return await work();
+    } finally {
+      scratchReaders--;
+      if (scratchReaders === 0) {
+        for (const wake of scratchDrain.splice(0)) wake();
+      }
+    }
+  }
+
+  async function snapshot<T>(work: () => Promise<T>): Promise<T> {
+    const previous = scratchWriters;
+    let finish!: () => void;
+    const mine = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    scratchWriters = afterScratchWriter(previous, mine);
+    await previous;
+    scratchWriting = true;
+    try {
+      if (scratchReaders > 0) {
+        await new Promise<void>((resolve) => scratchDrain.push(resolve));
+      }
+      return await work();
+    } finally {
+      scratchWriting = false;
+      finish();
+    }
+  }
+
+  return { change, snapshot };
 }

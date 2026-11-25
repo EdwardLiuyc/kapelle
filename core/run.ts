@@ -318,8 +318,8 @@ export type TaskExecutor = (
 export interface RunOptions {
   /** The run's working directory. Each task's worktree hangs off it. */
   cwd: string;
-  /** The project's `linkPaths`; `daemon.ts` and `cli.ts` read them from the
-   *  repository config, and a direct caller without one gets no links. */
+  /** The project's `linkPaths`; `daemon/app.ts` and `cli.ts` read them from
+   *  the repository config, and a direct caller without one gets no links. */
   linkPaths?: readonly string[];
   /** Names the run's worktrees and branches. Minted here when absent, but a
    *  caller that has to print the id — `cli.ts` does — mints it itself: a run
@@ -335,25 +335,25 @@ export interface RunOptions {
    *
    * **One prompt cannot serve two askers**, so `cli.ts` supplies its terminal
    * decider only when at most one task in the run asks *and* a TTY exists, and
-   * re-resolves the rest as `safe`. `daemon.ts` supplies M2-3's pending-decision
-   * queue (`core/permissions.ts`), which serves N askers at once. Absent, an
-   * `ask` task falls back to `policyFor("ask")`.
+   * re-resolves the rest as `safe`. `daemon/app.ts` supplies M2-3's
+   * pending-decision queue (`core/permissions.ts`), which serves N askers at
+   * once. Absent, an `ask` task falls back to `policyFor("ask")`.
    */
   askPolicy?: Policy;
   /** Notices a run must print even under `--quiet` (#13). */
   onNotice?: (taskId: string, text: string, kind?: Warning["kind"]) => void;
   /** Handed the run's event log once it exists, before any task starts —
-   *  `daemon.ts` serves `GET /runs/:id/events` from it (M2-2). Never called
-   *  when the log directory could not be made. */
+   *  `daemon/app.ts` serves `GET /runs/:id/events` from it (M2-2). Never
+   *  called when the log directory could not be made. */
   onEventLog?: (log: EventLog) => void;
   /** Handed the task list at every transition, the list `run.json` carries —
-   *  `daemon.ts` lists a live run's tasks from it (M2-10). Called whether or
-   *  not the record could be written. */
+   *  `daemon/app.ts` lists a live run's tasks from it (M2-10). Called whether
+   *  or not the record could be written. */
   onTasks?: (tasks: RecordTask[]) => void;
   /** Handed the report and the record's `endedAt` once the terminal record is
-   *  written, before `_client_run_finished` is emitted (M5-5) — `daemon.ts`
-   *  settles the run's status here, so no `GET` after the event reads it as
-   *  still running. */
+   *  written, before `_client_run_finished` is emitted (M5-5) —
+   *  `daemon/app.ts` settles the run's status here, so no `GET` after the event
+   *  reads it as still running. */
   onFinished?: (report: RunReport, endedAt: string) => void;
 }
 
@@ -381,7 +381,7 @@ export async function runRun(
       (t): RecordTask => entries.get(t.id) ?? { id: t.id, status: "queued" },
     );
   // Before the first await, so a caller that has just started the run can
-  // list its tasks at once — `daemon.ts` answers its 202 right after this
+  // list its tasks at once — `daemon/app.ts` answers its 202 right after this
   // call returns, and the first `persist` is a git call away (M2-10).
   options.onTasks?.(snapshot());
 
@@ -720,7 +720,7 @@ function recordTask(task: TaskRun): RecordTask {
 /**
  * Write the record, atomically.
  *
- * Temp file plus `rename`, the shape `daemon.ts` already uses for
+ * Temp file plus `rename`, the shape `daemon/children.ts` already uses for
  * `children.json`: this is now written while the run is live, so a crash
  * between two writes must leave the previous record whole rather than half a
  * one for `core/merge.ts` and M2-5 to parse.
@@ -728,7 +728,7 @@ function recordTask(task: TaskRun): RecordTask {
  * Asserted by inspection, not by a test: a reader racing the write sees the
  * old record or the new one whichever way this is written, so a test of it
  * would pass on a plain `writeFile` too. The consequence that *is* tested is
- * the other side — `daemon.ts` skips a truncated record with a notice.
+ * the other side — `daemon/run.ts` skips a truncated record with a notice.
  */
 async function writeRunRecord(input: RunRecordInput): Promise<void> {
   const record = {

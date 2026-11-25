@@ -24,19 +24,19 @@
  * different token), because the stale record is still readable for the few
  * milliseconds before the new daemon claims the file.
  *
- * **A pid is not an identity.** `daemon.ts` writes `${daemon.json}.identity`
- * with its `ps` start time. Before treating a live pid as a daemon, this
- * module compares that time. A recycled pid is then stale: it is never
- * signalled by `daemon stop`, and it does not block a fresh start. A missing
- * identity falls back to a verified `/version` answer at the address, and
- * then to the old behaviour of waiting for a live pid, so an older daemon
- * still works.
+ * **A pid is not an identity.** The daemon's claim (`daemon/record.ts`)
+ * writes `${daemon.json}.identity` with its `ps` start time. Before treating a
+ * live pid as a daemon, this module compares that time. A recycled pid is
+ * then stale: it is never signalled by `daemon stop`, and it does not block a
+ * fresh start. A missing identity falls back to a verified `/version` answer
+ * at the address, and then to the old behaviour of waiting for a live pid, so
+ * an older daemon still works.
  *
- * **A stop is SIGTERM and a wait.** `daemon.ts` cancels its runs and pauses
- * its rooms on SIGTERM, then removes `daemon.json` and exits. This waits for
- * the pid to go, then removes a record the daemon did not remove itself —
- * only while it still names that pid, so a daemon that took over in the
- * meantime keeps its file.
+ * **A stop is SIGTERM and a wait.** `daemon/main.ts` closes the listener,
+ * then the app cancels its runs and pauses its rooms, and `shutdown` removes
+ * `daemon.json` and exits. This waits for the pid to go, then removes a record
+ * the daemon did not remove itself — only while it still names that pid, so a
+ * daemon that took over in the meantime keeps its file.
  */
 
 import {
@@ -263,7 +263,8 @@ function startLockHeld(lock: string): boolean {
 function acquireStartLock(file: string): (() => void) | undefined {
   const lock = startLockPath(file);
   // `cli.ts` calls `runtimeDir()` first; a test or a library caller may not
-  // have made the folder yet. `daemon.ts` still guards it before it listens.
+  // have made the folder yet. `daemon/main.ts` still guards it before it
+  // listens.
   mkdirSync(dirname(lock), { recursive: true, mode: 0o700 });
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {

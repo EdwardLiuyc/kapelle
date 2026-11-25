@@ -429,8 +429,8 @@ test("a caught-up reader gets new lines live, and an abort detaches it", async (
 });
 
 test("a cursor ahead of the log waits for that line, never skipping to fill the gap", async (t) => {
-  // `daemon.ts` refuses such a `Last-Event-ID`, but the log must not answer
-  // one by sending whatever arrives next under the wrong number.
+  // `daemon/app.ts` refuses such a `Last-Event-ID`, but the log must not
+  // answer one by sending whatever arrives next under the wrong number.
   const { log } = await logIn(t);
   log.append(chunk("a"));
   const r = collect(log, 3);
@@ -461,7 +461,7 @@ test("a log that cannot be written reports once, keeps the run going, and ends r
 });
 
 test("size counts committed lines, not appended ones", async (t) => {
-  // daemon.ts bounds Last-Event-ID by log.size, so a size that counted
+  // daemon/app.ts bounds Last-Event-ID by log.size, so a size that counted
   // `appended` would let a client resume past lines that are not replayable
   // yet and skip them silently.
   const { log } = await logIn(t);

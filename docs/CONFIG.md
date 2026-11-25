@@ -215,8 +215,10 @@ Notes:
 - `core/worktree.ts` — `openWorktrees` plans and makes the `linkPaths` mirrors,
   and refuses a tracked, escaping, or still-visible link, or an escaping or
   dangling entry of a linked directory.
-- `daemon.ts` — `DEFAULT_PORT` / `DEFAULT_PERMISSION_TIMEOUT_S` and flag
-  resolution, `postRepo`, `postRun`, `GET /config`, `PATCH /config`, `PUT /config`.
+- `daemon/main.ts` — `DEFAULT_PORT` / `DEFAULT_PERMISSION_TIMEOUT_S` and flag
+  resolution.
+- `daemon/app.ts` — `postRepo`, `postRun`, `GET /config`, `PATCH /config`,
+  `PUT /config`.
 - `cli.ts` — `runFromFile`, the project-config defaults for `--file`.
 - `core/runfile.ts` — `RunDefaults` and the task > run > config > built-in chain.
 - `core/sweep.ts` — `DEFAULT_RETENTION_MS` and the per-repository retention read.

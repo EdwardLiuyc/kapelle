@@ -3,9 +3,10 @@
  * folders no live participant owns.
  *
  * The daemon serializes every add and remove against a snapshot (list or
- * clean) with its scratch lock. That is what protects a folder an add has
- * just made before its participant joins the roster. `cleanScratch` checks
- * the supplied roster for each id before removing that folder.
+ * clean) with its scratch lock (`daemon/rooms.ts`). That is what protects a
+ * folder an add has just made before its participant joins the roster.
+ * `cleanScratch` checks the supplied roster for each id before removing that
+ * folder.
  *
  * Symlinks are never followed. A symlink at a folder path is listed as a
  * problem and left alone; a symlink inside a folder is an entry and is

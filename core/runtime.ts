@@ -8,10 +8,11 @@
  * repositories added with `POST /repos` (M2-6, #36), and the auto-started
  * daemon's log (M9-2).
  *
- * Its own file because the entry points need the one definition: `daemon.ts`
- * writes the token there, and `cli.ts` reads it back for `kapelle daemon
- * add`, bare `kapelle` and `kapelle daemon stop` (M2-4, #34; M9-2).
- * `daemon.ts` cannot be imported for it — importing it starts a daemon.
+ * Its own file because the entry points need the one definition:
+ * `daemon/main.ts` writes the token there, and `cli.ts` reads it back for
+ * `kapelle daemon add`, bare `kapelle` and `kapelle daemon stop` (M2-4, #34;
+ * M9-2). `daemon.ts` cannot be imported for it — importing it starts a
+ * daemon.
  */
 
 import { createHash } from "node:crypto";
@@ -188,9 +189,9 @@ export function stateDirFor(root: string): string {
  * fixes it. Entries are re-checked on use, so a repository that has since
  * moved is refused then, not here.
  *
- * Entries are canonical realpaths — `daemon.ts` realpaths at `POST /repos`,
- * matching what `stateDirFor` keys on — because a path that is gone cannot be
- * re-resolved to check it against anything else.
+ * Entries are canonical realpaths — `daemon/app.ts` realpaths at
+ * `POST /repos`, matching what `stateDirFor` keys on — because a path that is
+ * gone cannot be re-resolved to check it against anything else.
  */
 export function readRepos(): string[] {
   // Outside the `try`, so the directory guard is never swallowed: a state
