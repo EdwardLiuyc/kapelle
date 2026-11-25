@@ -207,9 +207,10 @@ Notes:
 ## Where this lives
 
 - `core/config.ts` — key sets, value rules, both file readers, the `KAPELLE_*`
-  reader, `warnUnknownConfigEnv`, `resolveRunDefaults`, `resolveRetentionMs`,
-  `resolveOrchestratorTurnCap`, `readProjectLinkPaths`, and for `/config`
-  `projectConfigView`, `saveProjectConfig` and `replaceProjectConfig`.
+  reader, `warnUnknownConfigEnv`, `resolveRunDefaults`, `DEFAULT_RETENTION_MS`,
+  `resolveRetentionMs`, `resolveOrchestratorTurnCap`, `readProjectLinkPaths`,
+  and for `/config` `projectConfigView`, `saveProjectConfig` and
+  `replaceProjectConfig`.
 - `client/config.ts` — the `/config` rows as lines, the invalid-file lines, and the
   form's values as a `PATCH` or `PUT /config` body.
 - `core/worktree.ts` — `openWorktrees` plans and makes the `linkPaths` mirrors,
@@ -221,6 +222,7 @@ Notes:
   `PUT /config`.
 - `cli.ts` — `runFromFile`, the project-config defaults for `--file`.
 - `core/runfile.ts` — `RunDefaults` and the task > run > config > built-in chain.
-- `core/sweep.ts` — `DEFAULT_RETENTION_MS` and the per-repository retention read.
+- `core/sweep.ts` — the boot sweep and its use of the per-repository retention
+  window.
 - `core/watchdog.ts` — `WATCHDOG_DEFAULTS`.
 - `protocol/registry.ts` — `SECRET_PREFIX`, the reserved `KAPELLE_*` namespace.

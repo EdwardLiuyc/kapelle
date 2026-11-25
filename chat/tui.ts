@@ -114,7 +114,7 @@ import { backdropLines } from "./tui/backdrop.ts";
 import { bannerPart } from "./tui/banner.ts";
 import { copySelection } from "./tui/clipboard.ts";
 import { paneParts } from "./tui/pane.ts";
-import { EDITOR_THEME, panelParts } from "./tui/panel.ts";
+import { panelParts } from "./tui/panel.ts";
 import { type Question, questionParts } from "./tui/question.ts";
 import { railParts } from "./tui/rail.ts";
 import {
@@ -124,6 +124,7 @@ import {
   sidebarParts,
 } from "./tui/sidebar.ts";
 import { type Shell, startShell } from "./tui/term.ts";
+import { EDITOR_THEME } from "./tui/theme.ts";
 import { transcriptParts, unbar } from "./tui/transcript.ts";
 import {
   activity,

@@ -83,17 +83,8 @@ import { bold, cyan, dim, inverse, NO_DAEMON, yellow } from "../common.ts";
 import { rows, same, type View } from "../view.ts";
 import type { Queue } from "./question.ts";
 import { SIDEBAR_WIDTH } from "./sidebar.ts";
+import { EDITOR_THEME } from "./theme.ts";
 
-const EDITOR_THEME = {
-  borderColor: dim,
-  selectList: {
-    selectedPrefix: cyan,
-    selectedText: bold,
-    description: dim,
-    scrollInfo: dim,
-    noMatch: dim,
-  },
-};
 /** Let a pick list size its label column to its widest row, so a command
  *  still fits on the right in the 80-column chat's pop-up. A label cut to
  *  fit ends with `…`, so a long name does not read as another name. */
@@ -1568,4 +1559,4 @@ function panelParts({
   };
 }
 
-export { border, EDITOR_THEME, panelParts };
+export { border, panelParts };

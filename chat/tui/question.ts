@@ -30,7 +30,8 @@ import type { Followed } from "../../client/roomset.ts";
 import { dim, NO_DAEMON } from "../common.ts";
 import { pickRow, touched } from "../view.ts";
 import type { paneParts } from "./pane.ts";
-import { EDITOR_THEME, type panelParts } from "./panel.ts";
+import type { panelParts } from "./panel.ts";
+import { EDITOR_THEME } from "./theme.ts";
 
 /** An open question, as the reducer keeps it. */
 type Question = Extract<Entry, { type: "permission" }>;

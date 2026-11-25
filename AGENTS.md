@@ -125,8 +125,9 @@ Dependencies point one way: `cli.ts` and `daemon.ts` → `core/` → `protocol/`
 **`core/` may import `protocol/`. `protocol/` never imports `core/`.** That is why
 `AcpAgent`'s default policy refuses everything instead of being `safePolicy`.
 `client/` imports only `protocol/types.ts`, and nothing in `core/` or `protocol/` imports
-`client/`. `chat.ts` → `chat/` → `client/`. `render.ts` → `core/markdown.ts` is the one
-arrow that points back. `chat.ts` and `chat/` talk HTTP only. They import only `client/`,
+`client/`. `chat.ts` → `chat/` → `client/`. `render.ts` → `core/markdown.ts` and
+`core/text.ts` are the arrows that point back. `chat.ts` and `chat/` talk HTTP
+only. They import only `client/`,
 pi-tui, `core/runtime.ts` and each other; `chat/tui/term.ts` also imports
 `@xterm/headless`. Their subprocesses are the clipboard tool (`chat/tui/clipboard.ts`)
 and the person's shell (`chat/tui/term.ts`).

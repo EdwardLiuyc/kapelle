@@ -60,7 +60,7 @@ import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { rename, writeFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { promisify } from "node:util";
-import { resolveRetentionMs } from "./config.ts";
+import { DEFAULT_RETENTION_MS, resolveRetentionMs } from "./config.ts";
 import {
   GitError,
   type GitOptions,
@@ -93,14 +93,6 @@ const GIT_INPUT = {
 
 const messageOf = (err: unknown) =>
   err instanceof Error ? err.message : String(err);
-
-/**
- * The retention window when neither `KAPELLE_RETENTION_MS` nor the
- * repository's `.kapelle/config.json` names one (decided at pickup
- * 2026-09-16, raised to 30 days by the developer the same day; the knob
- * landed with M2-7).
- */
-export const DEFAULT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 export interface SweepOptions {
   /** Repository roots to reconcile, usually `readRepos()`. */
