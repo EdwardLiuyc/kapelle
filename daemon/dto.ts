@@ -1,15 +1,22 @@
 /**
- * The daemon's wire shapes — stories M2-6 and M5-2, split out of `daemon.ts`.
+ * The daemon's wire shapes — stories M2-6, M5-2 and M12-3, split out of
+ * `daemon.ts`.
  *
  * Pure functions from what the daemon holds (a live `TaskRun`, a restored
- * `run.json`, a `RunState`) to what `client/contract.ts` promises. Kept apart
- * from `daemon.ts` because that file starts a daemon when imported, and these
- * need tests of their own. Not in `core/`: `core/` never imports `client/`.
+ * `run.json`, a `RunState`, permission decisions and the project config view)
+ * to what `client/contract.ts` promises. Kept apart from `daemon.ts` because
+ * that file starts a daemon when imported, and these need tests of their own.
+ * Not in `core/`: `core/` never imports `client/`.
  */
 
 import type {
+  ConfigRow,
+  ConfigView,
+  Diff,
   Notice,
   ParticipantDto,
+  PendingDecision,
+  PermissionDecision,
   RoomDto,
   RoomListEntry,
   RunDto,
@@ -17,7 +24,12 @@ import type {
   RunStatus,
   TaskDto,
 } from "../client/contract.ts";
+import type { projectConfigView } from "../core/config.ts";
 import { HALL_ID } from "../core/ids.ts";
+import type {
+  PendingDecision as CorePendingDecision,
+  SettledDecision as CoreSettledDecision,
+} from "../core/permissions.ts";
 import type { Participant, Room, RoomMeta, RoomRecord } from "../core/room.ts";
 import type { RunReport, TaskRun } from "../core/run.ts";
 
@@ -49,6 +61,66 @@ const TYPED_KEYS = {
   Exclude<keyof TaskDto, (typeof STRING_KEYS)[number] | "id" | "status">,
   keyof TaskDto & keyof TaskRun
 >;
+
+/** The contract fields these DTOs copy (M12-3). A new contract field fails
+ *  `npm run check` here until the matching builder copies it. The Pending
+ *  decision pin covers the shape both asker variants share; the two pins
+ *  below cover their variant-only fields. */
+const PENDING_KEYS = {
+  id: 0,
+  kind: 0,
+  title: 0,
+  input: 0,
+  diff: 0,
+} as const satisfies Record<keyof PendingDecision, 0>;
+type RunAskerKeys = Exclude<
+  keyof Extract<PendingDecision, { runId: string }>,
+  keyof PendingDecision
+>;
+type RoomAskerKeys = Exclude<
+  keyof Extract<PendingDecision, { roomId: string }>,
+  keyof PendingDecision
+>;
+const RUN_ASKER_KEYS = {
+  runId: 0,
+  taskId: 0,
+} as const satisfies Record<RunAskerKeys, 0>;
+const ROOM_ASKER_KEYS = {
+  roomId: 0,
+  participantId: 0,
+  turn: 0,
+} as const satisfies Record<RoomAskerKeys, 0>;
+const DIFF_KEYS = {
+  text: 0,
+  files: 0,
+  added: 0,
+  removed: 0,
+} as const satisfies Record<keyof Diff, 0>;
+const CONFIG_VIEW_KEYS = {
+  path: 0,
+  rows: 0,
+  invalid: 0,
+} as const satisfies Record<keyof Omit<ConfigView, "root">, 0>;
+const CONFIG_ROW_KEYS = {
+  key: 0,
+  value: 0,
+  source: 0,
+  default: 0,
+  file: 0,
+  env: 0,
+} as const satisfies Record<keyof ConfigRow, 0>;
+
+/** Copy only the named fields, omitting absent optional values. */
+function pick<T extends object, K extends keyof T>(
+  source: T,
+  fields: Record<K, 0>,
+): Pick<T, K> {
+  const copy: Partial<Pick<T, K>> = {};
+  for (const key of Object.keys(fields) as K[]) {
+    if (source[key] !== undefined) copy[key] = source[key];
+  }
+  return copy as Pick<T, K>;
+}
 
 /** A `Usage` from a value of unknown provenance, rebuilt key by key so a
  *  hand-edited record cannot put a wrong-typed or unknown nested value on the
@@ -195,6 +267,71 @@ export function toRunListEntry(state: RunState): RunListEntry {
   if (state.startedAt !== undefined) entry.startedAt = state.startedAt;
   if (state.endedAt !== undefined) entry.endedAt = state.endedAt;
   return entry;
+}
+
+/** One permission decision as the contract carries it (M12-3). The asker,
+ *  `input` and `diff` are rebuilt so a field added to `core/permissions.ts`
+ *  cannot reach the wire. `input` is a dictionary by contract, so its keys
+ *  stay; `diff` is a fixed shape, so its fields are selected through
+ *  `DIFF_KEYS`. */
+export function toPendingDecision(
+  decision: CorePendingDecision,
+): PendingDecision {
+  const shared = pick(
+    {
+      ...decision,
+      ...(decision.input !== undefined && { input: { ...decision.input } }),
+      ...(decision.diff !== undefined && {
+        diff: pick(decision.diff, DIFF_KEYS),
+      }),
+    },
+    PENDING_KEYS,
+  );
+  return {
+    ...shared,
+    ...("runId" in decision
+      ? pick(decision, RUN_ASKER_KEYS)
+      : pick(decision, ROOM_ASKER_KEYS)),
+  };
+}
+
+/** `GET /permissions/:id`: an open decision, or a closed one with its answer
+ *  and why it closed (M12-3). */
+export function toPermissionDecision(
+  decision: CorePendingDecision | CoreSettledDecision,
+): PermissionDecision {
+  if (!("allow" in decision)) return toPendingDecision(decision);
+  return {
+    ...toPendingDecision(decision),
+    allow: decision.allow,
+    reason: decision.reason,
+  };
+}
+
+/** The project config view the contract carries (M12-3). The top level,
+ *  every row and each row's array values are rebuilt so a field added to
+ *  `core/config.ts` does not reach the wire. */
+export function toConfigView(
+  root: string,
+  view: ReturnType<typeof projectConfigView>,
+): ConfigView {
+  const rows = view.rows.map((row) =>
+    pick(
+      {
+        ...row,
+        value: Array.isArray(row.value) ? [...row.value] : row.value,
+        default: Array.isArray(row.default) ? [...row.default] : row.default,
+        ...(row.file !== undefined && {
+          file: Array.isArray(row.file) ? [...row.file] : row.file,
+        }),
+      },
+      CONFIG_ROW_KEYS,
+    ),
+  );
+  return {
+    root,
+    ...pick({ ...view, rows }, CONFIG_VIEW_KEYS),
+  };
 }
 
 /** What the daemon shows about a room beyond its roster: `Room.meta`, which
