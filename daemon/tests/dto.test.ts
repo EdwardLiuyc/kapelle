@@ -183,7 +183,7 @@ test("toRunListEntry carries id and status per task, and no notices", () => {
   });
 });
 
-test("toPendingDecision keeps both askers and drops unknown nested fields", () => {
+test("toPendingDecision keeps both askers, copies input, and drops unknown fields", () => {
   const runDecision = {
     id: "p1",
     runId: "r1",
@@ -200,7 +200,8 @@ test("toPendingDecision keeps both askers and drops unknown nested fields", () =
     },
     secret: "top",
   } as unknown as CorePendingDecision;
-  assert.deepEqual(toPendingDecision(runDecision), {
+  const dto = toPendingDecision(runDecision);
+  assert.deepEqual(dto, {
     id: "p1",
     runId: "r1",
     taskId: "t1",
@@ -214,6 +215,7 @@ test("toPendingDecision keeps both askers and drops unknown nested fields", () =
       removed: 0,
     },
   });
+  assert.notEqual(dto.input, runDecision.input);
 
   const roomDecision = {
     id: "p2",
