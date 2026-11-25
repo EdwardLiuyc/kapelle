@@ -213,7 +213,7 @@ Agenda item #1 in the brief. Costs almost nothing and de-risks every design choi
 > note is assembled and carries a per-harness roll-up at the top: `FINDINGS.md`.
 >
 > **One story added after that completion, and resolved rather than scheduled: M0-8**, from the AgentPool review
-> (`docs/PRIOR-ART-AGENTPOOL.md`). M0-3's `87cbfe3` had already advertised `_meta.terminal_output`;
+> (`docs/archive/PRIOR-ART-AGENTPOOL.md`). M0-3's `87cbfe3` had already advertised `_meta.terminal_output`;
 > the result (`FINDINGS.md`) recorded no visibility and no exit code, so the story
 > closed as a docs reconciliation. **Parked, no backlog entry** — see the Terminals row above.
 
@@ -855,7 +855,7 @@ The actionable form of these — with triggers and decisions — is `docs/STORIE
   deliberately carries no context rung in the meantime.
 - **A pluggable backend under the `fs/*` handlers — considered and refused, 2026-08-23.**
   AgentPool routes every client-served file operation through a swappable execution
-  environment (local, docker, an E2B sandbox), and `docs/PRIOR-ART-AGENTPOOL.md` initially
+  environment (local, docker, an E2B sandbox), and `docs/archive/PRIOR-ART-AGENTPOOL.md` initially
   recommended taking the seam. It reversed itself against M0-1: **no harness calls `fs/*` at
   all**, so the indirection would sit beneath handlers nothing reaches. `#guardPath` stays as
   insurance; nothing is built under it until something calls `fs/*`. Recorded here so the

@@ -24,9 +24,6 @@ What changed in each version that a user can see. A release writes its section;
 
 - Git 2.36 is now required. Older Git skips worktree cleanup rather than guessing at
   paths (#532).
-- In `ask` and `safe` mode, a yes never tells an agent "always allow". When the agent
-  offers no "allow once", the request is refused. Only `auto` may send "always allow"
-  (#535).
 - `/config` opens a config file whose content is not valid. It shows the error, and a
   save replaces the whole file (#529).
 - A chat refuses `/title` and `/cap`, as it refuses `/add` (#522).

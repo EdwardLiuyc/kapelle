@@ -67,7 +67,7 @@ and the shape they should take will be clearer after P0 runs for a while.
 
 The broad landscape. Two of these neighbours have dedicated deep dives elsewhere:
 `PROJECT-PLAN.md` reviews opencode-ensemble (what we took and what we didn't), and
-`docs/PRIOR-ART-AGENTPOOL.md` reviews agentpool in detail.
+`docs/archive/PRIOR-ART-AGENTPOOL.md` reviews agentpool in detail.
 
 - **sage** — pure bash orchestrator, runtime-agnostic (Claude Code, Cline,
   Codex, Gemini CLI, ACP), wave-based plan execution, worktree isolation,
