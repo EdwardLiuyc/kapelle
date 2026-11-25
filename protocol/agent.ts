@@ -1357,19 +1357,11 @@ type AnswerScope = "deny" | "once" | "session";
 
 function answerScope(answer: PolicyAnswer): AnswerScope {
   if (answer === true) return "once";
-  // A JS caller can fall through the type here; this check is the boundary
-  // that turns that into a denial, so a runtime check is the point.
-  const value: unknown = answer;
-  // pi-lens-ignore: no-runtime-typeof
-  const isObject = typeof value === "object" && value !== null;
-  if (
-    isObject &&
-    (value as { allow?: unknown }).allow === true &&
-    (value as { scope?: unknown }).scope === "session"
-  ) {
-    return "session";
-  }
-  return "deny";
+  // `answer &&` also stops a value that slipped past the type, such as
+  // `undefined`, before it is read.
+  return answer && answer.allow === true && answer.scope === "session"
+    ? "session"
+    : "deny";
 }
 
 /**
