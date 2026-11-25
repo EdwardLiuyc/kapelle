@@ -16,7 +16,9 @@
  *    terminal (`killed`, M5-5: a status only this pass writes, so a client
  *    can tell a run its daemon died under from one that failed) with
  *    `endedAt` = recovery time, which is also what makes
- *    the run visible to the restore scan that follows.
+ *    the run visible to the restore scan that follows. A record that names
+ *    its writer is left alone while that exact process is still alive: a
+ *    `cli.ts run --file` run in an added repository writes the same file.
  * 3. **Worktrees.** `git worktree list` is reconciled against the records: a
  *    run that is terminal **and** past the retention window loses its
  *    worktree, its branches and its run directory (log included, M2-2's only
@@ -144,6 +146,13 @@ export async function processIdentity(pid: number): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/** The process a `run.json` names as its writer. */
+export interface RunWriter {
+  pid: number;
+  /** `ps`'s start time, or `null` when `ps` could not answer at write time. */
+  startedAt: string | null;
 }
 
 /** Is `pid` a live process? `EPERM` means it is, and is someone else's. */
@@ -296,6 +305,29 @@ function isString(value: unknown): value is string {
   return typeof value === "string";
 }
 
+/**
+ * The writer a record names, when that exact process is still alive.
+ *
+ * A pid alone can be reused. Matching the recorded `ps` start time is what
+ * tells a live writer from a later process with the same number.
+ */
+export async function verifiedRunWriter(
+  value: unknown,
+): Promise<RunWriter | null> {
+  if (!isObject(value)) return null;
+  const pid = value.pid;
+  const startedAt = value.startedAt;
+  if (
+    !isNumber(pid) ||
+    !Number.isInteger(pid) ||
+    pid <= 0 ||
+    !isString(startedAt)
+  ) {
+    return null;
+  }
+  return (await processIdentity(pid)) === startedAt ? { pid, startedAt } : null;
+}
+
 /** The task objects in a record, ignoring anything malformed. */
 function taskEntries(record: RunRecord): TaskEntry[] {
   if (!Array.isArray(record.tasks)) return [];
@@ -344,11 +376,8 @@ function terminalSince(record: RunRecord): number | null {
  * `run.json.tmp` is exactly how two processes turn one atomic write into a
  * torn one.
  *
- * ponytail: the pid suffix keeps the write atomic, not the decision. A CLI run
- * that is genuinely live still reads as `running` to a daemon booting beside
- * it and is marked `killed` under it. Closing that needs the writer's pid in
- * the record itself; M2-7 landed as config and did not add one, so this
- * stays open until a record carries its writer.
+ * The record itself names its writer, so the sweep can tell a live CLI run
+ * from one whose process is gone before deciding to rewrite it.
  */
 async function writeRecord(path: string, record: RunRecord): Promise<void> {
   const tmp = `${path}.${process.pid}.tmp`;
@@ -941,6 +970,14 @@ async function markCrashed(
   const { runsDir, now, onNotice } = pass;
   for (const [id, record] of records) {
     if (record?.status !== "running") continue;
+    const writer = await verifiedRunWriter(record.writer);
+    if (writer) {
+      onNotice(
+        `leaving run ${id} in ${pass.root} alone: its writer pid ` +
+          `${writer.pid} is still alive`,
+      );
+      continue;
+    }
     const rewritten: RunRecord = {
       ...record,
       status: "killed",

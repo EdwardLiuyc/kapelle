@@ -227,6 +227,100 @@ test("a crashed record is rewritten: running tasks killed, queued left, log unto
   assert.equal(await readFile(join(dir, "events.jsonl"), "utf8"), log);
 });
 
+test("a running record is left alone while its writer is alive", async (t) => {
+  const root = await gitRepo(t);
+  const writer = sleeper(t);
+  const pid = writer.pid as number;
+  const startedAt = await waitForIdentity(pid);
+  const dir = await writeRun(root, {
+    runId: RUN_ID,
+    root,
+    cwd: root,
+    status: "running",
+    startedAt: "2026-09-01T00:00:00.000Z",
+    tasks: [{ id: "a", status: "running" }],
+    writer: { pid, startedAt },
+  });
+  const path = join(dir, "run.json");
+  const before = await readFile(path, "utf8");
+
+  const notices = await sweep(root, join(await tempDir(t), "children.json"));
+
+  assert.equal(await readFile(path, "utf8"), before, "the record is untouched");
+  assert.ok(
+    notices.some(
+      (notice) =>
+        notice.includes(`leaving run ${RUN_ID}`) &&
+        notice.includes(`pid ${pid}`),
+    ),
+    notices.join("\n"),
+  );
+});
+
+test("a running record whose writer died is rewritten as killed", async (t) => {
+  const root = await gitRepo(t);
+  const writer = sleeper(t);
+  const pid = writer.pid as number;
+  const startedAt = await waitForIdentity(pid);
+  writer.kill("SIGKILL");
+  assert.equal(await gone(pid), true);
+  const dir = await writeRun(root, {
+    runId: RUN_ID,
+    root,
+    cwd: root,
+    status: "running",
+    startedAt: "2026-09-01T00:00:00.000Z",
+    tasks: [{ id: "a", status: "running" }],
+    writer: { pid, startedAt },
+  });
+
+  await sweep(root, join(await tempDir(t), "children.json"));
+
+  const record = await readRun(dir);
+  assert.equal(record.status, "killed");
+  assert.equal(record.endedAt, new Date(NOW).toISOString());
+  assert.deepEqual(
+    record.tasks.map((task) => [task.id, task.status]),
+    [["a", "killed"]],
+  );
+});
+
+test("a running record whose writer pid was reused is rewritten as killed", async (t) => {
+  const root = await gitRepo(t);
+  const writer = sleeper(t);
+  const pid = writer.pid as number;
+  const startedAt = await waitForIdentity(pid);
+  const dir = await writeRun(root, {
+    runId: RUN_ID,
+    root,
+    cwd: root,
+    status: "running",
+    startedAt: "2026-09-01T00:00:00.000Z",
+    tasks: [{ id: "a", status: "running" }],
+    writer: { pid, startedAt: `${startedAt} (not this process)` },
+  });
+
+  await sweep(root, join(await tempDir(t), "children.json"));
+
+  assert.equal((await readRun(dir)).status, "killed");
+});
+
+test("a writer-less record written before this story is read as today", async (t) => {
+  const root = await gitRepo(t);
+  const dir = await writeRun(root, {
+    runId: RUN_ID,
+    root,
+    cwd: root,
+    status: "running",
+    startedAt: "2026-09-01T00:00:00.000Z",
+    tasks: [{ id: "a", status: "running" }],
+  });
+
+  await sweep(root, join(await tempDir(t), "children.json"));
+
+  assert.equal((await readRun(dir)).status, "killed");
+});
+
 test("a running record with missing or malformed tasks still becomes killed", async (t) => {
   const root = await gitRepo(t);
   const startedAt = "2026-09-01T00:00:00.000Z";

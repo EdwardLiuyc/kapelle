@@ -154,6 +154,7 @@ export type ErrorCode =
   | "permission_not_found"
   | "no_event_log"
   | "run_ended"
+  | "run_not_owned"
   | "already_decided"
   | "queue_full"
   | "turn_cap"

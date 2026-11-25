@@ -284,6 +284,7 @@ request that is not valid HTTP gets `400`.
 | `permission_not_found` | `404` | The daemon never gave out this permission id, or it forgot a closed one at a restart. | |
 | `no_event_log` | `404` | The run or room exists, but it has no event log to stream. | Read `GET /runs/:id` for a run, or `GET /rooms/:id` for a room. |
 | `run_ended` | `409` | You cancelled a run that already ended. | Stop. Read its status. |
+| `run_not_owned` | `409` | The id names a live run written by another process. The daemon does not list it and cannot cancel it. | Stop it where it was started, then read its `run.json`. |
 | `already_decided` | `409` | The permission was already closed, for any of the reasons in [Why a question closed](#why-a-question-closed). | Stop. Your answer was not used. `GET /permissions/:id` gives the reason. |
 | `queue_full` | `429` | 16 messages already wait for this participant. | Wait for a `_client_turn_ended`, then send again. Or cancel its live prompt, which drops the queue. |
 | `turn_cap` | `429` | The orchestrator already sent the room's cap of worker messages. Since 1.19. | The person raises the cap with `PATCH /rooms/:id` or `/cap <n>`. |
@@ -769,7 +770,9 @@ Idempotency-Key: 9b2f6c1e-4d7a-4b8e-a0c3-5f1d2e3a4b5c
 
 #### `GET /runs`
 
-Every run the daemon knows. This includes finished runs from before a restart.
+Every run the daemon knows. This includes finished runs from before a restart. A live
+run written by another process is not listed: this daemon does not own it, and its
+`run.json` remains the live view.
 Provisional: M5-9 adds filters, a fixed order and pages.
 
 **Reply `200`:**
@@ -876,7 +879,8 @@ Asks the run to stop. Stopping takes a moment, so the reply comes first.
 Poll `GET /runs/:id`, or follow the event stream, to see when it stops.
 
 **Refusals:** `404` `run_not_found` for an unknown id. `409` `run_ended` when the run
-already ended.
+already ended. `409` `run_not_owned` when a record names a live process outside this
+daemon; its `run.json` stays the live view and `GET /runs` omits it.
 
 #### `GET /runs/:id/events`
 
