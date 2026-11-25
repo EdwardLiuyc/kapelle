@@ -4414,8 +4414,10 @@ stay the same after a restart, and M11-8 makes them.
 **Amended 2026-11-24 (M12 D1):** M11-3 waits for M12-8b, and M11-8 waits for M12-7b, so
 neither grows a file M12 splits. M11-4..M11-6 need neither.
 **Amended 2026-11-25 (D1, D3):** M11-3 is dropped. The chats come after M12-8c:
-M11-12, then M11-13 and M11-14 side by side, then M11-15. M11-16 needs only M11-13.
-Each one leaves `master` working: the old hall stays until M11-15.
+M11-12, then M11-14, then M11-13, then M11-15. M11-16 needs only M11-13.
+Each one leaves `master` working: the old hall stays until M11-15. M11-14 comes before
+M11-13 because the API makes chat checkouts, and a sweep that does not know chats would
+call them orphans at the next boot.
 
 ### Part 1 — The hall and its chats
 
@@ -4491,7 +4493,7 @@ and it is not a room: no roster, no orchestrator, no title, no turn cap, no `@na
   `removing`, `archived`.
 - **Its log.** A log line is `{seq, at, chatId, update}`, and `seq` counts from 1 in
   each chat. The log file, its index and its reader in `core/eventlog.ts` stay as they
-  are. `append`'s envelope gains this chat form beside the room's and the run's, and
+  are. `append`'s envelope gains this chat form beside the room's and the agent's, and
   the file's header, which owns the shape of a line, names it.
 - **Where it works.** A chat in a repository gets the checkout
   `wt/<chatId>/<participantId>` on the branch `kapelle/<chatId>/<participantId>`, the
@@ -4517,7 +4519,7 @@ and a revive, the mode, model and level, a remove that moves the folder, a crash
 and after the move with the record at `removing`, a dirty checkout kept and named, and
 two chats in one repository where removing one leaves the other's checkout and branch.
 
-**M11-13 · The `/chats` API · L · needs M11-12**
+**M11-13 · The `/chats` API · L · needs M11-14**
 The daemon keeps every chat in one list, opens them at boot and restores them after a
 restart. New routes under `/chats`: the list, an add, one chat, a change (name, mode,
 model, level), a message, a cancel, the event stream with `Last-Event-ID` on the chat's
@@ -4539,15 +4541,23 @@ The boot sweep (`core/sweep.ts`) reads only rooms: `roomRoots`, `recordedRooms`,
 room's id to keep its checkouts. It learns to read chat records and archives in
 `<stateDir>/chats/`, and keeps a checkout whose owner is a chat id that a record names,
 as it does for a room's id. So a chat's checkout and branch are no orphans while a
-record names them. A chat left `removing` is finished first (M11-12). An archive past `retentionMs` is
-reaped whole: its checkout, its branch, then its folder. One with uncommitted work is
-kept and named, as a dismissed room's is. An archive is in no repository, so no project
-file sets its window: it is `KAPELLE_RETENTION_MS`, or else the default.
-`docs/CONFIG.md`'s retention row says so. The old hall's record is still read, so its
-checkouts stay safe.
+record names them. `<stateDir>/chats/` is one folder for the whole daemon, but the sweep
+works one repository at a time. So the chat records are read once per boot, beside
+`recordedRooms`. If they cannot be read, orphan cleanup is skipped in every repository,
+as it is for an unreadable room record. A chat left `removing` is finished first
+(M11-12). An archive past `retentionMs` is reaped once per boot, outside the loop over
+repositories, in each repository its record names: its checkout, its branch, then its
+folder. The reap uses `removeRoom`'s steps, which take the repositories from their
+caller instead of reading `room.json`, so there is no second copy. One with uncommitted
+work is kept and named, as a dismissed room's is. An archive is in no repository, so no
+project file sets its window: it is `KAPELLE_RETENTION_MS`, or else the default.
+`docs/CONFIG.md` says so in its precedence row for `retentionMs`, and in "Where each
+config is read", where `sweepBoot` reads the project file per repository. The old
+hall's record is still read, so its checkouts stay safe.
 *Done when* tests cover a live chat's checkout kept, an archive inside retention kept,
-one past it reaped with its branch, a dirty one kept and named, a `removing` chat
-finished, and the old hall's checkouts untouched.
+one past it reaped once with its branch, a dirty one kept and named, a `removing` chat
+finished, a chats folder that cannot be read skipping orphan cleanup, and the old
+hall's checkouts untouched.
 
 **M11-15 · The screens use chats, and the hall room goes · L · needs M11-13, M11-14**
 `chat.ts`, the TUI and the pipe follow rooms and chats as two kinds, each with its own
@@ -5065,9 +5075,8 @@ section. **Amended 2026-11-24:** M11-3 needs M12-8b, and M11-8 needs M12-7b (M12
 
 ```text
 M11-1 ─ M11-2
-M12-8c ─ M11-12 ─┬─ M11-13 ─┬─ M11-15
-                 │          └─ M11-16
-                 └─ M11-14 ─── M11-15
+M12-8c ─ M11-12 ─ M11-14 ─ M11-13 ─┬─ M11-15
+                                    └─ M11-16
 M11-4 ─┬─ M11-5 ─┬─ M11-7
        └─ M11-6 ─┤
 M11-8 ───────────┘
