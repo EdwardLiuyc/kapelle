@@ -4736,6 +4736,14 @@ one table of `{ method, pattern, handler }`. The handlers move to
 check and the token check stay in front of every route, in one place. An unknown path or
 a wrong method answers as today. No framework. `AGENTS.md`'s `daemon/` row names
 `daemon/routes/`.
+**Decided at pickup 2026-11-25 (#539):** the handlers' bodies, and the state only they
+use, move out of `createDaemonApp`, not only the table rows. Each routes file returns its
+rows, and a stop hook when it owns work that a shutdown must end. A fourth file,
+`daemon/routes/repos.ts`, takes `/repos` and `/config`: adding a repository checks its
+config, and `/config` answers only for an added one. `GET /version` stays in
+`daemon/app.ts`, as it has no state. `/permissions` goes to `runs.ts`, as only a run puts
+a decision on that queue. A wrong method stays `404 no_route`, and a path id is passed on
+as sent, not decoded.
 *Done when* every route's tests pass unchanged, a test walks the table and shows that
 each route is reached only after the `Host` and token checks, and `AGENTS.md`'s table
 names `daemon/routes/`.
