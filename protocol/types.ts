@@ -457,6 +457,8 @@ export interface ClientPermissionAnsweredEvent extends Meta {
 
 export interface ClientPermissionEvent extends Meta {
   sessionUpdate: "_client_permission";
+  /** True only when an option carrying the decision was sent. A yes with no
+   *  matching option is a refusal, so it records false. */
   allow: boolean;
   title: string;
   kind: ToolKind;

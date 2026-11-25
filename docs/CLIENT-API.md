@@ -1058,7 +1058,7 @@ with ACP names.
 | `_client_permission_pending` | `title`, `kind` | A decision is about to be taken. It fires for every decision, also ones that need no person. |
 | `_client_permission_queued` | `id`, `title`, `kind`, `input?`, `diff?` | A decision waits for a person. Answer it with `POST /permissions/:id`. `input` is the tool's input, and `diff` what an edit would change: see [`GET /permissions`](#get-permissions). `input` since 1.6, `diff` since 1.7. |
 | `_client_permission_answered` | `id`, `allow`, `reason` | A queued decision closed. `id` is the one from `_client_permission_queued`. `reason` says why: see [Why a question closed](#why-a-question-closed). |
-| `_client_permission` | `allow`, `title`, `kind`, `optionId?` | The decision was taken. |
+| `_client_permission` | `allow`, `title`, `kind`, `optionId?` | The decision was taken. `allow` is false when no option carried it, including a yes with no matching option. |
 
 **Files and cancel:**
 

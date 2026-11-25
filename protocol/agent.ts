@@ -160,7 +160,8 @@ export interface PolicyRequest {
  * A policy's answer (M12-4). `true` is yes, `once`: `pickOption` takes only
  * `allow_once`. `{ allow: true, scope: "session" }` is yes, and the harness
  * may keep it: `pickOption` may take `allow_always` when no `allow_once` is
- * offered. Only `auto` answers `session`.
+ * offered. Only `auto` answers `session`. Anything else is a denial; an
+ * unknown answer never allows.
  */
 export type PolicyAnswer = boolean | { allow: true; scope: "session" };
 
@@ -1102,12 +1103,12 @@ export class AcpAgent {
       edits: [{ abs, path: relative(this.cwd, abs), newText: content }],
     };
     this.#emitPending(toolCall);
-    const allow =
-      (await this.policy({
-        agent: this.name,
-        toolCall,
-        options: [],
-      })) !== false;
+    const answer = await this.policy({
+      agent: this.name,
+      toolCall,
+      options: [],
+    });
+    const allow = answerScope(answer) !== "deny";
 
     this.onEvent({
       agent: this.name,
@@ -1233,8 +1234,11 @@ export class AcpAgent {
       toolCall: detail,
       options,
     });
-    const allow = answer !== false;
-    const optionId = pickOption(options, answer);
+    const scope = answerScope(answer);
+    const optionId = pickOption(options, scope);
+    // `allow` is what the harness will hear, not just what the policy said: a
+    // yes `once` with no `allow_once` on the menu is a refusal (M12-4).
+    const allow = scope !== "deny" && optionId !== null;
 
     // Remember what this edit decision covers. The follow-up `fs/write_text_file`
     // that a well-behaved harness sends after an approved permission request is
@@ -1248,7 +1252,7 @@ export class AcpAgent {
       const rawAbs =
         // pi-lens-ignore: no-runtime-typeof
         typeof rawPath === "string" ? resolve(this.cwd, rawPath) : null;
-      if (optionId === null || !allow) {
+      if (!allow) {
         for (const e of edits) this.#writeDecisions.set(e.abs, "denied");
         if (rawAbs !== null) this.#writeDecisions.set(rawAbs, "denied");
       } else if (edits.length > 0) {
@@ -1345,6 +1349,30 @@ function sha256(text: string): string {
 }
 
 /**
+ * What a policy answer means. Only an explicit yes allows, and only the
+ * `session` answer may reach `allow_always`. Anything else — `false`, or a
+ * value that fell through the type at runtime — is a denial, never a guess.
+ */
+type AnswerScope = "deny" | "once" | "session";
+
+function answerScope(answer: PolicyAnswer): AnswerScope {
+  if (answer === true) return "once";
+  // A JS caller can fall through the type here; this check is the boundary
+  // that turns that into a denial, so a runtime check is the point.
+  const value: unknown = answer;
+  // pi-lens-ignore: no-runtime-typeof
+  const isObject = typeof value === "object" && value !== null;
+  if (
+    isObject &&
+    (value as { allow?: unknown }).allow === true &&
+    (value as { scope?: unknown }).scope === "session"
+  ) {
+    return "session";
+  }
+  return "deny";
+}
+
+/**
  * Choose an optionId matching our allow/reject decision, or `null`.
  *
  * `null` means the harness offered nothing that says what we decided. The
@@ -1358,16 +1386,17 @@ function sha256(text: string): string {
  *
  * A yes `once` takes only `allow_once` (M12-4): the harness that hears
  * "always" may stop asking for that tool, and `ask` and `safe` never mean
- * that. Only a yes for the `session` may reach `allow_always`.
+ * that. Only a yes for the `session` may reach `allow_always`. An answer that
+ * is neither an explicit yes nor an explicit no is a denial.
  */
 function pickOption(
   options: PermissionOption[] = [],
-  answer: PolicyAnswer,
+  scope: AnswerScope,
 ): PermissionOptionId | null {
   const want: PermissionOption["kind"][] =
-    answer === false
+    scope === "deny"
       ? ["reject_once", "reject_always"]
-      : answer === true
+      : scope === "once"
         ? ["allow_once"]
         : ["allow_once", "allow_always"];
   for (const kind of want) {
