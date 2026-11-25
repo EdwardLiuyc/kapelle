@@ -132,12 +132,13 @@ and `daemon.ts`, but not `chat/`, `daemon/` internals or a package. `daemon.ts` 
 `client/` imports only `protocol/types.ts`, and nothing in `core/` or `protocol/`
 imports `client/`. `chat.ts` → `chat/` → `client/`. `render.ts` →
 `core/markdown.ts` and `core/text.ts` are the arrows that point back. These layer
-rules are runtime rules: a declaration-level `import type` may cross them because it
-is erased; an inline `type` specifier still loads its module. `chat.ts` and `chat/`
-talk HTTP only. They import only `client/`, pi-tui, `core/runtime.ts` and each other;
-`chat/tui/term.ts` also imports `@xterm/headless`. `chat/` never imports `chat.ts`,
-because loading the entry runs `main()`. Their subprocesses are the clipboard tool
-(`chat/tui/clipboard.ts`) and the person's shell (`chat/tui/term.ts`).
+and package rules are runtime rules: a declaration-level `import type` may cross
+them because it is erased; an inline `type` specifier still loads its module.
+`chat.ts` and `chat/` talk HTTP only. They import only `client/`, pi-tui,
+`core/runtime.ts` and each other; `chat/tui/term.ts` also imports
+`@xterm/headless`. `chat/` never imports `chat.ts`, because loading the entry
+runs `main()`. Their subprocesses are the clipboard tool (`chat/tui/clipboard.ts`)
+and the person's shell (`chat/tui/term.ts`).
 
 | Path | What it is |
 | --- | --- |

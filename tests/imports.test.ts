@@ -18,7 +18,15 @@
  */
 
 import assert from "node:assert/strict";
-import { readdir, readFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
 import test from "node:test";
 
@@ -30,6 +38,20 @@ interface ImportEdge {
 type SourceGraph = Map<string, ImportEdge[]>;
 
 const SOURCE_DIRS = ["protocol", "core", "client", "chat", "daemon"] as const;
+const ROOT_SOURCE_FILES = [
+  "chat.ts",
+  "cli.ts",
+  "daemon.ts",
+  "render.ts",
+] as const;
+const ROOT_SOURCE_FILE_SET = new Set<string>(ROOT_SOURCE_FILES);
+const EXEMPT_TOP_LEVEL = new Set([
+  "integration",
+  "tests",
+  "node_modules",
+  ".git",
+  "dist",
+]);
 
 const toSlash = (path: string) => path.split(sep).join("/");
 
@@ -74,9 +96,11 @@ const importsOf = (source: string): ImportEdge[] => {
 };
 
 // A test helper has no recovery path; the test runner reports the read error.
-// pi-lens-ignore: unsafe-boundary
+// The walk and its coverage check are one invariant.
+// pi-lens-ignore: unsafe-boundary, high-complexity
 const sourceFiles = async (root: string): Promise<string[]> => {
   const files: string[] = [];
+  const unexpected: string[] = [];
   for (const dir of SOURCE_DIRS) {
     for (const entry of await readdir(join(root, dir), {
       withFileTypes: true,
@@ -88,8 +112,33 @@ const sourceFiles = async (root: string): Promise<string[]> => {
       files.push(file);
     }
   }
-  for (const entry of await readdir(root, { withFileTypes: true })) {
-    if (entry.isFile() && entry.name.endsWith(".ts")) files.push(entry.name);
+
+  const rootEntries = await readdir(root, { withFileTypes: true });
+  for (const entry of rootEntries) {
+    if (!entry.isFile() || !entry.name.endsWith(".ts")) continue;
+    if (!ROOT_SOURCE_FILE_SET.has(entry.name)) unexpected.push(entry.name);
+    else files.push(entry.name);
+  }
+
+  for (const entry of rootEntries) {
+    if (!entry.isDirectory()) continue;
+    if (SOURCE_DIRS.some((dir) => dir === entry.name)) continue;
+    if (EXEMPT_TOP_LEVEL.has(entry.name)) continue;
+    for (const nested of await readdir(join(root, entry.name), {
+      withFileTypes: true,
+      recursive: true,
+    })) {
+      if (!nested.isFile() || !nested.name.endsWith(".ts")) continue;
+      unexpected.push(
+        toSlash(relative(root, join(nested.parentPath, nested.name))),
+      );
+    }
+  }
+
+  if (unexpected.length) {
+    throw new Error(
+      `unexpected top-level source: ${unexpected.sort().join(", ")}`,
+    );
   }
   return files.sort();
 };
@@ -130,8 +179,13 @@ const runtimeCycle = (graph: SourceGraph): string[] | undefined => {
   return undefined;
 };
 
+type TopLevelSource = "cli.ts" | "daemon.ts" | `daemon/${string}`;
+
+const isTopLevel = (file: string): file is TopLevelSource =>
+  file === "cli.ts" || file === "daemon.ts" || file.startsWith("daemon/");
+
 const topLevelViolation = (
-  file: string,
+  file: TopLevelSource,
   target: string | undefined,
 ): string | undefined => {
   if (file === "cli.ts") {
@@ -149,20 +203,16 @@ const topLevelViolation = (
     return "cli.ts may import only client/, core/, protocol/, render.ts, chat.ts and daemon.ts";
   }
 
-  if (file === "daemon.ts" || file.startsWith("daemon/")) {
-    if (target === undefined) return "daemon may not import packages";
-    if (
-      target.startsWith("daemon/") ||
-      target.startsWith("core/") ||
-      target.startsWith("protocol/") ||
-      target === "client/contract.ts"
-    ) {
-      return undefined;
-    }
-    return "daemon may import only daemon/, core/, protocol/ and client/contract.ts";
+  if (target === undefined) return "daemon may not import packages";
+  if (
+    target.startsWith("daemon/") ||
+    target.startsWith("core/") ||
+    target.startsWith("protocol/") ||
+    target === "client/contract.ts"
+  ) {
+    return undefined;
   }
-
-  return undefined;
+  return "daemon may import only daemon/, core/, protocol/ and client/contract.ts";
 };
 
 // Keeping the rule branches together makes the rule book readable.
@@ -204,11 +254,7 @@ const checkGraph = (graph: SourceGraph): string[] => {
         continue;
       }
 
-      if (
-        file === "cli.ts" ||
-        file === "daemon.ts" ||
-        file.startsWith("daemon/")
-      ) {
+      if (isTopLevel(file)) {
         const reason = topLevelViolation(file, target);
         if (reason) fail(reason);
         continue;
@@ -279,6 +325,20 @@ test("the whole source tree follows the import rules", async () => {
   assert.ok(graph.has("chat.ts"), "the walk reached chat.ts");
   assert.ok(graph.has("render.ts"), "the walk reached render.ts");
   assert.deepEqual(checkGraph(graph), []);
+});
+
+test("the source walk rejects uncovered top-level sources", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "kapelle-imports-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  for (const dir of SOURCE_DIRS) await mkdir(join(root, dir));
+  for (const file of ROOT_SOURCE_FILES) await writeFile(join(root, file), "");
+  await mkdir(join(root, "widgets"));
+  await writeFile(join(root, "widgets", "a.ts"), "");
+  await writeFile(join(root, "extra.ts"), "");
+  await assert.rejects(
+    sourceFiles(root),
+    /unexpected top-level source: extra\.ts, widgets\/a\.ts/,
+  );
 });
 
 test("the source reader keeps a mixed type/value import at runtime", () => {
@@ -528,7 +588,10 @@ test("type-only imports stay allowed", () => {
   const graph = makeGraph({
     "chat/tui/a.ts": [["../../core/b.ts", true]],
     "protocol/a.ts": [["../core/b.ts", true]],
-    "core/b.ts": [["../client/c.ts", true]],
+    "core/b.ts": [
+      ["../client/c.ts", true],
+      ["marked", true],
+    ],
     "client/c.ts": [],
   });
   assert.deepEqual(checkGraph(graph), []);
