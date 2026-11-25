@@ -614,9 +614,9 @@ unlike `#guardPath` this code is live: claude and copilot both send
 `session/request_permission` (M0-1).
 **Decided 2026-09-02 (measured, raw captures on issue #13): return `cancelled` when no
 option matches, and `selected` only when one does.** The option lists below are on old
-builds; `docs/FINDINGS.md` §M12-4 owns them now (2026-11-25). Measured against claude-agent-acp
-0.49.0, copilot 1.0.80 and opencode 1.18.18, one `edit` request each plus one `execute`
-request from copilot:
+builds; `docs/FINDINGS.md` §M12-4 owns them now (2026-11-25). Measured against
+claude-agent-acp 0.49.0, copilot 1.0.80 and opencode 1.18.18, one `edit` request each plus
+one `execute` request from copilot:
 
 1. **The tail does not fire today.** Both asking harnesses sent exactly three options and
    always included `reject_once`. opencode sent none at all — zero permission requests, and
@@ -1262,9 +1262,10 @@ became two `ask` prompts and two `_client_permission` events. A write that follo
 approved permission for the same resolved path now reuses that decision. **The approval
 covers one write and is consumed by it**, and there is deliberately no standing grant even
 for `allow_always`: `pickOption` prefers `allow_once` and reaches `allow_always` only when
-the harness offered nothing narrower (and, since M12-4, only under `auto`), so an "always" entry would be a session-long grant
-for a path the human never chose to grant that way — `hostile-agent`'s `always-menu`
-scenario is that shape, and its test counts two decisions for two writes. A *denial* is the
+the harness offered nothing narrower (and, since M12-4, only under `auto`), so an "always"
+entry would be a session-long grant for a path the human never chose to grant that way —
+`hostile-agent`'s `always-menu` scenario is that shape, and its test counts two decisions
+for two writes. A *denial* is the
 one sticky entry, so a harness that writes after being refused is refused again without
 re-asking. Approval for one path never covers another: measured, a harness approved for
 `ALLOWED.md` that then wrote `OTHER.md` was put back through the policy under the real
