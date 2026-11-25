@@ -277,7 +277,7 @@ request that is not valid HTTP gets `400`.
 | `invalid_run` | `400` | The run file is not valid. | Show the message. It names the field. |
 | `invalid_config` | `400` | A config path is unsafe, or a value a config write would save is not valid. | The person fixes that path or value. `GET /config` reports content-invalid safe files as `200` with `invalid`. |
 | `repo_not_added` | `403` | `cwd` is not inside an added repository. | `POST /repos` first. |
-| `run_not_found` | `404` | No run has this id. | |
+| `run_not_found` | `404` | No run this daemon lists has this id. A live run another process owns is not listed; `DELETE` answers `run_not_owned` instead. | If the run is external, read its `run.json`. |
 | `room_not_found` | `404` | No room has this id. | |
 | `room_deleted` | `410` | A delete removed this room, or a delete is still running, in this daemon. A refused delete restores it. | Stop following it for now. A later room-list poll may show it again if the delete refused; after a restart this daemon knows no deleted id. |
 | `participant_not_found` | `404` | The room has no participant with this id. It may have been removed. | Read `GET /rooms/:id/agents`. |
@@ -870,7 +870,9 @@ A notice's `kind` is `containment`, `unverified`, `version` or `advisory`. **Alw
 `containment` notices.** They tell the person how much the harness is contained. The other
 kinds are advice.
 
-**Refusals:** `404` `run_not_found` for an unknown id.
+**Refusals:** `404` `run_not_found` for an id this daemon does not list. A live
+run another process owns is not listed; `DELETE /runs/:id` answers
+`409 run_not_owned` for it, and its `run.json` remains the live view.
 
 #### `DELETE /runs/:id`
 

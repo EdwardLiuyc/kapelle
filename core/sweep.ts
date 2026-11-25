@@ -305,6 +305,19 @@ function isString(value: unknown): value is string {
   return typeof value === "string";
 }
 
+/** The usable pid and raw start time a record names as its writer. */
+interface RecordedRunWriter {
+  pid: number;
+  startedAt: unknown;
+}
+
+function recordedRunWriter(value: unknown): RecordedRunWriter | null {
+  if (!isObject(value)) return null;
+  const pid = value.pid;
+  if (!isNumber(pid) || !Number.isInteger(pid) || pid <= 0) return null;
+  return { pid, startedAt: value.startedAt };
+}
+
 /**
  * The writer a record names, when that exact process is still alive.
  *
@@ -314,18 +327,11 @@ function isString(value: unknown): value is string {
 export async function verifiedRunWriter(
   value: unknown,
 ): Promise<RunWriter | null> {
-  if (!isObject(value)) return null;
-  const pid = value.pid;
-  const startedAt = value.startedAt;
-  if (
-    !isNumber(pid) ||
-    !Number.isInteger(pid) ||
-    pid <= 0 ||
-    !isString(startedAt)
-  ) {
-    return null;
-  }
-  return (await processIdentity(pid)) === startedAt ? { pid, startedAt } : null;
+  const writer = recordedRunWriter(value);
+  if (!writer || !isString(writer.startedAt)) return null;
+  return (await processIdentity(writer.pid)) === writer.startedAt
+    ? { pid: writer.pid, startedAt: writer.startedAt }
+    : null;
 }
 
 /** The task objects in a record, ignoring anything malformed. */
@@ -966,21 +972,34 @@ function readRecords(pass: RepoPass): Map<string, RunRecord | null> | null {
  * `events.jsonl` is left alone: a `_client_run_finished` the run never wrote
  * would be a lie, and a stream that ends without one already means "ask
  * `GET /runs/:id`".
+ *
+ * Returns the ids left running for a verified live writer, so retention does
+ * not report the same run a second time.
  */
 async function markCrashed(
   records: Map<string, RunRecord | null>,
   pass: RepoPass,
-): Promise<void> {
+): Promise<Set<string>> {
   const { runsDir, now, onNotice } = pass;
+  const liveWriters = new Set<string>();
   for (const [id, record] of records) {
     if (record?.status !== "running") continue;
+    const recorded = recordedRunWriter(record.writer);
     const writer = await verifiedRunWriter(record.writer);
     if (writer) {
       onNotice(
         `leaving run ${id} in ${pass.root} alone: its writer pid ` +
           `${writer.pid} is still alive`,
       );
+      liveWriters.add(id);
       continue;
+    }
+    if (recorded && !isString(recorded.startedAt) && isAlive(recorded.pid)) {
+      onNotice(
+        `marking run ${id} in ${pass.root} killed: its recorded writer pid ` +
+          `${recorded.pid} is alive but has no start time, so it cannot be ` +
+          "verified; stop it by hand if it is still running",
+      );
     }
     const rewritten: RunRecord = {
       ...record,
@@ -1004,6 +1023,7 @@ async function markCrashed(
       );
     }
   }
+  return liveWriters;
 }
 
 /** Reap every run whose window has passed. */
@@ -1011,6 +1031,7 @@ async function reapExpired(
   records: Map<string, RunRecord | null>,
   managed: readonly ManagedWorktree[],
   pass: RepoPass,
+  liveWriters: ReadonlySet<string>,
 ): Promise<void> {
   for (const [id, record] of records) {
     if (!record) continue;
@@ -1020,10 +1041,12 @@ async function reapExpired(
     // Its worktree is the one thing this pass exists to keep, and `startedAt`
     // is no licence to remove it — the story reaps terminal runs only.
     if (record.status === "running") {
-      pass.onNotice(
-        `keeping run ${id} in ${pass.root}: it still reads running, so it ` +
-          `is not terminal and retention does not apply`,
-      );
+      if (!liveWriters.has(id)) {
+        pass.onNotice(
+          `keeping run ${id} in ${pass.root}: it still reads running, so it ` +
+            `is not terminal and retention does not apply`,
+        );
+      }
       continue;
     }
     const since = terminalSince(record);
@@ -1168,7 +1191,7 @@ async function sweepRepo(
     onNotice(`skipping reap and orphan cleanup in ${root} until the next boot`);
     return;
   }
-  await markCrashed(records, pass);
+  const liveWriters = await markCrashed(records, pass);
 
   const managed = existsSync(join(stateDirFor(root), "wt"))
     ? await managedWorktrees(pass)
@@ -1180,7 +1203,7 @@ async function sweepRepo(
     return;
   }
 
-  await reapExpired(records, managed, pass);
+  await reapExpired(records, managed, pass, liveWriters);
 
   // Without every room's record, a room's checkout here is not provably
   // an orphan (M11-2).

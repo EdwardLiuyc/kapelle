@@ -247,12 +247,11 @@ test("a running record is left alone while its writer is alive", async (t) => {
   const notices = await sweep(root, join(await tempDir(t), "children.json"));
 
   assert.equal(await readFile(path, "utf8"), before, "the record is untouched");
+  const liveNotices = notices.filter((notice) => notice.includes(RUN_ID));
+  assert.equal(liveNotices.length, 1, notices.join("\n"));
   assert.ok(
-    notices.some(
-      (notice) =>
-        notice.includes(`leaving run ${RUN_ID}`) &&
-        notice.includes(`pid ${pid}`),
-    ),
+    liveNotices[0]?.includes(`leaving run ${RUN_ID}`) &&
+      liveNotices[0]?.includes(`pid ${pid}`),
     notices.join("\n"),
   );
 });
@@ -320,9 +319,16 @@ test("a running record whose writer start time is null is rewritten as killed", 
     writer: { pid, startedAt: null },
   });
 
-  await sweep(root, join(await tempDir(t), "children.json"));
+  const notices = await sweep(root, join(await tempDir(t), "children.json"));
 
   assert.equal((await readRun(dir)).status, "killed");
+  assert.ok(
+    notices.some(
+      (notice) =>
+        notice.includes(`pid ${pid}`) && notice.includes("no start time"),
+    ),
+    notices.join("\n"),
+  );
 });
 
 test("a writer-less record written before this story is read as today", async (t) => {

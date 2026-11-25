@@ -542,6 +542,28 @@ test("DELETE /runs/:id answers 404 for an external record that is not an object"
   assert.equal(refused.body.error.code, "run_not_found");
 });
 
+test("DELETE /runs/:id answers 404 when the external writer is dead", async (t) => {
+  const d = await boot(t);
+  const root = await added(d, await gitRepo(t));
+  const id = "20261125-000001-dead";
+  const pid = spawnSync(process.execPath, ["-e", ""]).pid as number;
+  const dir = join(stateDirFor(root), "runs", id);
+  await mkdir(dir, { recursive: true });
+  await writeFile(
+    join(dir, "run.json"),
+    JSON.stringify({
+      runId: id,
+      status: "running",
+      writer: { pid, startedAt: "2000-01-01T00:00:00.000Z" },
+    }),
+  );
+
+  const missing = await api(d, "DELETE", `/runs/${id}`);
+
+  assert.equal(missing.status, 404);
+  assert.equal(missing.body.error.code, "run_not_found");
+});
+
 test("GET /runs and kapelle ps list a live run's tasks, then its verdict", async (t) => {
   const d = await boot(t);
   const cwd = await added(d, await tempDir(t));

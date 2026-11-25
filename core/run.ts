@@ -393,6 +393,9 @@ export async function runRun(
   // Recorded on every write, so a daemon boot can tell this live run from one
   // whose writer died. A null start time is kept honestly; it cannot verify a
   // live writer, so the sweep treats it like a record written before this field.
+  // The lookup can block for up to `ps`'s 2 s timeout, but no worktree or task
+  // exists yet, and filling it after the first write would leave that record
+  // unverifiable to a daemon boot.
   const writer: RunWriter = {
     pid: process.pid,
     startedAt: await processIdentity(process.pid),
