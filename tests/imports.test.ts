@@ -32,14 +32,31 @@ const targetOf = (
 ): string | undefined =>
   spec?.startsWith(".") ? toSlash(join(dirname(file), spec)) : undefined;
 
+/** True when a named import/export clause holds only `type` specifiers. */
+const allTypeSpecifiers = (clause: string): boolean => {
+  const named = clause.match(/^\s*\{([\s\S]*)\}\s*$/);
+  if (!named) return false;
+  const specs = named[1]
+    .split(",")
+    .map((spec) => spec.trim())
+    .filter(Boolean);
+  return specs.length > 0 && specs.every((spec) => /^type\s/.test(spec));
+};
+
 const importsOf = (source: string): ImportEdge[] => {
   // `export … from` and a bare `import "x"` load a module too. A literal
   // `import("x")` loads one when it runs, so it gets the same check.
   const staticImports = [
     ...source.matchAll(
-      /^[ \t]*(?:(?:import|export)( type)?[^;]*?from|import) "([^"]+)";/gms,
+      /^[ \t]*(?:(import|export)([^;]*?)\bfrom|import) "([^"]+)";/gms,
     ),
-  ].map((m) => ({ spec: m[2] ?? "", typeOnly: Boolean(m[1]) }));
+  ].map((m) => {
+    const clause = m[2] ?? "";
+    return {
+      spec: m[3] ?? "",
+      typeOnly: /^\s*type\b/.test(clause) || allTypeSpecifiers(clause),
+    };
+  });
   const dynamicImports = [
     ...source.matchAll(/\bimport\s*\(\s*(["'`])([^"'`]+)\1\s*\)/g),
   ].map((m) => ({ spec: m[2], typeOnly: false }));
@@ -220,6 +237,15 @@ test("the source reader keeps a mixed type/value import at runtime", () => {
   ]);
 });
 
+test("the source reader treats an all-type named import as type-only", () => {
+  assert.deepEqual(importsOf('import { type A } from "./a.ts";'), [
+    { spec: "./a.ts", typeOnly: true },
+  ]);
+  assert.deepEqual(importsOf('export { type A, type B } from "./b.ts";'), [
+    { spec: "./b.ts", typeOnly: true },
+  ]);
+});
+
 test("the checker rejects each layer rule", () => {
   const cases: [string, SourceGraph][] = [
     [
@@ -240,6 +266,13 @@ test("the checker rejects each layer rule", () => {
       "client",
       makeGraph({
         "client/a.ts": [["../core/b.ts"]],
+        "core/b.ts": [],
+      }),
+    ],
+    [
+      "chat.ts",
+      makeGraph({
+        "chat.ts": [["./core/b.ts"]],
         "core/b.ts": [],
       }),
     ],
@@ -283,7 +316,7 @@ test("the named exceptions belong to their named file", () => {
       ["../../core/runtime.ts"],
     ],
     "chat/tui/term.ts": [["@xterm/headless"]],
-    "client/daemon.ts": [],
+    "client/daemon.ts": [["../protocol/types.ts"]],
     "core/runtime.ts": [],
   });
   assert.deepEqual(checkGraph(allowed), []);
