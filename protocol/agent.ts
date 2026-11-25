@@ -1,7 +1,7 @@
 /**
  * `AcpAgent`: one harness subprocess, JSON-RPC over stdio, and the path guard.
  *
- * Four rules keep each decision honest. They are easy to break:
+ * Five rules keep each decision honest. They are easy to break:
  *
  * - **The path guard is not the policy.** `#guardPath` compares realpaths
  *   and applies in every mode, `auto` included.
@@ -14,8 +14,12 @@
  *   person saw** (#310). A denial is sticky. The detail is at
  *   `#writeDecisions`.
  * - **`pickOption` returns `null` rather than guess.** Never fall back to
- *   `options[0]` (#13): claude lists `allow_always` first, so a denial
- *   could become a lasting grant.
+ *   `options[0]` (#13): claude 0.49.0 listed `allow_always` first, so a
+ *   denial could become a lasting grant.
+ * - **Only a yes for the `session` may send `allow_always`** (M12-4). A
+ *   plain `true` is a yes `once`, and `pickOption` then takes `allow_once`
+ *   or nothing. `ask` and `safe` answer `once`; only `auto` answers
+ *   `session`. Our own rule above does not change with it.
  */
 
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
@@ -152,7 +156,17 @@ export interface PolicyRequest {
   options: PermissionOption[];
 }
 
-export type Policy = (req: PolicyRequest) => boolean | Promise<boolean>;
+/**
+ * A policy's answer (M12-4). `true` is yes, `once`: `pickOption` takes only
+ * `allow_once`. `{ allow: true, scope: "session" }` is yes, and the harness
+ * may keep it: `pickOption` may take `allow_always` when no `allow_once` is
+ * offered. Only `auto` answers `session`.
+ */
+export type PolicyAnswer = boolean | { allow: true; scope: "session" };
+
+export type Policy = (
+  req: PolicyRequest,
+) => PolicyAnswer | Promise<PolicyAnswer>;
 
 /**
  * One event leaving this client, tagged with the agent that caused it.
@@ -343,11 +357,11 @@ export class AcpAgent {
   //
   // An approval covers **one** write and is consumed by it. There is no
   // standing grant here even when the harness's menu was `allow_always`:
-  // `pickOption` prefers `allow_once` and reaches `allow_always` only when the
-  // harness offered nothing narrower, so an "always" entry would be a session
-  // -long grant for a path nobody chose to grant that way. A denial is the one
-  // sticky entry, so a harness that writes after being refused is refused
-  // again without re-asking.
+  // `pickOption` reaches `allow_always` only for a yes for the `session`, and
+  // only when the harness offered nothing narrower, so an "always" entry
+  // would be a session-long grant for a path nobody chose to grant that way.
+  // A denial is the one sticky entry, so a harness that writes after being
+  // refused is refused again without re-asking.
   //
   // An approval is bound to the text the person saw (#310). A request with
   // edits approves only the files its edits name, each with a sha256 of its
@@ -1088,11 +1102,12 @@ export class AcpAgent {
       edits: [{ abs, path: relative(this.cwd, abs), newText: content }],
     };
     this.#emitPending(toolCall);
-    const allow = await this.policy({
-      agent: this.name,
-      toolCall,
-      options: [],
-    });
+    const allow =
+      (await this.policy({
+        agent: this.name,
+        toolCall,
+        options: [],
+      })) !== false;
 
     this.onEvent({
       agent: this.name,
@@ -1213,12 +1228,13 @@ export class AcpAgent {
     if (edits.length > 0) detail.edits = edits;
 
     this.#emitPending(detail);
-    const allow = await this.policy({
+    const answer = await this.policy({
       agent: this.name,
       toolCall: detail,
       options,
     });
-    const optionId = pickOption(options, allow);
+    const allow = answer !== false;
+    const optionId = pickOption(options, answer);
 
     // Remember what this edit decision covers. The follow-up `fs/write_text_file`
     // that a well-behaved harness sends after an approved permission request is
@@ -1339,14 +1355,21 @@ function sha256(text: string): string {
  * `reject_once`, so the tail never fired; nothing in the protocol promises
  * that, and the failure would have been invisible because the denial is still
  * what `_client_permission` records.
+ *
+ * A yes `once` takes only `allow_once` (M12-4): the harness that hears
+ * "always" may stop asking for that tool, and `ask` and `safe` never mean
+ * that. Only a yes for the `session` may reach `allow_always`.
  */
 function pickOption(
   options: PermissionOption[] = [],
-  allow: boolean,
+  answer: PolicyAnswer,
 ): PermissionOptionId | null {
-  const want: PermissionOption["kind"][] = allow
-    ? ["allow_once", "allow_always"]
-    : ["reject_once", "reject_always"];
+  const want: PermissionOption["kind"][] =
+    answer === false
+      ? ["reject_once", "reject_always"]
+      : answer === true
+        ? ["allow_once"]
+        : ["allow_once", "allow_always"];
   for (const kind of want) {
     const hit = options.find((o) => o.kind === kind);
     if (hit) return hit.optionId;

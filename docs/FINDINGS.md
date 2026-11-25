@@ -22,6 +22,7 @@ client commit and spike branch — they differ, and by enough to matter:
 | Models and login: `session/load` logged out | 2026-10-30 | none: no client code ran | `spike/m9-4b-load-probe` (`load-logged-out-probe.mjs`) |
 | M9-1: Codex, Kimi Code, and the four again | 2026-10-21 | `80cac13` + launch-only `codex` and `kimi` entries | `spike/m9-1-measure` (`turn-probe.mjs`, with `load-probe-simple.mjs` and `models-probe.mjs` from the branches above) |
 | Thinking level | 2026-11-15 | none: no client code ran | `spike/thought-level-probe` (`thought-level-probe.mjs`, `thought-level-pair.mjs`) |
+| M12-4: option kinds | 2026-11-25 | `50a246e` | a probe on `AcpAgent`'s policy, not kept |
 
 Method throughout: each harness spawned behind a transparent stdio proxy that logged every
 JSON-RPC line in both directions, so "did not happen" below means *absent from the wire*,
@@ -45,7 +46,7 @@ column as a claim about that build, not about that harness.
 | starts / completes a turn | yes / yes | yes / yes | yes / yes | §M0-1 |
 | unhandled `session/update` | `available_commands_update` | `available_commands_update` | `available_commands_update`, `config_option_update` | §M0-1 |
 | calls `fs/*` | never — so `#guardPath` binds nothing here | never | never | §M0-1 |
-| `session/request_permission` | **never, ever** — the policy has no jurisdiction, and it wrote a file under `safe` | on writes; reads pass unasked | on shelled commands and writes; **file reads pass unasked** | §M0-1 |
+| `session/request_permission` | **never** on 1.18.18, and it wrote a file under `safe`; 2.0.18 asks for a write outside the root (§M9-1 re-measure) | on writes; reads pass unasked | on shelled commands and writes; **file reads pass unasked** | §M0-1 |
 | calls `terminal/create` | never, even when offered `true` | never, even when offered `true` | never, even when offered `true` | §M0-3 |
 | where commands run | internal (`bash`) | internal (its tool is *named* `Terminal` — a vendor name, not the ACP method) | internal (`shell`) | §M0-3 |
 | do we ever see argv | **no** — title is the bare string `bash`, `rawInput` carries only `cwd`; 2.0.18 sends it late, on the update (§M0-3, 2026-10-09) | yes, but **late**: on `tool_call_update` ~0.5 s after the `tool_call`, which announces `{}` | yes, on the `tool_call` and again on the permission request | §M0-3 |
@@ -85,7 +86,7 @@ These terms describe what the client can see and contain; the measured values ar
 
 - **`shell`** — where the harness runs its commands: `internal` (its own shell), `terminal` (via our `terminal/*`), or `unknown`.
 - **`argvChannel`** — whether the real command text reaches us, and on which message: `none`, `notification` (on `session/update`), or `permission` (on the permission request).
-- **`asksPermission`** — whether the harness ever sends `session/request_permission`; opencode is `false`, so the policy has no jurisdiction over it.
+- **`asksPermission`** — whether the harness sends `session/request_permission` for its usual work. opencode is `false`: it does not ask for a write inside the root. It does ask for a write outside the root, and a refusal of that request binds (§M9-1 re-measure).
 - **`_meta.terminal_output`** — a capability axis, not a fourth `argvChannel` value: it changes how claude-agent-acp renders a Bash call but adds no command output or exit code (§M0-3).
 
 ---
@@ -1834,6 +1835,56 @@ reply to `session/set_config_option` (§All three name the model they ran).
 **Coverage.** One machine, one run each, on 2026-11-15. The model lists move: copilot
 listed 39 models on 2026-10-15 and 16 here, and pi went from 19 to 395. copilot started
 on a different model in the pair run. A later run may see other lists.
+
+## M12-4 · Option kinds per permission request — measured 2026-11-25 (#535)
+
+Which option kinds each harness offers on `session/request_permission`. Under M12-4,
+`ask` and `safe` answer a yes `once`, and `pickOption` then sends only `allow_once`. A
+request that offers only `allow_always` would be refused, so this checks that none does.
+This section owns the option lists; M1a-5's record (`docs/STORIES.md`, 2026-09-02, #13)
+was on older builds.
+
+Method: the client at `50a246e`, one `AcpAgent` per case, in a new temporary folder, in
+the harness's `modeMap.ask` mode. The policy recorded each request's kind, title and
+option kinds, then answered as `safe` does: yes to a kind in `READ_ONLY_KINDS`, no to
+the rest. One prompt each: an edit with the file tool, then a read, a search, a fetch of
+`https://example.com` and a use of a think tool. opencode had one prompt: a write to
+`../outside/out.txt`. The installed builds, as the person decided on #535:
+
+| harness | build | registry pin |
+| --- | --- | --- |
+| claude-agent-acp | 0.89.1 | 0.89.1 |
+| codex-acp | 2.2.2 | 2.2.2 |
+| copilot | **1.0.112** | 1.0.91 |
+| kimi | **2.4.1** | 2.3.0 |
+| opencode | 2.0.18 | 2.0.18 |
+
+| harness | edit | read | search | fetch | think |
+| --- | --- | --- | --- | --- | --- |
+| claude | `allow_once`, `allow_always`, `reject_once` | no request (`read` call) | no request (an `other` call, `ToolSearch`) | `allow_once`, `allow_always`, `reject_once` | no call |
+| codex | `allow_once`, `allow_always`, `reject_once` | no call | no call | no call | no call |
+| copilot | `allow_once`, `allow_always`, `reject_once` | no request (`read` call) | no request (an `other` call) | `allow_once`, `allow_always`, `reject_once` | no call |
+| kimi | `allow_once`, `allow_always`, `reject_once` | no request (`read` call) | no request (a `read` call, `Grep`) | no request (an `other` call, `FetchURL`) | no call |
+
+opencode's write outside the root asked with `allow_once`, `allow_always`,
+`reject_once`, as kind `edit`.
+
+- **Every request offered `allow_once`, first.** So a yes `once` always has an option to
+  send, and M12-4 refuses no request that was measured.
+- **claude 0.89.1 lists `allow_once` first.** 0.49.0 listed `allow_always` first (#13).
+  `pickOption` does not read the order, so nothing changes with it.
+- **Only claude and copilot asked for a read-only kind, and only for `fetch`.** No
+  harness asked for `read`, `search` or `think`. A search often came as `other` or
+  `read`, so the kind is the harness's choice.
+- **No denied write landed.** codex's edit and opencode's outside write were refused, and
+  each turn ended `cancelled` with no file. claude, copilot and kimi ended `end_turn` with
+  no file.
+- **codex in `read-only` made no tool call** for a read, a search, a fetch or a think:
+  it answered from the prompt.
+
+**Coverage.** One run per case, one machine. The prompts asked for the file tool, but a
+harness picks its own tool. A request that did not come is not measured, so "no request"
+says nothing about the options it would offer.
 
 ## What this note does not cover
 
