@@ -319,8 +319,9 @@ export type TaskExecutor = (
 export interface RunOptions {
   /** The run's working directory. Each task's worktree hangs off it. */
   cwd: string;
-  /** The project's `linkPaths`; `daemon/app.ts` and `cli.ts` read them from
-   *  the repository config, and a direct caller without one gets no links. */
+  /** The project's `linkPaths`; `daemon/routes/runs.ts` and `cli.ts` read them
+   *  from the repository config, and a direct caller without one gets no
+   *  links. */
   linkPaths?: readonly string[];
   /** Names the run's worktrees and branches. Minted here when absent, but a
    *  caller that has to print the id — `cli.ts` does — mints it itself: a run
@@ -336,7 +337,7 @@ export interface RunOptions {
    *
    * **One prompt cannot serve two askers**, so `cli.ts` supplies its terminal
    * decider only when at most one task in the run asks *and* a TTY exists, and
-   * re-resolves the rest as `safe`. `daemon/app.ts` supplies M2-3's
+   * re-resolves the rest as `safe`. `daemon/routes/runs.ts` supplies M2-3's
    * pending-decision queue (`core/permissions.ts`), which serves N askers at
    * once. Absent, an `ask` task falls back to `policyFor("ask")`.
    */
@@ -344,17 +345,17 @@ export interface RunOptions {
   /** Notices a run must print even under `--quiet` (#13). */
   onNotice?: (taskId: string, text: string, kind?: Warning["kind"]) => void;
   /** Handed the run's event log once it exists, before any task starts —
-   *  `daemon/app.ts` serves `GET /runs/:id/events` from it (M2-2). Never
-   *  called when the log directory could not be made. */
+   *  `daemon/routes/runs.ts` serves `GET /runs/:id/events` from it (M2-2).
+   *  Never called when the log directory could not be made. */
   onEventLog?: (log: EventLog) => void;
   /** Handed the task list at every transition, the list `run.json` carries —
-   *  `daemon/app.ts` lists a live run's tasks from it (M2-10). Called whether
-   *  or not the record could be written. */
+   *  `daemon/routes/runs.ts` lists a live run's tasks from it (M2-10). Called
+   *  whether or not the record could be written. */
   onTasks?: (tasks: RecordTask[]) => void;
   /** Handed the report and the record's `endedAt` once the terminal record is
    *  written, before `_client_run_finished` is emitted (M5-5) —
-   *  `daemon/app.ts` settles the run's status here, so no `GET` after the event
-   *  reads it as still running. */
+   *  `daemon/routes/runs.ts` settles the run's status here, so no `GET` after
+   *  the event reads it as still running. */
   onFinished?: (report: RunReport, endedAt: string) => void;
 }
 
@@ -382,8 +383,9 @@ export async function runRun(
       (t): RecordTask => entries.get(t.id) ?? { id: t.id, status: "queued" },
     );
   // Before the first await, so a caller that has just started the run can
-  // list its tasks at once — `daemon/app.ts` answers its 202 right after this
-  // call returns, and the first `persist` is a git call away (M2-10).
+  // list its tasks at once — `daemon/routes/runs.ts` answers its 202 right
+  // after this call returns, and the first `persist` is a git call away
+  // (M2-10).
   options.onTasks?.(snapshot());
 
   // The root only, before the preflight (#317). `stateDirRoot` never throws,

@@ -27,7 +27,7 @@ import {
 } from "../core/config.ts";
 import { readRepos, runtimeDir } from "../core/runtime.ts";
 import { processIdentity, sweepBoot } from "../core/sweep.ts";
-import { createDaemonApp, hallDir } from "./app.ts";
+import { createDaemonApp } from "./app.ts";
 import { digest } from "./http.ts";
 import {
   claim,
@@ -35,6 +35,7 @@ import {
   removeDaemonFiles,
   removeDaemonFilesIfMine,
 } from "./record.ts";
+import { hallDir } from "./rooms.ts";
 
 const DEFAULT_PORT = 4719;
 

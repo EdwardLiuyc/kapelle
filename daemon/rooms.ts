@@ -24,13 +24,22 @@
  *
  * It also keeps the ids of deleted rooms, the room creates and deletes that a
  * shutdown must wait for, and the scratch lock that serializes hall adds and
- * removes against scratch snapshots (M12-7a).
+ * removes against scratch snapshots (M12-7a). And it names the hall's folder,
+ * `hallDir`, which the boot sweep needs before any app exists (M12-7b).
  */
 
 import type { ServerResponse } from "node:http";
+import { join } from "node:path";
 import type { RoomListEntry } from "../client/contract.ts";
 import type { Room, RoomRecord } from "../core/room.ts";
+import { stateDir } from "../core/runtime.ts";
 import { type RoomState, toRecordListEntry, toRoomListEntry } from "./dto.ts";
+
+/** The hall's own folder. A function of the state directory only: the boot
+ *  sweep needs it before any app exists. */
+export function hallDir(): string {
+  return join(stateDir(), "hall");
+}
 
 /** A built room. `dismissed` is set only once a dismiss has *finished*
  *  tearing the room down, so it tells a settled dismiss from one still in

@@ -218,8 +218,9 @@ Notes:
   dangling entry of a linked directory.
 - `daemon/main.ts` — `DEFAULT_PORT` / `DEFAULT_PERMISSION_TIMEOUT_S` and flag
   resolution.
-- `daemon/app.ts` — `postRepo`, `postRun`, `GET /config`, `PATCH /config`,
+- `daemon/routes/repos.ts` — `postRepo`, `GET /config`, `PATCH /config`,
   `PUT /config`.
+- `daemon/routes/runs.ts` — `postRun`.
 - `cli.ts` — `runFromFile`, the project-config defaults for `--file`.
 - `core/runfile.ts` — `RunDefaults` and the task > run > config > built-in chain.
 - `core/sweep.ts` — the boot sweep and its use of the per-repository retention

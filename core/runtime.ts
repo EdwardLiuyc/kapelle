@@ -189,7 +189,7 @@ export function stateDirFor(root: string): string {
  * fixes it. Entries are re-checked on use, so a repository that has since
  * moved is refused then, not here.
  *
- * Entries are canonical realpaths — `daemon/app.ts` realpaths at
+ * Entries are canonical realpaths — `daemon/routes/repos.ts` realpaths at
  * `POST /repos`, matching what `stateDirFor` keys on — because a path that is
  * gone cannot be re-resolved to check it against anything else.
  */

@@ -170,8 +170,8 @@ and the person's shell (`chat/tui/term.ts`).
 | `cli.ts` | The CLI and the `kapelle` bin. |
 | `daemon.ts` | The daemon's entry: importing it starts the one daemon for all of the operator's repositories. |
 | `daemon/main.ts` | The daemon's boot: the arguments, the claim, the sweep, the restore, the signals and the listen. |
-| `daemon/app.ts` | `createDaemonApp`: every route and the state behind it. Importing it starts nothing. |
-| `daemon/` | The app's other parts, each importable by a test. |
+| `daemon/app.ts` | `createDaemonApp`: the state, the `Host` and token checks, and the route table. Importing it starts nothing. |
+| `daemon/` | The app's other parts, each importable by a test. `daemon/routes/` holds the table's rows and their handlers. |
 | `client/contract.ts` | The client API as types, plus `API_VERSION`. |
 | `client/daemon.ts` | `daemon.json`, the HTTP calls and the version check. |
 | `client/lifecycle.ts` | The daemon's life from a client (M9-2): start it when none answers, and stop it. |
