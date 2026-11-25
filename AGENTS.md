@@ -122,15 +122,22 @@ node chat.ts attach <roomId> | list | dismiss <roomId> | scratch [clean [--yes]]
 ## Where things are
 
 Dependencies point one way: `cli.ts` and `daemon.ts` → `core/` → `protocol/`.
+`cli.ts` is the composition root: it may also use `client/`, `render.ts`, `chat.ts`
+and `daemon.ts`, but not `chat/`, `daemon/` internals or a package. `daemon.ts` and
+`daemon/` may use `core/`, `protocol/`, `client/contract.ts` and files under
+`daemon/`, but never `chat.ts`, `chat/` or a package.
+
 **`core/` may import `protocol/`. `protocol/` never imports `core/`.** That is why
 `AcpAgent`'s default policy refuses everything instead of being `safePolicy`.
-`client/` imports only `protocol/types.ts`, and nothing in `core/` or `protocol/` imports
-`client/`. `chat.ts` → `chat/` → `client/`. `render.ts` → `core/markdown.ts` and
-`core/text.ts` are the arrows that point back. `chat.ts` and `chat/` talk HTTP
-only. They import only `client/`,
-pi-tui, `core/runtime.ts` and each other; `chat/tui/term.ts` also imports
-`@xterm/headless`. Their subprocesses are the clipboard tool (`chat/tui/clipboard.ts`)
-and the person's shell (`chat/tui/term.ts`).
+`client/` imports only `protocol/types.ts`, and nothing in `core/` or `protocol/`
+imports `client/`. `chat.ts` → `chat/` → `client/`. `render.ts` →
+`core/markdown.ts` and `core/text.ts` are the arrows that point back. These layer
+rules are runtime rules: a declaration-level `import type` may cross them because it
+is erased; an inline `type` specifier still loads its module. `chat.ts` and `chat/`
+talk HTTP only. They import only `client/`, pi-tui, `core/runtime.ts` and each other;
+`chat/tui/term.ts` also imports `@xterm/headless`. `chat/` never imports `chat.ts`,
+because loading the entry runs `main()`. Their subprocesses are the clipboard tool
+(`chat/tui/clipboard.ts`) and the person's shell (`chat/tui/term.ts`).
 
 | Path | What it is |
 | --- | --- |

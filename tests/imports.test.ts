@@ -3,12 +3,18 @@
  *
  * `chat.ts` and `chat/` stay on the client side of the daemon, `protocol/`
  * stays below `core/`, and `client/` may depend only on itself and the wire
- * types. Tests and integration helpers are allowed to import anything.
+ * types. `cli.ts` is the composition root. `daemon.ts` and `daemon/` may use
+ * `core/`, `protocol/`, `client/contract.ts` and daemon files, but never chat.
+ * Tests and integration helpers are allowed to import anything.
  *
  * The checker works on a graph so a made-up graph can prove each rule without
  * creating files. Declaration-level `import type` / `export type` edges are
  * erased at runtime; inline type specifiers still load their module under
  * `verbatimModuleSyntax`, so they remain runtime edges.
+ *
+ * The reader is lexical, not a TypeScript parser: an import-looking line in a
+ * comment or string can invent an edge. That fails closed, and no source does
+ * it today.
  */
 
 import assert from "node:assert/strict";
@@ -52,12 +58,12 @@ const importsOf = (source: string): ImportEdge[] => {
   // `import("x")` loads one when it runs, so it gets the same check.
   const staticImports = [
     ...source.matchAll(
-      /^[ \t]*(?:(import|export)([^;]*?)\bfrom|import) "([^"]+)";/gms,
+      /^[ \t]*(?:(import|export)([^;]*?)\bfrom|import) (["'])([^"']+)\3;/gms,
     ),
   ].map((m) => {
     const clause = m[2] ?? "";
     return {
-      spec: m[3] ?? "",
+      spec: m[4] ?? "",
       typeOnly: typeOnlyClause(clause),
     };
   });
@@ -124,6 +130,41 @@ const runtimeCycle = (graph: SourceGraph): string[] | undefined => {
   return undefined;
 };
 
+const topLevelViolation = (
+  file: string,
+  target: string | undefined,
+): string | undefined => {
+  if (file === "cli.ts") {
+    if (target === undefined) return "cli.ts may not import packages";
+    if (
+      target === "chat.ts" ||
+      target === "daemon.ts" ||
+      target === "render.ts" ||
+      target.startsWith("client/") ||
+      target.startsWith("core/") ||
+      target.startsWith("protocol/")
+    ) {
+      return undefined;
+    }
+    return "cli.ts may import only client/, core/, protocol/, render.ts, chat.ts and daemon.ts";
+  }
+
+  if (file === "daemon.ts" || file.startsWith("daemon/")) {
+    if (target === undefined) return "daemon may not import packages";
+    if (
+      target.startsWith("daemon/") ||
+      target.startsWith("core/") ||
+      target.startsWith("protocol/") ||
+      target === "client/contract.ts"
+    ) {
+      return undefined;
+    }
+    return "daemon may import only daemon/, core/, protocol/ and client/contract.ts";
+  }
+
+  return undefined;
+};
+
 // Keeping the rule branches together makes the rule book readable.
 // pi-lens-ignore: high-complexity
 const checkGraph = (graph: SourceGraph): string[] => {
@@ -148,6 +189,10 @@ const checkGraph = (graph: SourceGraph): string[] => {
           if (!allowed) fail("chat may use only its named packages");
           continue;
         }
+        if (target === "chat.ts") {
+          fail("chat must not import chat.ts; it runs main()");
+          continue;
+        }
         if (
           target.startsWith("chat/") ||
           target.startsWith("client/") ||
@@ -156,6 +201,16 @@ const checkGraph = (graph: SourceGraph): string[] => {
           continue;
         }
         fail("chat may use only client/, pi-tui and core/runtime.ts");
+        continue;
+      }
+
+      if (
+        file === "cli.ts" ||
+        file === "daemon.ts" ||
+        file.startsWith("daemon/")
+      ) {
+        const reason = topLevelViolation(file, target);
+        if (reason) fail(reason);
         continue;
       }
 
@@ -280,14 +335,23 @@ test("the source reader ignores comments without changing the module load", () =
   ]);
 });
 
+test("the source reader accepts single-quoted static imports", () => {
+  const source = "import { A } from './a.ts';\nexport { B } from './b.ts';";
+  assert.deepEqual(importsOf(source), [
+    { spec: "./a.ts", typeOnly: false },
+    { spec: "./b.ts", typeOnly: false },
+  ]);
+});
+
 test("the checker rejects each layer rule", () => {
-  const cases: [string, SourceGraph][] = [
+  const cases: [string, SourceGraph, string][] = [
     [
       "protocol",
       makeGraph({
         "protocol/a.ts": [["../core/b.ts"]],
         "core/b.ts": [],
       }),
+      "protocol/a.ts imports ../core/b.ts: protocol/ may import only protocol/",
     ],
     [
       "core",
@@ -295,6 +359,7 @@ test("the checker rejects each layer rule", () => {
         "core/a.ts": [["../client/b.ts"]],
         "client/b.ts": [],
       }),
+      "core/a.ts imports ../client/b.ts: core/ may import only core/ or protocol/",
     ],
     [
       "client",
@@ -302,6 +367,7 @@ test("the checker rejects each layer rule", () => {
         "client/a.ts": [["../core/b.ts"]],
         "core/b.ts": [],
       }),
+      "client/a.ts imports ../core/b.ts: client/ may import only client/ and protocol/types.ts",
     ],
     [
       "chat.ts",
@@ -309,28 +375,88 @@ test("the checker rejects each layer rule", () => {
         "chat.ts": [["./core/b.ts"]],
         "core/b.ts": [],
       }),
+      "chat.ts imports ./core/b.ts: chat may use only client/, pi-tui and core/runtime.ts",
     ],
     [
-      "chat",
+      "chat/",
       makeGraph({
         "chat/tui/a.ts": [["../../core/b.ts"]],
         "core/b.ts": [],
       }),
+      "chat/tui/a.ts imports ../../core/b.ts: chat may use only client/, pi-tui and core/runtime.ts",
+    ],
+    [
+      "chat entry",
+      makeGraph({
+        "chat/tui/a.ts": [["../../chat.ts"]],
+        "chat.ts": [],
+      }),
+      "chat/tui/a.ts imports ../../chat.ts: chat must not import chat.ts; it runs main()",
+    ],
+    [
+      "cli.ts",
+      makeGraph({
+        "cli.ts": [["./chat/tui.ts"]],
+        "chat/tui.ts": [],
+      }),
+      "cli.ts imports ./chat/tui.ts: cli.ts may import only client/, core/, protocol/, render.ts, chat.ts and daemon.ts",
+    ],
+    [
+      "daemon.ts",
+      makeGraph({
+        "daemon.ts": [["./chat/tui.ts"]],
+        "chat/tui.ts": [],
+      }),
+      "daemon.ts imports ./chat/tui.ts: daemon may import only daemon/, core/, protocol/ and client/contract.ts",
+    ],
+    [
+      "daemon/",
+      makeGraph({
+        "daemon/a.ts": [["../client/daemon.ts"]],
+        "client/daemon.ts": [],
+      }),
+      "daemon/a.ts imports ../client/daemon.ts: daemon may import only daemon/, core/, protocol/ and client/contract.ts",
     ],
   ];
-  for (const [name, graph] of cases) {
-    assert.equal(checkGraph(graph).length, 1, `${name} rule`);
+  for (const [name, graph, expected] of cases) {
+    assert.deepEqual(checkGraph(graph), [expected], `${name} rule`);
   }
 });
 
 test("the checker rejects a package outside a named exception", () => {
-  const cases = [
-    makeGraph({ "client/a.ts": [["marked"]] }),
-    makeGraph({ "protocol/a.ts": [["marked"]] }),
-    makeGraph({ "core/a.ts": [["marked"]] }),
-    makeGraph({ "chat/tui/a.ts": [["marked"]] }),
+  const cases: [SourceGraph, string][] = [
+    [
+      makeGraph({ "client/a.ts": [["marked"]] }),
+      "client/a.ts imports marked: client/ may not import packages",
+    ],
+    [
+      makeGraph({ "protocol/a.ts": [["marked"]] }),
+      "protocol/a.ts imports marked: protocol/ may not import packages",
+    ],
+    [
+      makeGraph({ "core/a.ts": [["marked"]] }),
+      "core/a.ts imports marked: core/ may not import this package",
+    ],
+    [
+      makeGraph({ "chat/tui/a.ts": [["marked"]] }),
+      "chat/tui/a.ts imports marked: chat may use only its named packages",
+    ],
+    [
+      makeGraph({ "cli.ts": [["marked"]] }),
+      "cli.ts imports marked: cli.ts may not import packages",
+    ],
+    [
+      makeGraph({ "daemon.ts": [["marked"]] }),
+      "daemon.ts imports marked: daemon may not import packages",
+    ],
+    [
+      makeGraph({ "daemon/a.ts": [["marked"]] }),
+      "daemon/a.ts imports marked: daemon may not import packages",
+    ],
   ];
-  for (const graph of cases) assert.equal(checkGraph(graph).length, 1);
+  for (const [graph, expected] of cases) {
+    assert.deepEqual(checkGraph(graph), [expected]);
+  }
 });
 
 test("the named exceptions belong to their named file", () => {
@@ -361,7 +487,41 @@ test("the named exceptions belong to their named file", () => {
     "render.ts": [["./client/daemon.ts"]],
     "client/daemon.ts": [],
   });
-  assert.equal(checkGraph(wrongFile).length, 3);
+  assert.deepEqual(checkGraph(wrongFile), [
+    "chat/tui/panel.ts imports @earendil-works/pi-tui/dist/keys.js: chat may use only its named packages",
+    "chat/tui/theme.ts imports @xterm/headless: chat may use only its named packages",
+    "render.ts imports ./client/daemon.ts: render.ts may import only its named core files",
+  ]);
+});
+
+test("the top-level entries may import their actual lower layers", () => {
+  const allowed = makeGraph({
+    "cli.ts": [
+      ["./client/command.ts"],
+      ["./client/contract.ts"],
+      ["./core/run.ts"],
+      ["./protocol/types.ts"],
+      ["./render.ts"],
+      ["./chat.ts"],
+      ["./daemon.ts"],
+    ],
+    "daemon.ts": [["./daemon/main.ts"]],
+    "daemon/app.ts": [
+      ["../client/contract.ts"],
+      ["../core/run.ts"],
+      ["../protocol/registry.ts"],
+      ["./http.ts"],
+    ],
+    "client/command.ts": [],
+    "client/contract.ts": [],
+    "core/run.ts": [],
+    "protocol/types.ts": [],
+    "render.ts": [],
+    "chat.ts": [],
+    "daemon/main.ts": [],
+    "daemon/http.ts": [],
+  });
+  assert.deepEqual(checkGraph(allowed), []);
 });
 
 test("type-only imports stay allowed", () => {
