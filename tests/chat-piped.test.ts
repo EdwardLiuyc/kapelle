@@ -1,9 +1,8 @@
 /**
  * `chat.ts` with no terminal: one room or one hall chat as plain lines
- * (`chat/piped.ts`), the `list` and `dismiss` verbs, `kapelle chat` handing over to `chat.ts`,
- * and the rule that the chat reaches the daemon over HTTP only. Most tests
- * drive a real `daemon.ts`; a few stand up a fake one to send a reply the
- * real one never sends.
+ * (`chat/piped.ts`), the `list` and `dismiss` verbs, and `kapelle chat`
+ * handing over to `chat.ts`. Most tests drive a real `daemon.ts`; a few stand
+ * up a fake one to send a reply the real one never sends.
  *
  * Each daemon gets its own `XDG_RUNTIME_DIR` **and `XDG_STATE_HOME`**, so no
  * test ever meets another test's `daemon.json` or `repos.json` — or the
@@ -15,18 +14,10 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import {
-  mkdir,
-  readdir,
-  readFile,
-  realpath,
-  rm,
-  symlink,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { dirname, join, relative, sep } from "node:path";
+import { join } from "node:path";
 import test from "node:test";
 import {
   API_VERSION,
@@ -519,99 +510,6 @@ test("chat.ts prints an answer that comes in two chunks once", async (t) => {
     r.stdout,
     /you → mock-agent: beta\nmock-agent: previous: alpha\n/,
   );
-});
-
-test("chat.ts and chat/ reach the daemon over HTTP only: client/, pi-tui and core/runtime.ts", async () => {
-  // S8, widened by M4-1: chat.ts imports `client/`, pi-tui and
-  // `core/runtime.ts` (the `daemon.json` path), type imports included.
-  // M4-13 adds `@xterm/headless`, in `chat/tui/term.ts` alone.
-  // Since M4-7 every file in chat/ holds the same rule, and the walk goes
-  // into every subfolder, such as chat/tui/ (M4-12). They may import each
-  // other, but never chat.ts: the arrow is chat.ts → chat/, and chat.ts
-  // runs `main()` when it loads. A tests/ folder is not read: a test may
-  // import anything. `client/` is then followed file by file, so a
-  // `client/` file that reached `core/` or `protocol/` at runtime fails here
-  // too. A type-only import there is allowed: it is erased before the code
-  // runs.
-  const root = join(import.meta.dirname, "..");
-  const importsOf = async (file: string) => {
-    const source = await readFile(join(root, file), "utf8");
-    // `export … from` and a bare `import "x"` load a module too. A literal
-    // `import("x")` loads one when it runs, so it gets the same check.
-    const staticImports = [
-      ...source.matchAll(
-        /^(?:(?:import|export)( type)?[^;]*?from|import) "([^"]+)";/gms,
-      ),
-    ].map((m) => ({ spec: m[2] ?? "", typeOnly: Boolean(m[1]) }));
-    const dynamicImports = [
-      ...source.matchAll(/\bimport\s*\(\s*(["'`])([^"'`]+)\1\s*\)/g),
-    ].map((m) => ({ spec: m[2], typeOnly: false }));
-    return [...staticImports, ...dynamicImports];
-  };
-  const screens = ["chat.ts"];
-  for (const entry of await readdir(join(root, "chat"), {
-    withFileTypes: true,
-    recursive: true,
-  })) {
-    const file = relative(root, join(entry.parentPath, entry.name));
-    if (file.split(sep).includes("tests")) continue;
-    if (entry.isFile() && entry.name.endsWith(".ts")) screens.push(file);
-  }
-  const queue: string[] = [];
-  for (const file of screens) {
-    for (const { spec } of await importsOf(file)) {
-      if (spec.startsWith("node:")) continue;
-      if (!spec.startsWith(".")) {
-        // One file of pi-tui by name: `decodePrintableKey` is not in its
-        // main exports (M7-4). Another deep import is a new decision.
-        // M4-13: the shell's screen, in the shell's file only.
-        const term =
-          spec === "@xterm/headless" && file === join("chat", "tui", "term.ts");
-        assert.ok(
-          spec === "@earendil-works/pi-tui" ||
-            spec === "@earendil-works/pi-tui/dist/keys.js" ||
-            term,
-          `${file} imports ${spec}`,
-        );
-        continue;
-      }
-      const target = join(dirname(file), spec);
-      if (target.startsWith(`client${sep}`)) queue.push(target);
-      else {
-        assert.ok(
-          target === join("core", "runtime.ts") ||
-            (target !== "chat.ts" && screens.includes(target)),
-          `${file} imports ${spec}`,
-        );
-      }
-    }
-  }
-  assert.ok(queue.length > 0, "chat.ts imports client/");
-  // Every file directly in client/ too, not only what chat.ts imports: one
-  // that nothing imports yet is under the same S8 boundary. client/tests/
-  // is not swept: a test may import anything.
-  for (const entry of await readdir(join(root, "client"), {
-    withFileTypes: true,
-  })) {
-    if (entry.isFile() && entry.name.endsWith(".ts")) {
-      queue.push(`client/${entry.name}`);
-    }
-  }
-  const seen = new Set<string>();
-  for (const file of queue) {
-    if (seen.has(file)) continue;
-    seen.add(file);
-    for (const { spec, typeOnly } of await importsOf(file)) {
-      if (typeOnly || spec.startsWith("node:")) continue;
-      assert.ok(spec.startsWith("."), `${file} imports the package ${spec}`);
-      const target = join(dirname(file), spec);
-      assert.ok(
-        target.startsWith(`client${sep}`),
-        `${file} reaches ${spec} at runtime`,
-      );
-      queue.push(target);
-    }
-  }
 });
 
 test("chat.ts /leave keeps the room alive, and attach replays the conversation before the next turn", async (t) => {

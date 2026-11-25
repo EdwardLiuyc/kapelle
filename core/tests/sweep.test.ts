@@ -20,6 +20,7 @@ import {
   scriptedGit,
   tempDir,
 } from "../../integration/helpers.ts";
+import { DEFAULT_RETENTION_MS } from "../config.ts";
 import { newRoomId } from "../ids.ts";
 import {
   type RoomRecord,
@@ -28,12 +29,7 @@ import {
   writeRoomRecord,
 } from "../room.ts";
 import { stateDirFor } from "../runtime.ts";
-import {
-  DEFAULT_RETENTION_MS,
-  processIdentity,
-  roomWork,
-  sweepBoot,
-} from "../sweep.ts";
+import { processIdentity, roomWork, sweepBoot } from "../sweep.ts";
 import {
   mutationKey,
   openWorktrees,

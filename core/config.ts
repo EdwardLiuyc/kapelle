@@ -50,7 +50,6 @@ import { isAbsolute, join } from "node:path";
 import { SECRET_PREFIX } from "../protocol/registry.ts";
 import { DEFAULT_ORCHESTRATOR_TURN_CAP } from "./room.ts";
 import { DEFAULT_MAX_CONCURRENCY, type RunDefaults } from "./runfile.ts";
-import { DEFAULT_RETENTION_MS } from "./sweep.ts";
 import { WATCHDOG_DEFAULTS } from "./watchdog.ts";
 import { STATE_DIR, validateWorktreeLinks } from "./worktree.ts";
 
@@ -96,6 +95,14 @@ export const PROJECT_KEYS = [
   "orchestratorTurnCap",
   "linkPaths",
 ] as const;
+
+/**
+ * The retention window when neither `KAPELLE_RETENTION_MS` nor the
+ * repository's `.kapelle/config.json` names one (decided at pickup
+ * 2026-09-16, raised to 30 days by the developer the same day; the knob
+ * landed with M2-7).
+ */
+export const DEFAULT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** The one place a `KAPELLE_*` name is given a meaning. Anything else under
  *  the prefix warns and stays out — it may be a secret. */
@@ -506,9 +513,7 @@ interface ProjectConfigRow {
   env?: string;
 }
 
-/** Each project key's built-in value, from the module that owns it. A
- *  function, not a constant: `core/sweep.ts` imports this file, so its value
- *  is read only after both have loaded. */
+/** Each project key's built-in value, from the module that owns it. */
 function projectDefaults(): Record<ProjectKey, ProjectValue> {
   return {
     ...WATCHDOG_DEFAULTS,
