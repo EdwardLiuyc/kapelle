@@ -334,8 +334,12 @@ function taskEntries(record: RunRecord): TaskEntry[] {
   return record.tasks.filter(isObject);
 }
 
-/** `run.json`, or `null` when it is missing, truncated or not this run's. */
-function readRecord(path: string, id: string): RunRecord | null {
+/** `run.json`, or `null` when it is missing, truncated or not this run's.
+ *
+ * Exported for `daemon/run.ts`: `DELETE /runs/:id` must recognise a live
+ * external writer without a second, weaker decode of the same file.
+ */
+export function readRunRecord(path: string, id: string): RunRecord | null {
   try {
     const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
     if (!isObject(parsed)) return null;
@@ -948,7 +952,7 @@ function readRecords(pass: RepoPass): Map<string, RunRecord | null> | null {
     return null;
   }
   for (const id of ids) {
-    records.set(id, readRecord(join(runsDir, id, "run.json"), id));
+    records.set(id, readRunRecord(join(runsDir, id, "run.json"), id));
   }
   return records;
 }

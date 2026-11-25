@@ -528,6 +528,20 @@ test("a live CLI run survives a daemon boot, stays out of ps, and DELETE refuses
   assert.match(refused.body.error.message, new RegExp(`pid ${cli.child.pid}`));
 });
 
+test("DELETE /runs/:id answers 404 for an external record that is not an object", async (t) => {
+  const d = await boot(t);
+  const root = await added(d, await gitRepo(t));
+  const id = "20261125-000000-null";
+  const dir = join(stateDirFor(root), "runs", id);
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "run.json"), "null\n");
+
+  const refused = await api(d, "DELETE", `/runs/${id}`);
+
+  assert.equal(refused.status, 404);
+  assert.equal(refused.body.error.code, "run_not_found");
+});
+
 test("GET /runs and kapelle ps list a live run's tasks, then its verdict", async (t) => {
   const d = await boot(t);
   const cwd = await added(d, await tempDir(t));

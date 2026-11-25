@@ -305,6 +305,26 @@ test("a running record whose writer pid was reused is rewritten as killed", asyn
   assert.equal((await readRun(dir)).status, "killed");
 });
 
+test("a running record whose writer start time is null is rewritten as killed", async (t) => {
+  const root = await gitRepo(t);
+  const writer = sleeper(t);
+  const pid = writer.pid as number;
+  await waitForIdentity(pid);
+  const dir = await writeRun(root, {
+    runId: RUN_ID,
+    root,
+    cwd: root,
+    status: "running",
+    startedAt: "2026-09-01T00:00:00.000Z",
+    tasks: [{ id: "a", status: "running" }],
+    writer: { pid, startedAt: null },
+  });
+
+  await sweep(root, join(await tempDir(t), "children.json"));
+
+  assert.equal((await readRun(dir)).status, "killed");
+});
+
 test("a writer-less record written before this story is read as today", async (t) => {
   const root = await gitRepo(t);
   const dir = await writeRun(root, {

@@ -10,7 +10,11 @@ import { join } from "node:path";
 import type { RunStatus } from "../client/contract.ts";
 import { type EventLog, openEventLog } from "../core/eventlog.ts";
 import { stateDirFor } from "../core/runtime.ts";
-import { type RunWriter, verifiedRunWriter } from "../core/sweep.ts";
+import {
+  type RunWriter,
+  readRunRecord,
+  verifiedRunWriter,
+} from "../core/sweep.ts";
 import { type RunState, toTaskDto } from "./dto.ts";
 import { refusal } from "./http.ts";
 
@@ -183,13 +187,8 @@ export async function externalLiveWriter(
 ): Promise<RunWriter | undefined> {
   for (const root of repos) {
     const path = join(stateDirFor(root), "runs", id, "run.json");
-    let record: { runId?: unknown; status?: unknown; writer?: unknown };
-    try {
-      record = JSON.parse(readFileSync(path, "utf8"));
-    } catch {
-      continue;
-    }
-    if (record.runId !== id || record.status !== "running") continue;
+    const record = readRunRecord(path, id);
+    if (record?.status !== "running") continue;
     const writer = await verifiedRunWriter(record.writer);
     if (writer) return writer;
   }
