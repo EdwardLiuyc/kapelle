@@ -6,8 +6,9 @@
  * types. Tests and integration helpers are allowed to import anything.
  *
  * The checker works on a graph so a made-up graph can prove each rule without
- * creating files. Type-only edges are erased at runtime and do not break the
- * layer rules or make a runtime loop.
+ * creating files. Declaration-level `import type` / `export type` edges are
+ * erased at runtime; inline type specifiers still load their module under
+ * `verbatimModuleSyntax`, so they remain runtime edges.
  */
 
 import assert from "node:assert/strict";
@@ -36,39 +37,14 @@ const targetOf = (
 const withoutComments = (source: string): string =>
   source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
 
-/**
- * True when a named specifier carries the `type` modifier. The grammar is
- * ambiguous around `as`: `type as` imports a type named `as`, while
- * `type as foo` imports a value named `type` as `foo`. `type as as as` is
- * the type import again.
- */
-const typeOnlySpecifier = (spec: string): boolean => {
-  if (!/^type(?:\s|$)/.test(spec)) return false;
-  const rest = spec.slice(4).trim();
-  if (/^as(?:\s|$)/.test(rest)) {
-    return rest === "as" || /^as\s+as\s+as$/.test(rest);
-  }
-  return rest !== "";
-};
-
-/** True when the whole clause is `import type …` or `export type …`. */
+/** True only for a declaration-level `import type` or `export type` clause. */
 const typeOnlyClause = (clause: string): boolean => {
   const clean = withoutComments(clause).trim();
   if (!/^type(?:\s|$)/.test(clean)) return false;
   const rest = clean.slice(4).trim();
   // `import type from` and `import type, { A }` import a value named `type`.
+  // Inline type specifiers such as `{ type A }` still load the module.
   return rest !== "" && !rest.startsWith(",") && !/^from(?:\s|$)/.test(rest);
-};
-
-/** True when a named import/export clause holds only `type` specifiers. */
-const allTypeSpecifiers = (clause: string): boolean => {
-  const named = withoutComments(clause).match(/^\s*\{([\s\S]*)\}\s*$/);
-  if (!named) return false;
-  const specs = named[1]
-    .split(",")
-    .map((spec) => spec.trim())
-    .filter(Boolean);
-  return specs.length > 0 && specs.every(typeOnlySpecifier);
 };
 
 const importsOf = (source: string): ImportEdge[] => {
@@ -82,7 +58,7 @@ const importsOf = (source: string): ImportEdge[] => {
     const clause = m[2] ?? "";
     return {
       spec: m[3] ?? "",
-      typeOnly: typeOnlyClause(clause) || allTypeSpecifiers(clause),
+      typeOnly: typeOnlyClause(clause),
     };
   });
   const dynamicImports = [
@@ -265,12 +241,12 @@ test("the source reader keeps a mixed type/value import at runtime", () => {
   ]);
 });
 
-test("the source reader treats an all-type named import as type-only", () => {
+test("the source reader keeps an all-type named import at runtime", () => {
   assert.deepEqual(importsOf('import { type A } from "./a.ts";'), [
-    { spec: "./a.ts", typeOnly: true },
+    { spec: "./a.ts", typeOnly: false },
   ]);
   assert.deepEqual(importsOf('export { type A, type B } from "./b.ts";'), [
-    { spec: "./b.ts", typeOnly: true },
+    { spec: "./b.ts", typeOnly: false },
   ]);
 });
 
@@ -289,11 +265,14 @@ test("the source reader keeps a value import named type at runtime", () => {
   ]);
 });
 
-test("the source reader ignores comments inside a type-only clause", () => {
+test("the source reader ignores comments without changing the module load", () => {
   assert.deepEqual(importsOf('import { /* reason */ type A } from "./a.ts";'), [
-    { spec: "./a.ts", typeOnly: true },
+    { spec: "./a.ts", typeOnly: false },
   ]);
   assert.deepEqual(importsOf('import type /* reason */ { A } from "./b.ts";'), [
+    { spec: "./b.ts", typeOnly: true },
+  ]);
+  assert.deepEqual(importsOf('import /* reason */ type { A } from "./b.ts";'), [
     { spec: "./b.ts", typeOnly: true },
   ]);
   assert.deepEqual(importsOf('import type /* reason */ from "./c.ts";'), [
@@ -413,6 +392,24 @@ test("a runtime edge named type still makes a loop", () => {
   assert.deepEqual(checkGraph(graph), [
     "runtime import loop: core/a.ts -> core/b.ts -> core/a.ts",
   ]);
+});
+
+test("an inline type specifier still makes a runtime loop", () => {
+  const graph: SourceGraph = new Map([
+    ["core/a.ts", importsOf('import { type A } from "./b.ts";')],
+    ["core/b.ts", importsOf('import { a } from "./a.ts";')],
+  ]);
+  assert.deepEqual(checkGraph(graph), [
+    "runtime import loop: core/a.ts -> core/b.ts -> core/a.ts",
+  ]);
+});
+
+test("a declaration-level type import is erased from the runtime graph", () => {
+  const graph: SourceGraph = new Map([
+    ["core/a.ts", importsOf('import type { A } from "./b.ts";')],
+    ["core/b.ts", importsOf('import { a } from "./a.ts";')],
+  ]);
+  assert.deepEqual(checkGraph(graph), []);
 });
 
 test("a type-only edge does not make a runtime loop", () => {
