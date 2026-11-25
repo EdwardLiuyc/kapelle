@@ -7,7 +7,7 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.29** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.30** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
 rooms stable, M6-7b, #179, which added `resumed: "loaded"`, M6-7c, #235, which added
 `DELETE /rooms/:id`, M8-1, #265, which added a message's `from`, M8-2, #266, which
@@ -24,7 +24,8 @@ which added the hall; M11-2, #476, which added an agent's own `cwd`; #524,
 which added the hall scratch list and cleanup routes; and #504, which added the
 invalid-file view and `PUT /config`; a stable `GET /config` now answers `200` with
 `invalid` instead of `400` for a safe file whose content is invalid; and M12-4, #535,
-which made `_client_permission`'s `allow` false for a yes with no matching option).
+which made `_client_permission`'s `allow` false for a yes with no matching option;
+and #537, which added `run_not_owned` for a live run another process owns).
 
 ## Contents
 
@@ -276,7 +277,7 @@ request that is not valid HTTP gets `400`.
 | `invalid_run` | `400` | The run file is not valid. | Show the message. It names the field. |
 | `invalid_config` | `400` | A config path is unsafe, or a value a config write would save is not valid. | The person fixes that path or value. `GET /config` reports content-invalid safe files as `200` with `invalid`. |
 | `repo_not_added` | `403` | `cwd` is not inside an added repository. | `POST /repos` first. |
-| `run_not_found` | `404` | No run has this id. | |
+| `run_not_found` | `404` | No run this daemon lists has this id. A live run another process owns is not listed; `DELETE` answers `run_not_owned` instead. | If the run is external, read its `run.json`. |
 | `room_not_found` | `404` | No room has this id. | |
 | `room_deleted` | `410` | A delete removed this room, or a delete is still running, in this daemon. A refused delete restores it. | Stop following it for now. A later room-list poll may show it again if the delete refused; after a restart this daemon knows no deleted id. |
 | `participant_not_found` | `404` | The room has no participant with this id. It may have been removed. | Read `GET /rooms/:id/agents`. |
@@ -284,6 +285,7 @@ request that is not valid HTTP gets `400`.
 | `permission_not_found` | `404` | The daemon never gave out this permission id, or it forgot a closed one at a restart. | |
 | `no_event_log` | `404` | The run or room exists, but it has no event log to stream. | Read `GET /runs/:id` for a run, or `GET /rooms/:id` for a room. |
 | `run_ended` | `409` | You cancelled a run that already ended. | Stop. Read its status. |
+| `run_not_owned` | `409` | The id names a live run written by another process. The daemon does not list it and cannot cancel it. Since 1.30. | Stop it where it was started, then read its `run.json`. |
 | `already_decided` | `409` | The permission was already closed, for any of the reasons in [Why a question closed](#why-a-question-closed). | Stop. Your answer was not used. `GET /permissions/:id` gives the reason. |
 | `queue_full` | `429` | 16 messages already wait for this participant. | Wait for a `_client_turn_ended`, then send again. Or cancel its live prompt, which drops the queue. |
 | `turn_cap` | `429` | The orchestrator already sent the room's cap of worker messages. Since 1.19. | The person raises the cap with `PATCH /rooms/:id` or `/cap <n>`. |
@@ -391,7 +393,7 @@ the `GET` routes take none.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 29 },
+  "apiVersion": { "major": 1, "minor": 30 },
   "capabilities": ["repos", "runs", "events", "permissions", "rooms", "config"]
 }
 ```
@@ -769,7 +771,9 @@ Idempotency-Key: 9b2f6c1e-4d7a-4b8e-a0c3-5f1d2e3a4b5c
 
 #### `GET /runs`
 
-Every run the daemon knows. This includes finished runs from before a restart.
+Every run the daemon knows. This includes finished runs from before a restart. A live
+run written by another process is not listed: this daemon does not own it, and its
+`run.json` remains the live view.
 Provisional: M5-9 adds filters, a fixed order and pages.
 
 **Reply `200`:**
@@ -866,7 +870,9 @@ A notice's `kind` is `containment`, `unverified`, `version` or `advisory`. **Alw
 `containment` notices.** They tell the person how much the harness is contained. The other
 kinds are advice.
 
-**Refusals:** `404` `run_not_found` for an unknown id.
+**Refusals:** `404` `run_not_found` for an id this daemon does not list. A live
+run another process owns is not listed; `DELETE /runs/:id` answers
+`409 run_not_owned` for it, and its `run.json` remains the live view.
 
 #### `DELETE /runs/:id`
 
@@ -876,7 +882,8 @@ Asks the run to stop. Stopping takes a moment, so the reply comes first.
 Poll `GET /runs/:id`, or follow the event stream, to see when it stops.
 
 **Refusals:** `404` `run_not_found` for an unknown id. `409` `run_ended` when the run
-already ended.
+already ended. `409` `run_not_owned` when a record names a live process outside this
+daemon; its `run.json` stays the live view and `GET /runs` omits it.
 
 #### `GET /runs/:id/events`
 

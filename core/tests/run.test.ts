@@ -42,6 +42,7 @@ import {
 } from "../run.ts";
 import { type Run, validateRun } from "../runfile.ts";
 import { stateDirFor } from "../runtime.ts";
+import { processIdentity } from "../sweep.ts";
 
 isolateStateHome();
 
@@ -914,6 +915,8 @@ test("the record names a running task and a queued one, before the run ends", as
   assert.equal(ended.status, report.status);
   assert.equal(typeof ended.startedAt, "string");
   assert.equal(typeof ended.endedAt, "string");
+  assert.equal(ended.writer.pid, process.pid);
+  assert.equal(ended.writer.startedAt, await processIdentity(process.pid));
   assert.equal(ended.cwd, root);
   assert.deepEqual(
     ended.tasks.map((task: { status: string }) => task.status),

@@ -10,6 +10,11 @@ import { join } from "node:path";
 import type { RunStatus } from "../client/contract.ts";
 import { type EventLog, openEventLog } from "../core/eventlog.ts";
 import { stateDirFor } from "../core/runtime.ts";
+import {
+  type RunWriter,
+  readRunRecord,
+  verifiedRunWriter,
+} from "../core/sweep.ts";
 import { type RunState, toTaskDto } from "./dto.ts";
 import { refusal } from "./http.ts";
 
@@ -69,10 +74,10 @@ export function createRuns() {
    * runs directory does not exist yet gets no notice — nothing was skipped.
    *
    * **Only terminal runs.** A record still saying `running` belongs to a
-   * process that is gone; calling it live here would list a run nothing is
-   * running and hand `DELETE` a canceller that does not exist. The M2-5 sweep
-   * ran just before this scan and rewrote those to `killed`; the guard below is
-   * for a record the sweep could not write.
+   * process that is gone, or to a live writer outside this daemon. Neither is
+   * listed: this daemon has no run state or canceller for it. The M2-5 sweep
+   * ran just before this scan and rewrote dead writers to `killed`; the guard
+   * below is for a record the sweep could not write or a live external run.
    */
   function restore(repos: Iterable<string>): void {
     for (const root of repos) {
@@ -168,4 +173,24 @@ export function createRuns() {
   }
 
   return { runs, inFlight, cancels, eventLogs, restore, restoredLog };
+}
+
+/**
+ * The live writer of a run this daemon did not start, if there is one.
+ *
+ * `DELETE /runs/:id` uses this only to refuse with `409 run_not_owned`. The
+ * run stays out of `GET /runs` and `kapelle ps`: its record is the live view.
+ */
+export async function externalLiveWriter(
+  repos: Iterable<string>,
+  id: string,
+): Promise<RunWriter | undefined> {
+  for (const root of repos) {
+    const path = join(stateDirFor(root), "runs", id, "run.json");
+    const record = readRunRecord(path, id);
+    if (record?.status !== "running") continue;
+    const writer = await verifiedRunWriter(record.writer);
+    if (writer) return writer;
+  }
+  return undefined;
 }

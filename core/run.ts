@@ -52,6 +52,7 @@ import {
 } from "./result.ts";
 import type { Run, Task } from "./runfile.ts";
 import { stateDirFor } from "./runtime.ts";
+import { processIdentity, type RunWriter } from "./sweep.ts";
 import { createWatchdog, sweepIntervalMs, type Watchdog } from "./watchdog.ts";
 import {
   changedPaths,
@@ -389,6 +390,16 @@ export async function runRun(
   // so the log and the record exist before anything that can: a preflight
   // that throws after the daemon's 202 still leaves a record that says why.
   const { root } = await stateDirRoot(options.cwd);
+  // Recorded on every write, so a daemon boot can tell this live run from one
+  // whose writer died. A null start time is kept honestly; it cannot verify a
+  // live writer, so the sweep treats it like a record written before this field.
+  // The lookup can block for up to `ps`'s 2 s timeout, but no worktree or task
+  // exists yet, and filling it after the first write would leave that record
+  // unverifiable to a daemon boot.
+  const writer: RunWriter = {
+    pid: process.pid,
+    startedAt: await processIdentity(process.pid),
+  };
 
   // Beside the worktrees, in the same per-repository state directory, and
   // made once for the run (M1b-7). Since #129 that is outside the repository:
@@ -465,6 +476,7 @@ export async function runRun(
           ...(error ? { error } : {}),
           logDir,
           tasks,
+          writer,
         }),
       )
       .catch((err) => {
@@ -700,6 +712,7 @@ interface RunRecordInput {
   error?: string;
   logDir: string;
   tasks: RecordTask[];
+  writer: RunWriter;
 }
 
 /** A finished task, as the record carries it. */
@@ -740,6 +753,7 @@ async function writeRunRecord(input: RunRecordInput): Promise<void> {
     ...(input.endedAt ? { endedAt: input.endedAt } : {}),
     ...(input.error ? { error: input.error } : {}),
     tasks: input.tasks,
+    writer: input.writer,
   };
   const path = join(input.logDir, "run.json");
   // Suffixed with the pid: `core/sweep.ts` rewrites this same file on a daemon

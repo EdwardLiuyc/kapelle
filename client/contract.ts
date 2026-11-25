@@ -47,7 +47,7 @@ export type { AgentEvent, Diff, PermissionReason, ToolCallStatus, ToolKind };
  * (M5-2 changed one). Which rows are stable is the table in
  * `docs/CLIENT-API.md`.
  */
-export const API_VERSION = { major: 1, minor: 29 } as const;
+export const API_VERSION = { major: 1, minor: 30 } as const;
 
 /**
  * What this daemon can do (B4). Names are only ever added, never removed or
@@ -154,6 +154,7 @@ export type ErrorCode =
   | "permission_not_found"
   | "no_event_log"
   | "run_ended"
+  | "run_not_owned"
   | "already_decided"
   | "queue_full"
   | "turn_cap"

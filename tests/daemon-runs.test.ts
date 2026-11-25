@@ -437,6 +437,133 @@ test("DELETE cancels a live run, and refuses a settled or unknown one", async (t
   assert.equal((await api(d, "GET", "/runs/nope")).status, 404);
 });
 
+test("a live CLI run survives a daemon boot, stays out of ps, and DELETE refuses it", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const env = dirs(runtime, state);
+  const first = await boot(t, runtime, [], state);
+  const root = await added(first, await gitRepo(t));
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  const file = join(await tempDir(t), "external.run.json");
+  await writeFile(
+    file,
+    JSON.stringify(
+      mockRun([
+        {
+          id: "held",
+          prompt: "hi",
+          cmd: `node ${MOCK_AGENT} --scenario stall`,
+        },
+      ]),
+    ),
+  );
+  const cli = spawnCli(
+    t,
+    ["run", "--file", file, "--cwd", root],
+    "cli.ts",
+    env,
+  );
+
+  const runs = join(stateDirFor(root), "runs");
+  let id = "";
+  await until("the live CLI run record", async () => {
+    let names: string[];
+    try {
+      names = readdirSync(runs);
+    } catch {
+      return false;
+    }
+    if (names.length !== 1) return false;
+    let record: {
+      status?: unknown;
+      tasks?: { status?: unknown }[];
+      writer?: { pid?: unknown };
+    };
+    try {
+      record = JSON.parse(
+        await readFile(join(runs, names[0] as string, "run.json"), "utf8"),
+      );
+    } catch {
+      return false;
+    }
+    if (
+      record.status !== "running" ||
+      record.tasks?.[0]?.status !== "running" ||
+      record.writer?.pid !== cli.child.pid
+    ) {
+      return false;
+    }
+    id = names[0] as string;
+    return true;
+  });
+
+  const recordPath = join(runs, id, "run.json");
+  const before = await readFile(recordPath, "utf8");
+  const second = await boot(t, runtime, [], state);
+
+  assert.equal(
+    await readFile(recordPath, "utf8"),
+    before,
+    "the boot sweep leaves the live writer's record alone",
+  );
+  const record = JSON.parse(await readFile(recordPath, "utf8"));
+  assert.equal(record.status, "running");
+
+  const listed = await api<{ id: string }[]>(second, "GET", "/runs");
+  assert.equal(
+    listed.body.some((run) => run.id === id),
+    false,
+    "an external live run stays out of GET /runs",
+  );
+  assert.equal((await api(second, "GET", `/runs/${id}`)).status, 404);
+  const ps = await spawnCli(t, ["ps"], "cli.ts", env).done;
+  assert.equal(ps.code, 0, ps.stderr);
+  assert.doesNotMatch(ps.stdout, new RegExp(id));
+
+  const refused = await api(second, "DELETE", `/runs/${id}`);
+  assert.equal(refused.status, 409);
+  assert.equal(refused.body.error.code, "run_not_owned");
+  assert.match(refused.body.error.message, new RegExp(`pid ${cli.child.pid}`));
+});
+
+test("DELETE /runs/:id answers 404 for an external record that is not an object", async (t) => {
+  const d = await boot(t);
+  const root = await added(d, await gitRepo(t));
+  const id = "20261125-000000-null";
+  const dir = join(stateDirFor(root), "runs", id);
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "run.json"), "null\n");
+
+  const refused = await api(d, "DELETE", `/runs/${id}`);
+
+  assert.equal(refused.status, 404);
+  assert.equal(refused.body.error.code, "run_not_found");
+});
+
+test("DELETE /runs/:id answers 404 when the external writer is dead", async (t) => {
+  const d = await boot(t);
+  const root = await added(d, await gitRepo(t));
+  const id = "20261125-000001-dead";
+  const pid = spawnSync(process.execPath, ["-e", ""]).pid as number;
+  const dir = join(stateDirFor(root), "runs", id);
+  await mkdir(dir, { recursive: true });
+  await writeFile(
+    join(dir, "run.json"),
+    JSON.stringify({
+      runId: id,
+      status: "running",
+      writer: { pid, startedAt: "2000-01-01T00:00:00.000Z" },
+    }),
+  );
+
+  const missing = await api(d, "DELETE", `/runs/${id}`);
+
+  assert.equal(missing.status, 404);
+  assert.equal(missing.body.error.code, "run_not_found");
+});
+
 test("GET /runs and kapelle ps list a live run's tasks, then its verdict", async (t) => {
   const d = await boot(t);
   const cwd = await added(d, await tempDir(t));

@@ -16,7 +16,9 @@
  *    terminal (`killed`, M5-5: a status only this pass writes, so a client
  *    can tell a run its daemon died under from one that failed) with
  *    `endedAt` = recovery time, which is also what makes
- *    the run visible to the restore scan that follows.
+ *    the run visible to the restore scan that follows. A record that names
+ *    its writer is left alone while that exact process is still alive: a
+ *    `cli.ts run --file` run in an added repository writes the same file.
  * 3. **Worktrees.** `git worktree list` is reconciled against the records: a
  *    run that is terminal **and** past the retention window loses its
  *    worktree, its branches and its run directory (log included, M2-2's only
@@ -144,6 +146,13 @@ export async function processIdentity(pid: number): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/** The process a `run.json` names as its writer. */
+export interface RunWriter {
+  pid: number;
+  /** `ps`'s start time, or `null` when `ps` could not answer at write time. */
+  startedAt: string | null;
 }
 
 /** Is `pid` a live process? `EPERM` means it is, and is someone else's. */
@@ -296,14 +305,47 @@ function isString(value: unknown): value is string {
   return typeof value === "string";
 }
 
+/** The usable pid and raw start time a record names as its writer. */
+interface RecordedRunWriter {
+  pid: number;
+  startedAt: unknown;
+}
+
+function recordedRunWriter(value: unknown): RecordedRunWriter | null {
+  if (!isObject(value)) return null;
+  const pid = value.pid;
+  if (!isNumber(pid) || !Number.isInteger(pid) || pid <= 0) return null;
+  return { pid, startedAt: value.startedAt };
+}
+
+/**
+ * The writer a record names, when that exact process is still alive.
+ *
+ * A pid alone can be reused. Matching the recorded `ps` start time is what
+ * tells a live writer from a later process with the same number.
+ */
+export async function verifiedRunWriter(
+  value: unknown,
+): Promise<RunWriter | null> {
+  const writer = recordedRunWriter(value);
+  if (!writer || !isString(writer.startedAt)) return null;
+  return (await processIdentity(writer.pid)) === writer.startedAt
+    ? { pid: writer.pid, startedAt: writer.startedAt }
+    : null;
+}
+
 /** The task objects in a record, ignoring anything malformed. */
 function taskEntries(record: RunRecord): TaskEntry[] {
   if (!Array.isArray(record.tasks)) return [];
   return record.tasks.filter(isObject);
 }
 
-/** `run.json`, or `null` when it is missing, truncated or not this run's. */
-function readRecord(path: string, id: string): RunRecord | null {
+/** `run.json`, or `null` when it is missing, truncated or not this run's.
+ *
+ * Exported for `daemon/run.ts`: `DELETE /runs/:id` must recognise a live
+ * external writer without a second, weaker decode of the same file.
+ */
+export function readRunRecord(path: string, id: string): RunRecord | null {
   try {
     const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
     if (!isObject(parsed)) return null;
@@ -344,11 +386,8 @@ function terminalSince(record: RunRecord): number | null {
  * `run.json.tmp` is exactly how two processes turn one atomic write into a
  * torn one.
  *
- * ponytail: the pid suffix keeps the write atomic, not the decision. A CLI run
- * that is genuinely live still reads as `running` to a daemon booting beside
- * it and is marked `killed` under it. Closing that needs the writer's pid in
- * the record itself; M2-7 landed as config and did not add one, so this
- * stays open until a record carries its writer.
+ * The record itself names its writer, so the sweep can tell a live CLI run
+ * from one whose process is gone before deciding to rewrite it.
  */
 async function writeRecord(path: string, record: RunRecord): Promise<void> {
   const tmp = `${path}.${process.pid}.tmp`;
@@ -919,7 +958,7 @@ function readRecords(pass: RepoPass): Map<string, RunRecord | null> | null {
     return null;
   }
   for (const id of ids) {
-    records.set(id, readRecord(join(runsDir, id, "run.json"), id));
+    records.set(id, readRunRecord(join(runsDir, id, "run.json"), id));
   }
   return records;
 }
@@ -933,14 +972,35 @@ function readRecords(pass: RepoPass): Map<string, RunRecord | null> | null {
  * `events.jsonl` is left alone: a `_client_run_finished` the run never wrote
  * would be a lie, and a stream that ends without one already means "ask
  * `GET /runs/:id`".
+ *
+ * Returns the ids left running for a verified live writer, so retention does
+ * not report the same run a second time.
  */
 async function markCrashed(
   records: Map<string, RunRecord | null>,
   pass: RepoPass,
-): Promise<void> {
+): Promise<Set<string>> {
   const { runsDir, now, onNotice } = pass;
+  const liveWriters = new Set<string>();
   for (const [id, record] of records) {
     if (record?.status !== "running") continue;
+    const recorded = recordedRunWriter(record.writer);
+    const writer = await verifiedRunWriter(record.writer);
+    if (writer) {
+      onNotice(
+        `leaving run ${id} in ${pass.root} alone: its writer pid ` +
+          `${writer.pid} is still alive`,
+      );
+      liveWriters.add(id);
+      continue;
+    }
+    if (recorded && !isString(recorded.startedAt) && isAlive(recorded.pid)) {
+      onNotice(
+        `marking run ${id} in ${pass.root} killed: its recorded writer pid ` +
+          `${recorded.pid} is alive but has no start time, so it cannot be ` +
+          "verified; stop it by hand if it is still running",
+      );
+    }
     const rewritten: RunRecord = {
       ...record,
       status: "killed",
@@ -963,6 +1023,7 @@ async function markCrashed(
       );
     }
   }
+  return liveWriters;
 }
 
 /** Reap every run whose window has passed. */
@@ -970,6 +1031,7 @@ async function reapExpired(
   records: Map<string, RunRecord | null>,
   managed: readonly ManagedWorktree[],
   pass: RepoPass,
+  liveWriters: ReadonlySet<string>,
 ): Promise<void> {
   for (const [id, record] of records) {
     if (!record) continue;
@@ -979,10 +1041,12 @@ async function reapExpired(
     // Its worktree is the one thing this pass exists to keep, and `startedAt`
     // is no licence to remove it — the story reaps terminal runs only.
     if (record.status === "running") {
-      pass.onNotice(
-        `keeping run ${id} in ${pass.root}: it still reads running, so it ` +
-          `is not terminal and retention does not apply`,
-      );
+      if (!liveWriters.has(id)) {
+        pass.onNotice(
+          `keeping run ${id} in ${pass.root}: it still reads running, so it ` +
+            `is not terminal and retention does not apply`,
+        );
+      }
       continue;
     }
     const since = terminalSince(record);
@@ -1127,7 +1191,7 @@ async function sweepRepo(
     onNotice(`skipping reap and orphan cleanup in ${root} until the next boot`);
     return;
   }
-  await markCrashed(records, pass);
+  const liveWriters = await markCrashed(records, pass);
 
   const managed = existsSync(join(stateDirFor(root), "wt"))
     ? await managedWorktrees(pass)
@@ -1139,7 +1203,7 @@ async function sweepRepo(
     return;
   }
 
-  await reapExpired(records, managed, pass);
+  await reapExpired(records, managed, pass, liveWriters);
 
   // Without every room's record, a room's checkout here is not provably
   // an orphan (M11-2).

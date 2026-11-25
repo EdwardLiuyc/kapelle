@@ -155,7 +155,7 @@ import {
 } from "./http.ts";
 import { createIdempotencyKeys } from "./idempotency.ts";
 import { createRooms, createScratchLock, type RoomEntry } from "./rooms.ts";
-import { cancelRun, createRuns } from "./run.ts";
+import { cancelRun, createRuns, externalLiveWriter } from "./run.ts";
 import { cleanScratch, listScratch } from "./scratch.ts";
 import { streamLog } from "./sse.ts";
 
@@ -1887,7 +1887,19 @@ export function createDaemonApp(deps: DaemonDeps) {
       // acknowledgement and `GET` reports the verdict. `core/run.ts` stops a
       // harness 2 s after the abort, so no timer is needed here.
       const id = one[1] as string;
-      const state = cancelRun(id, runs.get(id), cancels.get(id));
+      const owned = runs.get(id);
+      if (!owned) {
+        const writer = await externalLiveWriter(repos, id);
+        if (writer) {
+          throw refusal(
+            409,
+            "run_not_owned",
+            `run ${id} is owned by live process pid ${writer.pid}; stop it ` +
+              "where it was started",
+          );
+        }
+      }
+      const state = cancelRun(id, owned, cancels.get(id));
       send(res, 202, toRunDto(state) satisfies RunDto);
     } else {
       throw refusal(404, "no_route", `no route for ${req.method} ${pathname}`);

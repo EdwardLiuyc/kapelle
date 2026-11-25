@@ -4702,8 +4702,12 @@ puts the true status back, but the daemon shows `killed` until its own next rest
 start time, as `children.json` has (`processIdentity`). The boot sweep leaves a record
 alone while its writer is alive. A record with no writer, written before this story, is
 read as today.
-**Gap:** what the daemon does with a run that another process owns. The pickup decides
-what `kapelle ps` shows for it, and whether `DELETE /runs/:id` refuses it.
+**Decided at pickup 2026-11-25 (#537):** the daemon does not adopt an externally owned
+live run. `GET /runs` and `kapelle ps` omit it, and its `run.json` is its live view.
+`DELETE /runs/:id` reads that record and answers `409 run_not_owned` while its writer is
+alive. The record uses `writer: { pid, startedAt }`; a live writer is left alone and
+named in a boot notice. Issue #127's `failed` wording is stale: M5-5's `killed` remains
+the rewrite for a dead writer or an old record with no writer.
 *Done when* tests cover a live CLI run kept `running` across a daemon boot, a record whose
 writer died rewritten as `killed`, and an old record with no writer read as today; and
 the `ponytail:` note is gone.
