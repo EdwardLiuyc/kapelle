@@ -24,7 +24,8 @@ which added the hall; M11-2, #476, which added an agent's own `cwd`; #524,
 which added the hall scratch list and cleanup routes; and #504, which added the
 invalid-file view and `PUT /config`; a stable `GET /config` now answers `200` with
 `invalid` instead of `400` for a safe file whose content is invalid; and M12-4, #535,
-which made `_client_permission`'s `allow` false for a yes with no matching option).
+which made `_client_permission`'s `allow` false for a yes with no matching option;
+and #537, which added `run_not_owned` for a live run another process owns).
 
 ## Contents
 
@@ -284,7 +285,7 @@ request that is not valid HTTP gets `400`.
 | `permission_not_found` | `404` | The daemon never gave out this permission id, or it forgot a closed one at a restart. | |
 | `no_event_log` | `404` | The run or room exists, but it has no event log to stream. | Read `GET /runs/:id` for a run, or `GET /rooms/:id` for a room. |
 | `run_ended` | `409` | You cancelled a run that already ended. | Stop. Read its status. |
-| `run_not_owned` | `409` | The id names a live run written by another process. The daemon does not list it and cannot cancel it. | Stop it where it was started, then read its `run.json`. |
+| `run_not_owned` | `409` | The id names a live run written by another process. The daemon does not list it and cannot cancel it. Since 1.29. | Stop it where it was started, then read its `run.json`. |
 | `already_decided` | `409` | The permission was already closed, for any of the reasons in [Why a question closed](#why-a-question-closed). | Stop. Your answer was not used. `GET /permissions/:id` gives the reason. |
 | `queue_full` | `429` | 16 messages already wait for this participant. | Wait for a `_client_turn_ended`, then send again. Or cancel its live prompt, which drops the queue. |
 | `turn_cap` | `429` | The orchestrator already sent the room's cap of worker messages. Since 1.19. | The person raises the cap with `PATCH /rooms/:id` or `/cap <n>`. |

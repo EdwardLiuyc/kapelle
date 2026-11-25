@@ -476,9 +476,18 @@ test("a live CLI run survives a daemon boot, stays out of ps, and DELETE refuses
       return false;
     }
     if (names.length !== 1) return false;
-    const record = JSON.parse(
-      await readFile(join(runs, names[0] as string, "run.json"), "utf8"),
-    );
+    let record: {
+      status?: unknown;
+      tasks?: { status?: unknown }[];
+      writer?: { pid?: unknown };
+    };
+    try {
+      record = JSON.parse(
+        await readFile(join(runs, names[0] as string, "run.json"), "utf8"),
+      );
+    } catch {
+      return false;
+    }
     if (
       record.status !== "running" ||
       record.tasks?.[0]?.status !== "running" ||
