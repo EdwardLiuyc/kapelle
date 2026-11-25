@@ -1265,11 +1265,10 @@ for `allow_always`: `pickOption` prefers `allow_once` and reaches `allow_always`
 the harness offered nothing narrower (and, since M12-4, only under `auto`), so an "always"
 entry would be a session-long grant for a path the human never chose to grant that way —
 `hostile-agent`'s `always-menu` scenario is that shape, and its test counts two decisions
-for two writes. A *denial* is the
-one sticky entry, so a harness that writes after being refused is refused again without
-re-asking. Approval for one path never covers another: measured, a harness approved for
-`ALLOWED.md` that then wrote `OTHER.md` was put back through the policy under the real
-target's name.
+for two writes. A *denial* is the one sticky entry, so a harness that writes after being
+refused is refused again without re-asking. Approval for one path never covers another:
+measured, a harness approved for `ALLOWED.md` that then wrote `OTHER.md` was put back
+through the policy under the real target's name.
 **#310, 2026-11-04.** An approval now binds to the bytes and files the request showed.
 The rule is at `#writeDecisions` in `protocol/agent.ts`. The person took two decisions.
 **D1:** a request that shows no text keeps the one-write path grant, because two
