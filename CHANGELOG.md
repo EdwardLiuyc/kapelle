@@ -19,9 +19,6 @@ What changed in each version that a user can see. A release writes its section;
   `@name /level <id>` picks one (#508). `kapelle room add` takes `--level <id>` (#521).
 - The TUI status line shows the thinking level (#512).
 - `/config` opens a form for the project config, `.kapelle/config.json` (#503).
-- A client-local `client.json` can point the CLI and chat at a daemon through an SSH
-  tunnel. With it set, a local `run --file` is refused and `--detach` is the remote run
-  path (#478).
 
 ### Changed
 
