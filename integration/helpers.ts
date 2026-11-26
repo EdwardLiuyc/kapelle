@@ -1123,9 +1123,7 @@ export async function bootFinding(t: TestContext, path: string) {
 export async function roomLog(
   root: string,
   id: string,
-): Promise<
-  (Omit<RoomEventLine, "update"> & { update: Record<string, unknown> })[]
-> {
+): Promise<(RoomEventLine & { update: Record<string, unknown> })[]> {
   const text = await readFile(
     join(stateDirFor(root), "rooms", id, "events.jsonl"),
     "utf8",

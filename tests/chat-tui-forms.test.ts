@@ -1735,7 +1735,12 @@ test("the status line shows the level after a revive (#510)", {
   const participant = only(full.body);
   let pid: number | undefined;
   await until("the harness pid on the room log", async () => {
-    const lines = await roomLog(cwd, room.id).catch(() => []);
+    const lines = await roomLog(cwd, room.id).catch(
+      (err: NodeJS.ErrnoException) => {
+        if (err.code === "ENOENT") return [];
+        throw err;
+      },
+    );
     const spawned = lines.find(
       (line) => line.update.sessionUpdate === "_client_harness_spawned",
     );

@@ -1198,10 +1198,15 @@ test("a harness that dies leaves its participant exited, the room active, and a 
   const { id } = open.body;
 
   // The harness pid is on the room's log; the SSE stream would not end
-  // while the room lives, so the file is read directly.
+  // while the room lives, so poll the file through roomLog.
   let pid: number | undefined;
   for (const until = Date.now() + 10_000; !pid && Date.now() < until; ) {
-    const lines = await roomLog(root, id).catch(() => []);
+    const lines = await roomLog(root, id).catch(
+      (err: NodeJS.ErrnoException) => {
+        if (err.code === "ENOENT") return [];
+        throw err;
+      },
+    );
     const spawned = lines.find(
       (e) => e.update.sessionUpdate === "_client_harness_spawned",
     );

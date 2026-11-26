@@ -109,7 +109,7 @@ async function record(t: TestContext): Promise<Recording> {
 
   await room.remove(bob.id);
   await room.dismiss();
-  const lines = (await roomLog(repo, roomId)) as unknown as RoomEventLine[];
+  const lines = await roomLog(repo, roomId);
   return { lines, alice: alice.id, bob: bob.id, carol: carol.id };
 }
 
@@ -791,8 +791,7 @@ async function recordRevive(t: TestContext) {
   });
   t.after(() => room.dismiss());
   const dora = room.participants[0] as Participant;
-  const read = async () =>
-    (await roomLog(repo, roomId)) as unknown as RoomEventLine[];
+  const read = () => roomLog(repo, roomId);
   const first = dora.send("one");
   for (const until = Date.now() + 5_000; ; ) {
     const spawned = (await read()).find(
