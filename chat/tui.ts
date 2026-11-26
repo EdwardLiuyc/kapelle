@@ -273,20 +273,48 @@ export function screenLayout(p: {
   return { root, placeSide };
 }
 
+/** The last line for a gone daemon end: a local daemon can be started
+ *  here; a configured remote client must check its tunnel first. */
+function daemonGoneLine(d: DaemonAddress): string {
+  if (d.fromClient) {
+    return (
+      `! the daemon stopped: check the SSH tunnel on local port ${d.port} ` +
+      "or the remote daemon, then run kapelle chat"
+    );
+  }
+  return "! the daemon stopped: start it with kapelle daemon start, then run kapelle chat";
+}
+
+/** How the screen ends when no room is left and the daemon is gone: a
+ *  daemon message keeps its own words, otherwise a local daemon gets the
+ *  start command and a configured remote client gets the tunnel check. */
+export function daemonGoneEnd(
+  message: string | undefined,
+  daemon: DaemonAddress,
+): { code: number; lines: string[] } {
+  return {
+    code: 1,
+    lines: [message ? `! ${message}` : daemonGoneLine(daemon)],
+  };
+}
+
 /** How the screen ends when every room's stream is gone. A refused version
  *  always keeps its own words; a hidden hall that ends last with no daemon
- *  gets the start command instead of a room name. */
+ *  gets the local start command, or the tunnel check for a configured
+ *  remote client. */
 export function lostRoomEnd(
   roomId: string,
   ended: Ended,
   err: unknown,
   hall: boolean,
-  stopped: string,
+  daemon: DaemonAddress,
 ): { code: number; lines: string[] } {
   if (err instanceof VersionRefused) {
     return { code: codeOf(ended), lines: [`! ${err.message}`] };
   }
-  if (hall && ended.kind === "gone") return { code: 1, lines: [stopped] };
+  if (hall && ended.kind === "gone") {
+    return { code: 1, lines: [daemonGoneLine(daemon)] };
+  }
   const msg = err ? [`! ${(err as Error).message}`] : [];
   return {
     code: codeOf(ended),
@@ -1224,10 +1252,9 @@ function chatTui(
     };
 
     quit = (why) => {
-      const stopped =
-        "! the daemon stopped: start it with kapelle daemon start, then run kapelle chat";
       if (why.kind === "gone") {
-        end(1, why.message ? `! ${why.message}` : stopped);
+        const settled = daemonGoneEnd(why.message, d);
+        end(settled.code, ...settled.lines);
         return;
       }
       const { roomId, ended, err } = why;
@@ -1236,7 +1263,7 @@ function chatTui(
         ended,
         err,
         rooms.get(roomId)?.entry.hall === true,
-        stopped,
+        d,
       );
       end(settled.code, ...settled.lines);
     };
