@@ -18,8 +18,9 @@
  * folder of its own, which its release removes while it is still empty. The
  * record keeps the participant's `cwd`, or `scratch`, so a restore opens the
  * same place. `places.repositories` names the repository root of every
- * folder opened, even after that participant leaves or an add fails, so
- * delete can find a kept checkout and its branch.
+ * folder opened, besides the owner's own root, which the owner's record
+ * already names. It keeps a root even after that participant leaves or an
+ * add fails, so delete can find a kept checkout and its branch.
  *
  * **Never `commit` (R37).** The supervisor stays out of the commit business:
  * a participant commits its own branch, and whatever is left uncommitted at a

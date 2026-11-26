@@ -31,7 +31,8 @@
  * **A participant may pick its own folder** (M11-2, decided 2026-11-19,
  * #476), as `core/room/member.ts` says. The hall is the room with
  * `scratchDir`. `room.json` keeps the repository root of every folder the
- * room opened for a participant. The room's record and log stay under the
+ * room opened for a participant, besides its own root, which its `cwd`
+ * names. The room's record and log stay under the
  * room's own root; the boot sweep reads every room's record before it calls
  * a checkout an orphan (`core/sweep.ts`).
  *
