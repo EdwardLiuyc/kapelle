@@ -6,9 +6,12 @@
  * once, sends a prompt per message, and stops it when the room is dismissed
  * or paused. Measured safe on all four harnesses: a prompt sent after
  * `end_turn` completes on the same session with the first turn's context kept
- * (`docs/FINDINGS.md` §Multi-turn). One participant's harness, from its
- * spawn to its stop, with its revive, mode, model and level, is
- * `core/room/participant.ts`; its queue is `core/room/turns.ts`.
+ * (`docs/FINDINGS.md` §Multi-turn). The room is one owner of participants
+ * (M12-8c): one participant's add, remove and record are
+ * `core/room/member.ts`; its harness, from its spawn to its stop, with its
+ * revive, mode, model and level, is `core/room/participant.ts`; its queue is
+ * `core/room/turns.ts`. The room keeps the roster, the log, `room.json`, the
+ * reply to a sender and the turn cap.
  *
  * **A daemon shutdown is a pause, not a dismiss** (M6-7a, R42c). `pause`
  * cancels each live turn, waits `pauseGraceMs` (2 s, §M0-4) for it to end,
@@ -18,27 +21,20 @@
  * (R46). A harness that dies by itself reads `killed` during a turn and
  * `exited` when idle.
  *
- * **One checkout per participant** (M6-6a, R14). Each one runs in
- * `stateDirFor(root)/wt/<roomId>/<participantId>`, on the branch
- * `kapelle/<roomId>/<participantId>`, so turns run in parallel without
- * touching each other's files (R6). Nothing is shared or inherited. `add`
+ * **One checkout per participant** (M6-6a, R14), named by the room's id
+ * (`core/room/member.ts`), so turns run in parallel without touching each
+ * other's files (R6). Nothing is shared or inherited. `add`
  * takes the base to fork from: any ref, including another participant's
  * branch (R35c). A branch holds only what its participant committed, so a
  * participant started from it never sees the other's uncommitted files (R37).
  *
  * **A participant may pick its own folder** (M11-2, decided 2026-11-19,
- * #476). An add with `cwd` gets its checkout in that folder's repository,
- * `stateDirFor(<that root>)/wt/<roomId>/<participantId>`, or runs in the
- * folder itself when it has no git or no commit. An add without `cwd` uses
- * the room's own folder, as before, except in a room with `scratchDir` (the
- * hall): there it gets an empty folder of its own, which its release removes
- * while it is still empty. `room.json` keeps the participant's `cwd`, or
- * `scratch`, so a restore opens the same place. It also keeps the
- * repository root of every folder the room opened for a participant, even
- * after that participant leaves or an add fails, so delete can find a kept
- * checkout and its branch. The room's record and log stay under the room's
- * own root; the boot sweep reads every room's record before it calls a
- * checkout an orphan (`core/sweep.ts`).
+ * #476), as `core/room/member.ts` says. The hall is the room with
+ * `scratchDir`. `room.json` keeps the repository root of every folder the
+ * room opened for a participant, besides its own root, which its `cwd`
+ * names. The room's record and log stay under the
+ * room's own root; the boot sweep reads every room's record before it calls
+ * a checkout an orphan (`core/sweep.ts`).
  *
  * **A kept checkout lasts while its room has a record.** The boot sweep
  * (`core/sweep.ts`) keeps every checkout under a room that has a
@@ -105,14 +101,9 @@
  * one when a machine actually runs out of memory or file handles, not before.
  */
 
-import { existsSync, mkdirSync, rmdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
-import {
-  type ResolvedAgent,
-  resolveAgent,
-  type Warning,
-} from "../protocol/registry.ts";
 import type { MessageKind } from "../protocol/types.ts";
 import type { Seen } from "./check.ts";
 import {
@@ -122,12 +113,21 @@ import {
   reopenEventLog,
 } from "./eventlog.ts";
 import type { EventBus } from "./events.ts";
-import { newParticipantId } from "./ids.ts";
 import type { PermissionQueue } from "./permissions.ts";
 import {
-  createParticipant,
-  type ParticipantControl,
-} from "./room/participant.ts";
+  addMember,
+  type Member,
+  type Notify,
+  type Owner,
+  ownerPlaces,
+  ownWatchdog,
+  type Places,
+  recordOf,
+  release,
+  removeMember,
+  restoreMember,
+  rollback,
+} from "./room/member.ts";
 import {
   crashed,
   roomDir,
@@ -151,19 +151,12 @@ import {
   type RoomStatus,
 } from "./room/types.ts";
 import { checkCeiling, clash } from "./room/validate.ts";
-import {
-  createWatchdog,
-  sweepIntervalMs,
-  WATCHDOG_DEFAULTS,
-  type WatchdogLimits,
-} from "./watchdog.ts";
+import { WATCHDOG_DEFAULTS, type WatchdogLimits } from "./watchdog.ts";
 import {
   BadBase,
   DirtyCheckout,
   fastForwardCheckout,
-  LinkPathError,
   NotFastForward,
-  openWorktrees,
   type WorktreeSetup,
 } from "./worktree.ts";
 
@@ -200,60 +193,6 @@ interface RoomDeps {
   openPlace?: (cwd: string, restoring: boolean) => Promise<WorktreeSetup>;
 }
 
-/** Where one participant works: the room's own setup, one for the folder
- *  it picked, or a scratch folder. `dir` is where it runs with no worktrees. */
-type Place = WorktreeSetup & { dir: string; scratch?: true };
-
-/** The places of one room's participants, each folder opened once. */
-function roomPlaces(
-  roomId: string,
-  cwd: string,
-  setup: WorktreeSetup,
-  openPlace: RoomDeps["openPlace"],
-  remembered: readonly string[] = [],
-) {
-  const home: Place = { ...setup, dir: cwd };
-  const opened = new Map<string, Promise<Place>>();
-  const roots = new Set([setup.root, ...remembered]);
-  const open = (dir: string, restoring: boolean): Promise<Place> => {
-    if (dir === cwd) return Promise.resolve(home);
-    let found = opened.get(dir);
-    if (!found) {
-      found = (
-        openPlace
-          ? openPlace(dir, restoring)
-          : openWorktrees(dir, roomId, { advisory: false })
-      ).then((s) => {
-        roots.add(s.root);
-        return { ...s, dir };
-      });
-      // A failed open is tried again by the next add.
-      found.catch(() => opened.delete(dir));
-      opened.set(dir, found);
-    }
-    return found;
-  };
-  return {
-    home,
-    open,
-    /** The room's own repository is already in the record's `cwd`. */
-    repositories: () => [...roots].filter((root) => root !== setup.root),
-    /** The place a saved participant had. */
-    saved: (p: ParticipantRecord): Promise<Place> => {
-      if (p.scratch) {
-        return Promise.resolve({
-          worktrees: null,
-          root: p.worktree,
-          dir: p.worktree,
-          scratch: true,
-        });
-      }
-      return p.cwd ? open(p.cwd, true) : Promise.resolve(home);
-    },
-  };
-}
-type Places = ReturnType<typeof roomPlaces>;
-
 export interface RoomOptions extends RoomDeps {
   roomId: string;
   /** The folder the room was asked for; the harness runs here when there is
@@ -267,20 +206,6 @@ export interface RoomOptions extends RoomDeps {
 /** §M0-4: every measured harness ends a cancelled turn within 64 ms, so a
  *  turn still live after 2 s is not going to end by itself. */
 const PAUSE_GRACE_MS = 2_000;
-
-type Notify = (text: string, kind?: Warning["kind"]) => void;
-
-/** One participant, and what the room needs to end and save it. */
-interface Member extends ParticipantControl {
-  spec: ResolvedAgent;
-  source: AgentRequest["source"];
-  /** Where it works, and the folder it asked for (M11-2). */
-  place: Place;
-  cwd?: string;
-  /** Its own notices, which `room.json` keeps. */
-  own: RoomNotice[];
-  onNotice: Notify;
-}
 
 /** Opens a room and resolves once every participant's harness has a
  *  session. A harness that cannot start is a throw, never a dead
@@ -303,7 +228,7 @@ export async function openRoom({
     turnCount: 0,
   };
   if (title !== undefined) meta.title = title;
-  const places = roomPlaces(roomId, cwd, deps.setup, deps.openPlace);
+  const places = ownerPlaces(roomId, cwd, deps.setup, deps.openPlace);
   const built = await buildRoom(deps, meta, places);
   for (const request of agents) {
     try {
@@ -330,7 +255,7 @@ export async function restoreRoom({
   turnCap,
   ...deps
 }: RoomDeps & { record: RoomRecord }): Promise<Room> {
-  const places = roomPlaces(
+  const places = ownerPlaces(
     record.id,
     record.cwd,
     deps.setup,
@@ -421,31 +346,8 @@ async function buildRoom(
     );
   }
 
-  // One sweep for the room, as for a run. `ttlMs` is 0, so it never cancels.
-  const watchLimits: WatchdogLimits = {
-    stallIdleMs: limits.stallIdleMs,
-    stallRepeatCount: limits.stallRepeatCount,
-    ttlMs: 0,
-  };
-  const watchdog = createWatchdog({
-    onWarn: (id, kind, text) =>
-      bus.emit({
-        agent: id,
-        update: { sessionUpdate: "_client_stall_warning", kind, text },
-      }),
-    onResolve: (id) =>
-      bus.emit({
-        agent: id,
-        update: { sessionUpdate: "_client_repeat_resolved" },
-      }),
-    onTimeout: () => {},
-  });
-  const sweep = setInterval(
-    () => watchdog.sweep(),
-    sweepIntervalMs([watchLimits]),
-  );
-  // It watches harnesses that already keep the loop alive.
-  sweep.unref();
+  // One sweep for the room, as for a run.
+  const watch = ownWatchdog(bus, limits);
 
   let dismissing: Promise<void> | undefined =
     from?.status === "dismissed" ? Promise.resolve() : undefined;
@@ -458,40 +360,6 @@ async function buildRoom(
   // --- room.json ---------------------------------------------------------
   let saving = false;
   let saveFailed = false;
-  const recordOf = (m: Member): ParticipantRecord => {
-    const p = m.participant;
-    const asked = m.asked();
-    const pending = m.pending();
-    const askedLevel = m.askedLevel();
-    const pendingLevel = m.pendingLevel();
-    return {
-      id: p.id,
-      name: p.name,
-      ...(p.role && { role: p.role }),
-      ...m.source,
-      harness: p.harness,
-      mode: p.mode,
-      settings: { allowReadOutsideRoot: p.settings.allowReadOutsideRoot },
-      ...(asked && { model: asked }),
-      ...(pending && { pendingModel: pending }),
-      ...(askedLevel && { thoughtLevel: askedLevel }),
-      ...(pendingLevel && { pendingThoughtLevel: pendingLevel }),
-      worktree: p.worktree,
-      ...(m.cwd && { cwd: m.cwd }),
-      ...(m.place.scratch && { scratch: true }),
-      ...(p.branch && { branch: p.branch }),
-      ...(p.baseSha && { baseSha: p.baseSha }),
-      ...(p.baseRef && { baseRef: p.baseRef }),
-      ...(m.renamed() && { branchRenamed: true }),
-      sessionId: p.sessionId,
-      turns: m.turns(),
-      ...(p.orderedBy && { orderedBy: p.orderedBy }),
-      status: p.status(),
-      notices: [...m.own],
-      ...(p.resumed && { resumed: p.resumed }),
-      ...(m.turnCancelled() && { turnCancelled: true }),
-    };
-  };
   const status = (): RoomStatus => {
     if (dismissing) return "dismissed";
     if (paused) return "paused";
@@ -546,75 +414,6 @@ async function buildRoom(
     if (SAVED_ON.has(update.sessionUpdate)) saveSoon();
   });
 
-  // **Never `commit` (R37).** The supervisor stays out of the commit business:
-  // a participant commits its own branch, and whatever is left uncommitted at
-  // dismiss stays in the checkout for a person to look at. `keep` is also the
-  // right answer for a participant whose harness never got a session — an
-  // untouched worktree is removed and its branch rolled back either way.
-  //
-  // A release that throws — a locked worktree, a missing git — must not
-  // strand the room: the log still closes, `dismiss()` still resolves, and
-  // the checkout is left in place rather than committed or deleted. The
-  // participant is told, because a dismissed room can never be retried.
-  // The line names the path: after a failed add it is the only record.
-  //
-  // Returns whether it wrote a notice, so the caller never adds a second
-  // line about the same checkout.
-  const release = async (
-    id: string,
-    worktree: string | undefined,
-    onNotice: Notify,
-    place: Place,
-  ): Promise<boolean> => {
-    try {
-      const kept = await place.worktrees?.release(id, "keep");
-      if (kept) onNotice(kept);
-      if (kept || !place.scratch || !worktree) return Boolean(kept);
-      // M11-2: `rmdir` removes only an empty folder, which is what
-      // untouched means; one the harness wrote into is kept.
-      try {
-        rmdirSync(worktree);
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
-        onNotice(
-          `the scratch folder ${worktree} is kept: ` +
-            ((err as NodeJS.ErrnoException).code === "ENOTEMPTY"
-              ? "the agent wrote into it"
-              : (err as Error).message),
-        );
-        return true;
-      }
-      return false;
-    } catch (err) {
-      onNotice(
-        `could not release the participant's checkout` +
-          `${worktree ? ` at ${worktree}` : ""}: ` +
-          `${err instanceof Error ? err.message : String(err)}; ` +
-          "the checkout, its branch or both may be left in place",
-      );
-      return true;
-    }
-  };
-
-  // The rollback half of the spawn, for an add that failed or met a dismiss.
-  // `keep` removes an untouched checkout and its branch, so the room is as it
-  // was. One the harness already wrote into is kept, as at dismiss. A
-  // participant that never joined has no notices of its own, so both lines
-  // go to the room's, which every participant shows.
-  const rollback = async (
-    id: string,
-    worktree: string | undefined,
-    place: Place,
-  ) => {
-    const named = await release(id, worktree, onRoomNotice, place);
-    if (!named && place.worktrees && worktree && existsSync(worktree)) {
-      onRoomNotice(
-        `a participant that did not join left its worktree at ${worktree}: ` +
-          "its harness wrote into it, so the worktree and its branch are kept",
-      );
-    }
-  };
-
   // A dismiss waits for every add and remove in flight, so nothing either
   // started outlives `dismiss()`: an add sees the dismiss and rolls itself
   // back, and a remove finishes its release.
@@ -653,7 +452,7 @@ async function buildRoom(
           );
         }
       } finally {
-        clearInterval(sweep);
+        watch.stop();
         save();
         await eventLog?.close();
       }
@@ -670,7 +469,7 @@ async function buildRoom(
         await Promise.all(members.map((m) => m.pause(pauseGraceMs)));
         paused = true;
       } finally {
-        clearInterval(sweep);
+        watch.stop();
         save();
         await eventLog?.close();
       }
@@ -681,7 +480,7 @@ async function buildRoom(
   /** A stderr log per harness start, as `AcpAgent` opens them with `ax`: a
    *  revive must not write into the first harness's file. */
   let starts = 0;
-  const stderrFor = (id: string) => () => {
+  const stderrFor = (id: string) => {
     if (!eventLog) return undefined;
     const first = join(logDir, `${id}.stderr.log`);
     // The time tells two daemons apart; the count, two starts in one
@@ -742,117 +541,38 @@ async function buildRoom(
     }
   };
 
-  const makeMember = (
-    request: AgentRequest,
-    id: string,
-    place: Place,
-    worktree: string,
-    info: { branch: string; baseSha: string; baseRef?: string } | undefined,
-    own: RoomNotice[],
-    saved?: ParticipantRecord,
-  ): Member => {
-    const onNotice: Notify = (text, kind) =>
-      own.push(kind ? { text, kind } : { text });
-    const made = createParticipant({
-      id,
-      roomId,
-      permissions,
-      request,
-      worktree,
-      info,
-      bus,
-      notices: () => [...roomNotices, ...own],
-      stderrLog: stderrFor(id),
-      dismissed: () => dismissing !== undefined,
-      watchdog,
-      limits: watchLimits,
-      ...(saved && { saved }),
-      ...(noteSession && {
-        report: (seen: Seen) => noteSession(request.spec.name, seen),
-      }),
-      onRevive: () => {
-        paused = false;
-      },
-      onAnswer: answer,
-      onCheckout: (next) => {
-        place.worktrees?.update(id, next);
-        // No stream line carries this: the room record and the next reply do.
-        saveSoon();
-      },
-    });
-    return {
-      ...made,
-      spec: request.spec,
-      source: request.source,
-      place,
-      ...(request.cwd !== undefined && { cwd: request.cwd }),
-      own,
-      onNotice,
-    };
+  const owner: Owner = {
+    id: roomId,
+    bus,
+    permissions,
+    places,
+    ...(scratchDir !== undefined && { scratchDir }),
+    notices: () => roomNotices,
+    onNotice: onRoomNotice,
+    stderrLog: stderrFor,
+    stopped: () => dismissing !== undefined,
+    watchdog: watch.watchdog,
+    limits: watch.limits,
+    ...(noteSession && { noteSession }),
+    onRevive: () => {
+      paused = false;
+    },
+    onTurnEnd: answer,
+    onChange: saveSoon,
   };
 
-  const spawn = async (request: AgentRequest, base: string | undefined) => {
-    const id = newParticipantId();
-    const own: RoomNotice[] = [];
-
-    // Taken here rather than in the participant, so a rollback knows which
-    // path to look at.
-    let worktree: string | undefined;
-    let place = places.home;
-    let made: Member;
-    try {
-      if (request.cwd !== undefined) {
-        place = await places.open(request.cwd, false);
-      } else if (scratchDir !== undefined) {
-        const dir = join(scratchDir, id);
-        place = { worktrees: null, root: dir, dir, scratch: true };
-      }
-      const { worktrees, notice } = place;
-      // Refused, not ignored: the caller asked to start from someone's
-      // work, and a folder with no worktrees has no branch to start from.
-      if (base !== undefined && !worktrees) {
-        throw new RoomRefusal(
-          "invalid_request",
-          `cannot start from ${JSON.stringify(base)}: ${place.dir} is not a ` +
-            "git repository with a commit, so no participant has a branch",
-        );
-      }
-      if (notice) own.push({ text: notice });
-      if (place.scratch) mkdirSync(place.dir, { recursive: true, mode: 0o700 });
-      worktree = worktrees ? await worktrees.acquire(id, base) : place.dir;
-      const info = worktrees?.info(id);
-      if (info) {
-        bus.emit({
-          agent: id,
-          update: {
-            sessionUpdate: "_client_worktree_created",
-            // Listed, not spread, as `core/run.ts` does: a wider `info` must
-            // not shadow `path` (#85).
-            path: worktree,
-            branch: info.branch,
-            baseSha: info.baseSha,
-          },
-        });
-      }
-      made = makeMember(request, id, place, worktree, info, own);
-      await made.launch();
-    } catch (err) {
-      await rollback(id, worktree, place);
-      // The record keeps a repository even when its add failed and left a
-      // written checkout. A later room delete must still find that work.
-      saveSoon();
-      if (err instanceof BadBase) {
-        throw new RoomRefusal("invalid_request", err.message);
-      }
-      throw err instanceof LinkPathError
-        ? new RoomRefusal("invalid_config", err.message)
-        : err;
-    }
+  const spawn = async (request: AgentRequest) => {
+    const made = await addMember(owner, request);
     // A dismiss or pause that began while this harness was starting did not
     // see it.
     if (ended()) {
       await made.stop();
-      await rollback(id, worktree, place);
+      await rollback(
+        owner,
+        made.participant.id,
+        made.participant.worktree,
+        made.place,
+      );
       throw dismissed();
     }
     members.push(made);
@@ -860,7 +580,7 @@ async function buildRoom(
     paused = false;
     const { role } = request;
     bus.emit({
-      agent: id,
+      agent: made.participant.id,
       update: {
         sessionUpdate: "_client_participant_added",
         name: request.name,
@@ -880,7 +600,7 @@ async function buildRoom(
     if (refused) throw refused;
     pending.add(request);
     try {
-      return await spawn(request, request.base);
+      return await spawn(request);
     } finally {
       pending.delete(request);
     }
@@ -947,19 +667,7 @@ async function buildRoom(
     // second remove is told it is gone.
     members.splice(members.indexOf(found), 1);
     participants.splice(participants.indexOf(found.participant), 1);
-    // No `finally` for the release: `stop()` cannot reject. It awaits the
-    // harness's exit, which only resolves, and a turn whose handlers only
-    // emit on a bus that catches every listener. A step that can reject,
-    // added to `stop()`, would strand this checkout with no notice.
-    await found.stop();
-    // After the stop, so the turn's end and the harness's exit come first
-    // and this is the participant's last line.
-    bus.emit({
-      agent: id,
-      update: { sessionUpdate: "_client_participant_removed" },
-    });
-    // The participant is gone, so a kept checkout is the room's to report.
-    await release(id, found.participant.worktree, onRoomNotice, found.place);
+    await removeMember(owner, found);
   };
 
   // M11-2: a branch lives in one repository only.
@@ -1053,49 +761,7 @@ async function buildRoom(
     // A restored roster: each participant as it was saved, its checkout held
     // again so a dismiss can release it.
     for (const saved of from?.participants ?? []) {
-      const spec = resolveAgent(saved.agent ?? "", saved.cmd);
-      const request: AgentRequest = {
-        spec,
-        source:
-          saved.cmd !== undefined
-            ? { cmd: saved.cmd }
-            : { agent: saved.agent as string },
-        name: saved.name,
-        mode: saved.mode,
-        settings: saved.settings,
-        ...(saved.role && { role: saved.role }),
-        ...(saved.model && { model: saved.model }),
-        ...(saved.thoughtLevel && { thoughtLevel: saved.thoughtLevel }),
-      };
-      if (saved.cwd !== undefined) request.cwd = saved.cwd;
-      const place = await places.saved(saved);
-      const info =
-        saved.branch && saved.baseSha
-          ? {
-              branch: saved.branch,
-              baseSha: saved.baseSha,
-              ...(saved.baseRef && { baseRef: saved.baseRef }),
-            }
-          : undefined;
-      if (info) {
-        place.worktrees?.adopt(saved.id, {
-          ...info,
-          ...(saved.branchRenamed === true && { renamed: true }),
-        });
-      }
-      const m = makeMember(
-        request,
-        saved.id,
-        place,
-        saved.worktree,
-        info,
-        [...saved.notices],
-        saved,
-      );
-      // A crash can leave `room.json` older than the checkout: a rename or a
-      // rebase in a turn that never ended. Read the truth before the record is
-      // kept.
-      await m.syncCheckout();
+      const m = await restoreMember(owner, saved);
       members.push(m);
       participants.push(m.participant);
     }
@@ -1188,7 +854,7 @@ async function buildRoom(
       },
     };
   } catch (err) {
-    clearInterval(sweep);
+    watch.stop();
     try {
       await eventLog?.close();
     } catch {

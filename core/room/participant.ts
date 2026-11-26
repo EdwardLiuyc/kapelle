@@ -1,7 +1,8 @@
 /**
- * One participant (M12-8b): its harness, from the spawn to the stop. The
- * room (`core/room.ts`) holds the roster, the checkouts and the record; the
- * queue is `core/room/turns.ts`.
+ * One participant (M12-8b): its harness, from the spawn to the stop. It
+ * knows no room (M12-8c): it has an owner, which lends it an id, notices, a
+ * stop flag and a watchdog, and hears of each turn's end. Its add, remove and
+ * record are `core/room/member.ts`; the queue is `core/room/turns.ts`.
  *
  * **A real session reports its models and login state** (M9-4) to
  * `noteSession`, from the `session/new` or `session/load` response and an
@@ -16,7 +17,9 @@
  * a fresh session and does not remember earlier turns (Half A). The log gets
  * `_client_participant_revived` and the participant reads `resumed:
  * "loaded"` or `"fresh"`. The mode is sent again either way: a load does not
- * keep it (§Mode after load). A dismissed room never revives.
+ * keep it (§Mode after load). A stopped owner never revives it: the
+ * participant then reads `dismissed` and refuses a send as `room_dismissed`,
+ * a room's words, the one owner so far.
  *
  * **A load can remember less than the files show** (§M0-9). That happened
  * only to a harness stopped during a turn, cancelled or cut: the cut turn
@@ -25,21 +28,21 @@
  * pause's), says so with `memoryMayBeBehind`. A settled prompt whose checkout
  * read is still running is not a live harness turn, so a cancel or pause in
  * that window records no cut. Such a participant can read `idle` or
- * `paused`; `room.json` keeps the cancel as `turnCancelled`, which only the
- * next revive reads and clears (decided 2026-10-08, #179; the person's
+ * `paused`; the owner's record keeps the cancel as `turnCancelled`, which only
+ * the next revive reads and clears (decided 2026-10-08, #179; the person's
  * cancel added in #238). So the flag is about the last revive, not about
  * the session's whole history.
  *
  * **A harness may rename its branch or rebase it (M6-6a).** After every turn
  * the participant reads the checkout again (`checkoutIdentity`): the branch
  * `HEAD` names, and the commit the branch's own reflog says its latest rebase
- * moved it onto. A rename updates the participant, and the room follows it
- * into the held checkout and `room.json` (`onCheckout`); a client that shows
- * the branch reads the room again when the turn ends. A rebase also moves the participant's saved `baseSha`. The
- * whole-branch diff independently finds the current merge base from the
- * configured base ref, so it does not depend on this reflog read. A restore
- * reads the checkout once too, because a crash can leave `room.json` older
- * than the branch.
+ * moved it onto. A rename updates the participant, and the owner follows it
+ * into the held checkout and its record (`onCheckout`); a client that shows
+ * the branch reads its owner again when the turn ends. A rebase also
+ * moves the participant's saved `baseSha`. The whole-branch diff independently
+ * finds the current merge base from the configured base ref, so it does not
+ * depend on this reflog read. A restore reads the checkout once too, because a
+ * crash can leave the owner's record older than the branch.
  *
  * **Each participant has its own mode** (M6-5, R12): `auto` by default,
  * `ask` or `safe` at add, and changed by `update` at any time. The filter
@@ -47,7 +50,7 @@
  * harness's own mode follows before the next turn: `harnessModeId` picks
  * `modeMap.safe` for `safe` and `modeMap.ask` for the other two, never
  * `modeMap.auto`. An `ask` request waits in the daemon's queue, named by
- * room, participant and turn (S12a). When a turn ends for any reason, its
+ * owner id, participant and turn (S12a). When a turn ends for any reason, its
  * open decisions are denied as `cancel`; a mode that leaves `ask` answers
  * them as `mode_change`.
  *
@@ -69,7 +72,7 @@
  * changes only the model in use: `models`, the live list, stays as the
  * session sent it, since copilot's reply leaves an option out (§Models and
  * login). `_client_participant_changed` then carries the model in use, or
- * `null` when the harness names none. `room.json` keeps a change not yet
+ * `null` when the harness names none. The owner's record keeps a change not yet
  * sent, so a pause or a restart does not drop it (#398 review). A
  * pending change refused at a start leaves the last model the harness took,
  * not the session's own: that one is set again first.
@@ -164,7 +167,8 @@ function levelsOf(o: LevelOption): { id: string; name: string }[] {
 /** Who the participant is, and where it starts. */
 interface Seat {
   id: string;
-  roomId: string;
+  /** Its owner's id, which the permission queue names it by. */
+  ownerId: string;
   request: AgentRequest;
   /** Its own checkout, or the cwd when there are no worktrees. */
   worktree: string;
@@ -173,28 +177,29 @@ interface Seat {
   saved?: ParticipantRecord;
 }
 
-/** What the room lends it. */
+/** What its owner lends it. */
 interface Lent {
   bus: EventBus;
   permissions: PermissionQueue;
-  /** The room's and the checkout's notices; the participant adds the lines
+  /** The owner's and the checkout's notices; the participant adds the lines
    *  that depend on its mode. */
   notices: () => readonly RoomNotice[];
   /** The stderr log for the next harness, or undefined for none. */
   stderrLog: () => string | undefined;
-  dismissed: () => boolean;
+  /** True once the owner stops for good: no revive, no send. */
+  stopped: () => boolean;
   watchdog: Watchdog;
   limits: WatchdogLimits;
 }
 
-/** What it tells the room. */
+/** What it tells its owner. */
 interface Hooks {
   /** A revive gave the harness a new process. */
   onRevive: () => void;
   /** A turn ended that was not a reply's or a copy's, and not cut by a
-   *  stop: the room sends its answer on (M8-2). */
-  onAnswer: (worker: Participant, answer: Answer) => void;
-  /** The checkout's branch or rebase base changed; the room follows it in
+   *  stop: a room sends its answer on (M8-2). */
+  onTurnEnd: (worker: Participant, answer: Answer) => void;
+  /** The checkout's branch or rebase base changed; the owner follows it in
    *  the held checkout record. Absent when there is no worktree. */
   onCheckout?: (next: {
     branch: string;
@@ -205,13 +210,13 @@ interface Hooks {
   report?: (seen: Seen) => void;
 }
 
-/** What the room drives a participant with, beside its `Participant`. */
+/** What the owner drives a participant with, beside its `Participant`. */
 export interface ParticipantControl {
   participant: Participant;
-  /** The model a revive asks for, which `room.json` keeps: the request's,
-   *  or the last one the person changed to that the harness took. */
+  /** The model a revive asks for, which the owner's record keeps: the
+   *  request's, or the last one the person changed to that the harness took. */
   asked: () => string | undefined;
-  /** A change not yet sent, which `room.json` keeps too. */
+  /** A change not yet sent, which the owner's record keeps too. */
   pending: () => string | undefined;
   /** The same two for the thinking level (M9-9). */
   askedLevel: () => string | undefined;
@@ -235,14 +240,14 @@ export interface ParticipantControl {
 }
 
 /**
- * One participant. A new one has no harness until the room calls `launch`;
+ * One participant. A new one has no harness until the owner calls `launch`;
  * a restored one has none until its next message revives it. On a throw,
  * `launch` has stopped whatever it started; the caller releases the
  * checkout.
  */
 export function createParticipant({
   id,
-  roomId,
+  ownerId,
   permissions,
   request: {
     spec,
@@ -258,12 +263,12 @@ export function createParticipant({
   bus,
   notices,
   stderrLog,
-  dismissed,
+  stopped: ownerStopped,
   watchdog,
   limits,
   saved,
   onRevive,
-  onAnswer,
+  onTurnEnd,
   onCheckout,
   report,
 }: Seat & Lent & Hooks): ParticipantControl {
@@ -296,7 +301,7 @@ export function createParticipant({
   const policy: Policy = (req) =>
     mode === "ask"
       ? permissions.roomPolicy(
-          { roomId, participantId: id, turn: turns },
+          { roomId: ownerId, participantId: id, turn: turns },
           bus,
           turnAbort.signal,
         )(req)
@@ -357,7 +362,7 @@ export function createParticipant({
   // once the harness takes it (M9-6).
   let asked = initialModel;
   // A change the harness has not heard of yet: it was busy, or had none.
-  // `room.json` keeps it, so a pause or a restart does not drop it.
+  // The owner's record keeps it, so a pause or a restart does not drop it.
   let wanted = saved?.pendingModel;
   /** Sets `target` on the live harness. A refusal leaves it on the model it
    *  had: pi and claude say only `Internal error`, so the line is ours, with
@@ -410,7 +415,7 @@ export function createParticipant({
   };
   /** Tells every client the result of a change: the model in use, or
    *  `null` when the harness names none, so each one reads the notice too.
-   *  It also makes the room save `asked` and drop `pendingModel`. */
+   *  It also makes the owner save `asked` and drop `pendingModel`. */
   const announceModel = (levelMoved = false) => {
     bus.emit({
       agent: id,
@@ -475,7 +480,7 @@ export function createParticipant({
 
   // The thinking level (M9-9): its option as the harness last sent it, the
   // line a refusal or a move left, the level a start asks for, and a change
-  // the harness has not heard of yet, which `room.json` keeps.
+  // the harness has not heard of yet, which the owner's record keeps.
   let levelOption: LevelOption | undefined;
   let levelLine: RoomNotice | undefined;
   let askedLevel = initialLevel;
@@ -694,8 +699,8 @@ export function createParticipant({
       }
     } catch (err) {
       await next.stop();
-      // A start that failed carries its next step (M10-2): the room's open,
-      // add or revive error shows it.
+      // A start that failed carries its next step (M10-2): an open, add or
+      // revive error shows it.
       if (session === undefined && err instanceof Error) {
         const help = startHelp(err, spec.setup, next.stderrLog);
         if (help) err.message += `\n${help}`;
@@ -811,7 +816,8 @@ export function createParticipant({
     };
     // A stop sends nothing, also one that came during the checkout read.
     const finish = (answer: Answer | undefined) => {
-      if (answer && !stopping && !dismissed()) onAnswer(participant, answer);
+      if (answer && !stopping && !ownerStopped())
+        onTurnEnd(participant, answer);
     };
     let ready: Promise<void> | undefined;
     if (!agent) ready = revive();
@@ -819,7 +825,7 @@ export function createParticipant({
     else if (wanted || wantedLevel !== undefined) ready = sendPending();
     // **Before the turn's own end line**, so a client that reloads the diff
     // on `_client_turn_ended` already has the rebased `baseSha`, and one that
-    // re-reads the room then sees the new branch.
+    // reads its owner again then sees the new branch.
     const after = async () => {
       try {
         await syncCheckout();
@@ -876,7 +882,7 @@ export function createParticipant({
     id,
     bus,
     begin,
-    closed: () => Boolean(stopped) || stopping || dismissed(),
+    closed: () => Boolean(stopped) || stopping || ownerStopped(),
   });
   const { drop, hold } = queue;
 
@@ -932,7 +938,7 @@ export function createParticipant({
   const setMode = (next: ClientMode) => {
     const leftAsk = mode === "ask" && next !== "ask";
     mode = next;
-    if (leftAsk) permissions.answerParticipant(roomId, id, next === "auto");
+    if (leftAsk) permissions.answerParticipant(ownerId, id, next === "auto");
     if (agent) agent.allowReadOutsideRoot = readsOutside();
     warn();
   };
@@ -968,7 +974,7 @@ export function createParticipant({
   /** What the harness did to its own checkout: renamed the branch, or moved
    *  the commit its work starts from with a rebase. A git read that fails
    *  leaves the identity already recorded; a bad base would be worse than a
-   *  stale one. The room follows the change into its held checkout and the
+   *  stale one. The owner follows the change into the held checkout and the
    *  saved record; the stream gets no line for it. */
   const syncCheckout = async (): Promise<boolean> => {
     if (!info) return false;
@@ -981,7 +987,7 @@ export function createParticipant({
     if (!found) return false;
     let changed = false;
     if (found.branch !== branch) {
-      // A positive rename makes the new name the room's; any other switch
+      // A positive rename makes the new name the owner's; any other switch
       // clears the claim, so release and delete leave that branch alone.
       branchRenamed = found.renamedFrom === branch;
       branch = found.branch;
@@ -1052,7 +1058,7 @@ export function createParticipant({
       ];
     },
     status: () => {
-      if (dismissed()) return "dismissed";
+      if (ownerStopped()) return "dismissed";
       if (queue.busy()) return "busy";
       return stopped ?? "idle";
     },
@@ -1066,7 +1072,7 @@ export function createParticipant({
       return orderedBy;
     },
     send(text, sender, kind) {
-      if (dismissed()) {
+      if (ownerStopped()) {
         throw new RoomRefusal("room_dismissed", "the room is dismissed");
       }
       if (stopping) {
