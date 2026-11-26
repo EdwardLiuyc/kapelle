@@ -345,7 +345,8 @@ test("another notice during a remove does not hide the kept checkout's (M11-12)"
 
   // The turn's end saves the record. A folder where the save writes its
   // temp file makes that save fail and add its own notice, during the
-  // remove. It goes before the move, so the archive can be written.
+  // remove. It goes before the move, so the archive can be written. The
+  // name copies `writeRecord`'s temp file (`core/room/record.ts`).
   const tmp = join(chatDir(chat.id), `chat.json.${process.pid}.tmp`);
   bus.addListener(({ update }) => {
     if (update.sessionUpdate === "_client_participant_removed") {

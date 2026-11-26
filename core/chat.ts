@@ -202,8 +202,9 @@ export async function openChat({
  * message. Its checkout is held again, never created, and its log reopened
  * with `seq` carried on. A chat that is not `active` throws. So does one
  * whose harness no longer resolves: a room keeps such a participant as a
- * tombstone (#312), and a chat has no roster to keep it in. What a boot does
- * with that chat is M11-13's to decide.
+ * tombstone (#312), and a chat has no roster to keep it in. M11-13 restores
+ * chats at boot and decides what it does with that chat; M11-14's boot
+ * sweep only finishes removes (`finishChatRemove`).
  */
 export async function restoreChat({
   id,
@@ -226,7 +227,8 @@ export async function restoreChat({
 }
 
 /**
- * Finishes a remove a daemon left at `removing` (M11-14 calls it at boot).
+ * Finishes a remove a daemon left at `removing`. M11-14's boot sweep calls
+ * it, before M11-13's boot restores the live chats (`restoreChat`).
  * Before the move, the harness died with the daemon: the checkout is
  * released here, then the folder moves. After the move only the record is
  * left to say `archived`. Answers the notices it added. It throws when the
