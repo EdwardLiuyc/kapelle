@@ -122,6 +122,9 @@ export type RouteCommand =
       };
     };
 
+type PatchCommand = Extract<RouteCommand, { verb: "patch" }>;
+type PatchChange = PatchCommand["change"];
+
 /** The folder a command asks the daemon for, which it refuses
  *  `repo_not_added` until it is added: a room's, or an agent's own (M11-2). */
 export function commandFolder(c: RouteCommand): string | undefined {
@@ -171,6 +174,8 @@ export const HELP = [
   "/new, /add, /chat and /loop alone open forms, as /config does; ctrl+o opens the menu",
 ];
 
+// The parsed verb is the runtime key; this lookup is intentionally open.
+// pi-lens-ignore: no-known-value-widening
 export const USAGE: Record<string, string> = {
   new: HELP[0] as string,
   add: HELP[1] as string,
@@ -217,6 +222,20 @@ const AGENT_VERBS = new Set([
   "diff",
   "ff",
 ]);
+
+function formOptions(verb: "new" | "add" | "chat") {
+  if (verb === "new") return ["cmd", "name", "model", "title", "cwd"];
+  if (verb === "chat") return ["cmd", "name", "mode", "model", "cwd"];
+  return ["cmd", "name", "role", "mode", "model", "base", "cwd"];
+}
+
+function changeFor(verb: string, value: string): PatchChange {
+  if (verb === "rename") return { name: value };
+  if (verb === "role") return { role: value === "none" ? null : value };
+  if (verb === "model") return { model: value };
+  if (verb === "level") return { thoughtLevel: value };
+  return { mode: value };
+}
 
 /** The orchestrator's name in a loop's room. */
 const ORCHESTRATOR = "po";
@@ -311,40 +330,35 @@ export const HALL_NO_CONFIG = "the hall has no project config: attach a room";
 /** A pinned chat agent left the roster. */
 export const CHAT_GONE = "the chat's agent is gone; /leave to exit";
 
-/**
- * The command a typed line is, or `undefined` for a message. `{ error }` is
- * a command refused before any request; the screen shows it and gives the
- * text back. `hall` is the `hall` flag of the room on screen. `direct` is a
- * piped chat's pinned participant id, used by a command with no mention.
- */
-export function parseCommand(
-  input: string,
-  roster: readonly Named[],
-  hall = false,
-  direct?: string,
-): Command | { error: string } | undefined {
-  const text = input.trim();
-  const m = MENTION.exec(text);
-  const rest = m ? text.slice(m[0].length) : text;
-  const [head = "", ...args] = words(rest);
-  if (!head.startsWith("/")) return undefined;
-  const verb = head.slice(1);
-  if (!ROOM_VERBS.has(verb) && !AGENT_VERBS.has(verb)) return undefined;
+type ParsedCommand = Command | { error: string };
 
-  // A chat has no visible room title and no orchestrator cap (#517).
-  if (hall && verb === "title") return { error: TITLE_IN_CHAT };
-  if (hall && verb === "cap") return { error: CAP_IN_CHAT };
+const UNTARGETED_VERBS = new Set([
+  "leave",
+  "dismiss",
+  "delete",
+  "help",
+  "term",
+]);
+const ROOM_SETTING_VERBS = new Set(["title", "cap"]);
+const SIMPLE_ROOM_VERBS = new Set(["setup", "config", "loop"]);
+const AGENT_FORM_VERBS = new Set(["new", "add", "chat"]);
 
-  if (
-    verb === "leave" ||
-    verb === "dismiss" ||
-    verb === "delete" ||
-    verb === "help" ||
-    verb === "term"
-  ) {
-    // Exact, as before M4-5: `/dismiss the old plan` is a message.
-    return args.length ? undefined : { verb };
-  }
+function parseUntargeted(
+  verb: string,
+  args: string[],
+): ParsedCommand | undefined {
+  if (args.length) return undefined;
+  if (verb === "leave") return { verb };
+  if (verb === "dismiss") return { verb };
+  if (verb === "delete") return { verb };
+  if (verb === "help") return { verb };
+  return { verb: "term" };
+}
+
+function parseSimpleRoom(
+  verb: "setup" | "config" | "loop",
+  args: string[],
+): ParsedCommand {
   if (verb === "setup") {
     // `/setup done` says "done" without the list.
     if (args.length > 1 || (args[0] !== undefined && args[0] !== "done")) {
@@ -357,6 +371,37 @@ export function parseCommand(
       ? { error: USAGE.config as string }
       : { verb: "form", form: "config" };
   }
+  if (!args.length) return { verb: "form", form: "loop" };
+  const o = options(args, ["agent", "cmd", "model", "cwd"]);
+  if ("error" in o) return { error: `${o.error}; usage: ${USAGE.loop}` };
+  const [recipe, task, note, ...extra] = o.positionals;
+  // An empty model is a usage error, as in `kapelle loop` (M9-5c).
+  if (!recipe || !task?.trim() || extra.length || o.values.model === "") {
+    return { error: `usage: ${USAGE.loop}` };
+  }
+  const cwd = absoluteFolder(o.values.cwd);
+  if (!cwd) return { error: FOLDER_GONE };
+  return loopCommand({ ...o.values, recipe, task, note, cwd });
+}
+
+interface RoomSettingInput {
+  verb: "title" | "cap";
+  args: string[];
+  rest: string;
+  head: string;
+  hall: boolean;
+}
+
+function parseRoomSetting({
+  verb,
+  args,
+  rest,
+  head,
+  hall,
+}: RoomSettingInput): ParsedCommand {
+  // A chat has no visible room title and no orchestrator cap (#517).
+  if (hall && verb === "title") return { error: TITLE_IN_CHAT };
+  if (hall && verb === "cap") return { error: CAP_IN_CHAT };
   if (verb === "title") {
     // The rest of the line: spaces inside a title stay. One pair of quotes
     // around the whole title, with no such quote inside, is quoting.
@@ -365,117 +410,145 @@ export function parseCommand(
     const title = (quoted?.[2] ?? raw).trim();
     return title ? { verb, title } : { error: USAGE.title as string };
   }
-  if (verb === "cap") {
-    if (args.length !== 1) return { error: USAGE.cap as string };
-    const turnCap = Number(args[0]);
-    return Number.isFinite(turnCap)
-      ? { verb, turnCap }
-      : { error: USAGE.cap as string };
-  }
-  if (verb === "loop") {
-    if (!args.length) return { verb: "form", form: "loop" };
-    const o = options(args, ["agent", "cmd", "model", "cwd"]);
-    if ("error" in o) return { error: `${o.error}; usage: ${USAGE.loop}` };
-    const [recipe, task, note, ...extra] = o.positionals;
-    // An empty model is a usage error, as in `kapelle loop` (M9-5c).
-    if (!recipe || !task?.trim() || extra.length || o.values.model === "")
-      return { error: `usage: ${USAGE.loop}` };
-    const cwd = absoluteFolder(o.values.cwd);
-    if (!cwd) return { error: FOLDER_GONE };
-    return loopCommand({ ...o.values, recipe, task, note, cwd });
-  }
-  if (verb === "add" && hall) return { error: ADD_IN_CHAT };
-  if (verb === "new" || verb === "add" || verb === "chat") {
-    if (!args.length) return { verb: "form", form: verb };
-    const names =
-      verb === "new"
-        ? ["cmd", "name", "model", "title", "cwd"]
-        : verb === "chat"
-          ? ["cmd", "name", "mode", "model", "cwd"]
-          : ["cmd", "name", "role", "mode", "model", "base", "cwd"];
-    const o = options(args, names);
-    if ("error" in o) return { error: `${o.error}; ${USAGE[verb]}` };
-    // Typed empty models are usage errors; forms keep empty as no model (#466).
-    if (o.values.model === "") return { error: USAGE[verb] as string };
-    const [agent, ...extra] = o.positionals;
-    if (extra.length) return { error: `one harness only; ${USAGE[verb]}` };
-    const { cmd, name, title, cwd, role, mode, base, model } = o.values;
-    // `/chat` and `/add` send a folder only when one was typed (M11-2).
-    const own = cwd === undefined ? undefined : absoluteFolder(cwd);
-    if (cwd !== undefined && !own) return { error: FOLDER_GONE };
-    if (verb === "chat") {
-      return {
-        verb,
-        agent: { agent, cmd, name, mode, model, ...(own && { cwd: own }) },
-      };
-    }
-    if (verb === "add") {
-      // `none` is no role, as in `@name /role none` and the form.
-      const spec: AgentSpec = {
-        agent,
-        cmd,
-        name,
-        role: role === "none" ? undefined : role,
-        mode,
-        model,
-        base,
-        ...(own && { cwd: own }),
-      };
-      return { verb, agent: spec };
-    }
-    if (!agent && !cmd && (name || model)) {
-      const flag = name ? "--name" : "--model";
-      return { error: `${flag} needs a harness or --cmd; ${USAGE.new}` };
-    }
-    const folder = absoluteFolder(cwd);
-    if (!folder) return { error: FOLDER_GONE };
+  if (args.length !== 1) return { error: USAGE.cap as string };
+  const turnCap = Number(args[0]);
+  return Number.isFinite(turnCap)
+    ? { verb, turnCap }
+    : { error: USAGE.cap as string };
+}
+
+function parseAgentSpec(
+  verb: "add" | "chat",
+  agent: string | undefined,
+  values: Record<string, string | undefined>,
+  own: string | undefined,
+): ParsedCommand {
+  const { cmd, name, mode, role, base, model } = values;
+  if (verb === "chat") {
     return {
       verb,
-      body: {
-        cwd: folder,
-        title,
-        agents:
-          agent || cmd ? [{ agent, cmd, name, model, role: "developer" }] : [],
-      },
+      agent: { agent, cmd, name, mode, model, ...(own && { cwd: own }) },
     };
   }
+  // `none` is no role, as in `@name /role none` and the form.
+  const spec: AgentSpec = {
+    agent,
+    cmd,
+    name,
+    role: role === "none" ? undefined : role,
+    mode,
+    model,
+    base,
+    ...(own && { cwd: own }),
+  };
+  return { verb, agent: spec };
+}
 
-  let t: ReturnType<typeof targetOf>;
-  if (m) t = targetOf(text, roster);
-  else {
-    if (!direct) return { error: `name the agent: @name /${verb}` };
-    if (!roster.some((p) => p.id === direct)) return { error: CHAT_GONE };
-    t = { id: direct, text: rest };
+function parseNewRoom(
+  agent: string | undefined,
+  values: Record<string, string | undefined>,
+): ParsedCommand {
+  const { cmd, name, title, cwd, model } = values;
+  if (!agent && !cmd && (name || model)) {
+    const flag = name ? "--name" : "--model";
+    return { error: `${flag} needs a harness or --cmd; ${USAGE.new}` };
   }
-  if ("error" in t) return t;
-  const target = roster.find((p) => p.id === t.id);
-  const name = target?.name ?? t.id;
-  const id = t.id;
-  if (verb === "ff") {
-    const o = options(args, ["from"]);
-    if ("error" in o) return { error: `${o.error}; ${USAGE.ff}` };
-    const [extra, ...more] = o.positionals;
-    const source = o.values.from;
-    if (extra !== undefined || more.length > 0 || !source?.startsWith("@")) {
-      return { error: USAGE.ff as string };
-    }
-    const wanted = fold(source.slice(1));
-    const from = roster.find((p) => fold(p.name) === wanted);
-    if (!from) return { error: `no participant named ${source}` };
-    return {
-      verb: "ff",
-      id,
-      name,
-      from: { id: from.id, name: from.name },
-    };
+  const folder = absoluteFolder(cwd);
+  if (!folder) return { error: FOLDER_GONE };
+  return {
+    verb: "new",
+    body: {
+      cwd: folder,
+      title,
+      agents:
+        agent || cmd ? [{ agent, cmd, name, model, role: "developer" }] : [],
+    },
+  };
+}
+
+function parseAgentForm(
+  verb: "new" | "add" | "chat",
+  args: string[],
+  hall: boolean,
+): ParsedCommand {
+  if (verb === "add" && hall) return { error: ADD_IN_CHAT };
+  if (!args.length) return { verb: "form", form: verb };
+  const names = formOptions(verb);
+  const o = options(args, names);
+  if ("error" in o) return { error: `${o.error}; ${USAGE[verb]}` };
+  // Typed empty models are usage errors; forms keep empty as no model (#466).
+  if (o.values.model === "") return { error: USAGE[verb] as string };
+  const [agent, ...extra] = o.positionals;
+  if (extra.length) return { error: `one harness only; ${USAGE[verb]}` };
+  const cwd = o.values.cwd;
+  // `/chat` and `/add` send a folder only when one was typed (M11-2).
+  const own = cwd === undefined ? undefined : absoluteFolder(cwd);
+  if (cwd !== undefined && !own) return { error: FOLDER_GONE };
+  if (verb === "new") return parseNewRoom(agent, o.values);
+  return parseAgentSpec(verb, agent, o.values, own);
+}
+
+function parseForward(
+  args: string[],
+  roster: readonly Named[],
+  id: string,
+  name: string,
+): ParsedCommand {
+  const o = options(args, ["from"]);
+  if ("error" in o) return { error: `${o.error}; ${USAGE.ff}` };
+  const [extra, ...more] = o.positionals;
+  const source = o.values.from;
+  if (extra !== undefined || more.length > 0 || !source?.startsWith("@")) {
+    return { error: USAGE.ff as string };
   }
-  if (verb === "diff") {
-    // What is not committed, or with `base` the whole branch.
-    if (args.length > 1 || (args[0] !== undefined && args[0] !== "base")) {
-      return { error: USAGE.diff as string };
-    }
-    return { verb, id, name, against: args[0] ? "base" : "head" };
+  const wanted = fold(source.slice(1));
+  const from = roster.find((p) => fold(p.name) === wanted);
+  if (!from) return { error: `no participant named ${source}` };
+  return {
+    verb: "ff",
+    id,
+    name,
+    from: { id: from.id, name: from.name },
+  };
+}
+
+interface TargetInput {
+  verb: string;
+  args: string[];
+  rest: string;
+  text: string;
+  mention: RegExpExecArray | null;
+  roster: readonly Named[];
+  direct?: string;
+}
+
+function targetFor({
+  verb,
+  rest,
+  text,
+  mention,
+  roster,
+  direct,
+}: TargetInput): ReturnType<typeof targetOf> {
+  if (mention) return targetOf(text, roster);
+  if (!direct) return { error: `name the agent: @name /${verb}` };
+  if (!roster.some((p) => p.id === direct)) return { error: CHAT_GONE };
+  return { id: direct, text: rest };
+}
+
+function parseDiff(args: string[], id: string, name: string): ParsedCommand {
+  // What is not committed, or with `base` the whole branch.
+  if (args.length > 1 || (args[0] !== undefined && args[0] !== "base")) {
+    return { error: USAGE.diff as string };
   }
+  return { verb: "diff", id, name, against: args[0] ? "base" : "head" };
+}
+
+function parseSimpleTarget(
+  { verb, args }: TargetInput,
+  id: string,
+  name: string,
+): ParsedCommand {
   if (verb === "cancel" || verb === "remove") {
     return args.length ? { error: USAGE[verb] as string } : { verb, id, name };
   }
@@ -484,17 +557,66 @@ export function parseCommand(
   if (verb === "level" && !args.length) return { verb: "levels", id, name };
   if (args.length !== 1) return { error: USAGE[verb] as string };
   const value = args[0] as string;
-  const change =
-    verb === "rename"
-      ? { name: value }
-      : verb === "role"
-        ? { role: value === "none" ? null : value }
-        : verb === "model"
-          ? { model: value }
-          : verb === "level"
-            ? { thoughtLevel: value }
-            : { mode: value };
-  return { verb: "patch", id, name, change };
+  return { verb: "patch", id, name, change: changeFor(verb, value) };
+}
+
+function parseTargeted(input: TargetInput): ParsedCommand {
+  const { verb, args, roster } = input;
+  const t = targetFor(input);
+  if ("error" in t) return t;
+  const target = roster.find((p) => p.id === t.id);
+  const name = target?.name ?? t.id;
+  const id = t.id;
+  if (verb === "ff") return parseForward(args, roster, id, name);
+  if (verb === "diff") return parseDiff(args, id, name);
+  return parseSimpleTarget(input, id, name);
+}
+
+/**
+ * The command a typed line is, or `undefined` for a message. `{ error }` is
+ * a command refused before any request; the screen shows it and gives the
+ * text back. `hall` is the `hall` flag of the room on screen. `direct` is a
+ * piped chat's pinned participant id, used by a command with no mention.
+ */
+export function parseCommand(
+  input: string,
+  roster: readonly Named[],
+  hall = false,
+  direct?: string,
+): ParsedCommand | undefined {
+  const text = input.trim();
+  const m = MENTION.exec(text);
+  const rest = m ? text.slice(m[0].length) : text;
+  const [head = "", ...args] = words(rest);
+  if (!head.startsWith("/")) return undefined;
+  const verb = head.slice(1);
+  if (!ROOM_VERBS.has(verb) && !AGENT_VERBS.has(verb)) return undefined;
+
+  if (UNTARGETED_VERBS.has(verb)) return parseUntargeted(verb, args);
+  if (ROOM_SETTING_VERBS.has(verb)) {
+    return parseRoomSetting({
+      verb: verb as "title" | "cap",
+      args,
+      rest,
+      head,
+      hall,
+    });
+  }
+  if (SIMPLE_ROOM_VERBS.has(verb)) {
+    return parseSimpleRoom(verb as "setup" | "config" | "loop", args);
+  }
+  if (AGENT_FORM_VERBS.has(verb)) {
+    return parseAgentForm(verb as "new" | "add" | "chat", args, hall);
+  }
+  return parseTargeted({
+    verb,
+    args,
+    rest,
+    text,
+    mention: m,
+    roster,
+    direct,
+  });
 }
 
 /** What a route said: a line for the status bar, or the daemon's refusal. */
@@ -526,18 +648,18 @@ export function deletePreviewLines(preview: DeletePreview): string[] {
       ? printable(b.participant)
       : "no current participant";
     const n = b.total;
-    const state =
-      n === 0 ? "all merged" : `${n} unmerged commit${n === 1 ? "" : "s"}`;
+    let state = "all merged";
+    if (n > 0) state = `${n} unmerged commit${n === 1 ? "" : "s"}`;
     const more = b.total - b.commits.length;
+    const suffix = more === 1 ? "" : "s";
+    const moreRows = more > 0 ? [`  … and ${more} more commit${suffix}`] : [];
     return [
       `${state} · ${who}`,
       `  ${printable(b.branch)}`,
       ...b.commits.map(
         (commit) => `  ${commit.sha.slice(0, 8)} ${printable(commit.subject)}`,
       ),
-      ...(more > 0
-        ? [`  … and ${more} more commit${more === 1 ? "" : "s"}`]
-        : []),
+      ...moreRows,
     ];
   });
 }
@@ -659,13 +781,14 @@ export function modelLines(p: ParticipantDto): string[] {
  *  then the model's levels, the one in use marked. */
 export function levelLines(p: ParticipantDto): string[] {
   if (!p.thoughtLevels?.length) {
-    return [
-      printable(
-        p.status === "idle" || p.status === "busy"
-          ? `${p.name} has no thinking level${p.model ? ` on the model "${p.model}"` : ""}`
-          : `${p.name} has no harness running; its levels show after its next start`,
-      ),
-    ];
+    let detail: string;
+    if (p.status === "idle" || p.status === "busy") {
+      const model = p.model ? ` on the model "${p.model}"` : "";
+      detail = `${p.name} has no thinking level${model}`;
+    } else {
+      detail = `${p.name} has no harness running; its levels show after its next start`;
+    }
+    return [printable(detail)];
   }
   return [
     printable(
@@ -718,196 +841,236 @@ async function addAgent(
  * needs none. Never throws for a refusal; a daemon that cannot be reached
  * throws as `fetch` does.
  */
+function patchLine(c: PatchCommand, p: ParticipantDto): string {
+  const { name, role, mode, model, thoughtLevel } = c.change;
+  if (name !== undefined) return `renamed ${c.name} to ${p.name}`;
+  if (role === null) return `${c.name} has no role`;
+  if (role !== undefined) return `${c.name} is now ${p.role}`;
+  if (model !== undefined) return modelChanged(c.name, model, p);
+  if (thoughtLevel !== undefined) {
+    return levelChanged(c.name, thoughtLevel, p);
+  }
+  return `${c.name} is now in ${mode} mode`;
+}
+
+type NewRoomCommand = Extract<RouteCommand, { verb: "new" }>;
+type LoopRouteCommand = Extract<RouteCommand, { verb: "loop" }>;
+type ConfigCommand = Extract<RouteCommand, { verb: "config" }>;
+type RoomLifecycleCommand = Extract<
+  RouteCommand,
+  { verb: "dismiss" | "delete" | "title" | "cap" }
+>;
+type RosterCommand = Extract<
+  RouteCommand,
+  { verb: "add" | "remove" | "cancel" | "forward" | "patch" }
+>;
+
+async function openRoom(d: DaemonAddress, c: NewRoomCommand): Promise<Outcome> {
+  const agents = c.body.agents?.map((a) =>
+    Object.fromEntries(Object.entries(a).filter(([, v]) => v)),
+  );
+  const body = Object.fromEntries(
+    Object.entries({ ...c.body, agents }).filter(([, v]) => v),
+  );
+  const r = await call<RoomDto>(d, "/rooms", { method: "POST", body });
+  if (!r.ok) return refused(r.error.message, r.error.code);
+  const off = notOn(c.body.agents?.[0]?.model, r.body.participants[0]);
+  return {
+    ok: true,
+    line: printable(`opened room ${r.body.title ?? r.body.id}${off}`),
+    room: r.body,
+  };
+}
+
+async function startLoop(
+  d: DaemonAddress,
+  c: LoopRouteCommand,
+): Promise<Outcome> {
+  // The recipe first: a missing one opens no room.
+  const start = await loopMessage(c, c.body.cwd);
+  if ("error" in start) return refused(start.error, "no_recipe");
+  const r = await call<RoomDto>(d, "/rooms", {
+    method: "POST",
+    body: c.body,
+  });
+  if (!r.ok) return refused(r.error.message, r.error.code);
+  const opened = `opened room ${printable(r.body.title ?? r.body.id)}`;
+  const asked = c.body.agents?.[0]?.model;
+  const po = r.body.participants[0];
+  if (!modelConfirmed(asked, po)) {
+    return refused(
+      `${opened}, but ${ORCHESTRATOR} ` +
+        printable(
+          `${notConfirmedOn(asked, po)}. The room has no start. To drop the room: kapelle chat dismiss ${r.body.id}`,
+        ),
+      "model_not_confirmed",
+      r.body,
+    );
+  }
+  const sent = await call<MessageAccepted>(d, `/rooms/${r.body.id}/messages`, {
+    method: "POST",
+    body: { text: start.text },
+  });
+  if (!sent.ok) {
+    return refused(
+      `${opened}, but its first message failed: ${sent.error.message}`,
+      sent.error.code,
+      r.body,
+    );
+  }
+  return {
+    ok: true,
+    line: `${opened}; ${ORCHESTRATOR} has the start`,
+    room: r.body,
+  };
+}
+
+async function saveConfig(
+  d: DaemonAddress,
+  c: ConfigCommand,
+): Promise<Outcome> {
+  const keys = Object.keys(c.patch);
+  if (!keys.length) {
+    return c.replace
+      ? refused(
+          "config: nothing entered; enter a value or fix the file by hand",
+          "invalid_request",
+        )
+      : { ok: true, line: "config: nothing changed" };
+  }
+  const r = await call<ConfigView>(
+    d,
+    `/config?cwd=${encodeURIComponent(c.cwd)}`,
+    { method: c.replace ? "PUT" : "PATCH", body: c.patch },
+  );
+  if (!r.ok) return refused(r.error.message, r.error.code);
+  const line = c.replace
+    ? `replaced ${printable(r.body.path)} with ${keys.join(", ")}; ${CONFIG_APPLIES}`
+    : `saved ${keys.join(", ")} to ${printable(r.body.path)}; ${CONFIG_APPLIES}`;
+  return { ok: true, line };
+}
+
+type DismissedRoom = { room?: RoomDto } | { error: string; code: string };
+
+async function dismissForDelete(
+  d: DaemonAddress,
+  room: string,
+): Promise<DismissedRoom> {
+  const closed = await call<RoomDto>(d, `${room}/dismiss`, { method: "POST" });
+  if (closed.ok) return { room: closed.body };
+  if (closed.error.code !== "room_dismissed") {
+    return { error: closed.error.message, code: closed.error.code };
+  }
+  const got = await call<RoomDto>(d, room);
+  return got.ok ? { room: got.body } : {};
+}
+
+async function deleteRoom(d: DaemonAddress, roomId: string): Promise<Outcome> {
+  const room = `/rooms/${roomId}`;
+  let r = await call<void>(d, room, { method: "DELETE" });
+  let dismissed: RoomDto | undefined;
+  if (!r.ok && r.error.code === "room_active") {
+    const closed = await dismissForDelete(d, room);
+    if ("error" in closed) return refused(closed.error, closed.code);
+    dismissed = closed.room;
+    r = await call<void>(d, room, { method: "DELETE" });
+  }
+  if (!r.ok) return refused(r.error.message, r.error.code, dismissed);
+  return { ok: true, line: `deleted ${roomId}` };
+}
+
+async function runRoomLifecycle(
+  d: DaemonAddress,
+  roomId: string,
+  c: RoomLifecycleCommand,
+): Promise<Outcome> {
+  if (c.verb === "delete") return deleteRoom(d, roomId);
+  const room = `/rooms/${roomId}`;
+  if (c.verb === "dismiss") {
+    const r = await call<RoomDto>(d, `${room}/dismiss`, { method: "POST" });
+    if (!r.ok) return refused(r.error.message, r.error.code);
+    return { ok: true, line: `dismissed ${roomId}`, room: r.body };
+  }
+  const body = c.verb === "title" ? { title: c.title } : { turnCap: c.turnCap };
+  const r = await call<RoomDto>(d, room, { method: "PATCH", body });
+  if (!r.ok) return refused(r.error.message, r.error.code);
+  const line =
+    c.verb === "title"
+      ? `renamed the room to ${printable(c.title)}`
+      : `raised the orchestrator turn cap to ${c.turnCap}`;
+  return { ok: true, line, room: r.body };
+}
+
+async function runRosterCommand(
+  d: DaemonAddress,
+  roomId: string,
+  c: RosterCommand,
+): Promise<Outcome> {
+  if (c.verb === "add") return addAgent(d, roomId, c.agent, "added");
+  const room = `/rooms/${roomId}`;
+  if (c.verb === "remove") {
+    const r = await call<RoomDto>(d, `${room}/agents/${c.id}`, {
+      method: "DELETE",
+    });
+    if (!r.ok) return refused(r.error.message, r.error.code);
+    return { ok: true, line: `removed ${c.name}` };
+  }
+  if (c.verb === "cancel") {
+    const r = await call<ParticipantDto>(
+      d,
+      `${room}/agents/${c.id}/turns/current/cancel`,
+      { method: "POST" },
+    );
+    if (!r.ok) return refused(r.error.message, r.error.code);
+    return { ok: true, line: `cancelling ${c.name}'s turn` };
+  }
+  if (c.verb === "forward") {
+    const r = await call<ParticipantDto>(
+      d,
+      `${room}/agents/${c.id}/fast-forward`,
+      { method: "POST", body: { from: c.fromId } },
+    );
+    if (!r.ok) return refused(r.error.message, r.error.code);
+    return {
+      ok: true,
+      line: `moved ${c.name} up to ${c.fromName}'s commit`,
+    };
+  }
+  if (c.verb !== "patch") {
+    return refused("unknown room command", "invalid_request");
+  }
+  const r = await call<ParticipantDto>(d, `${room}/agents/${c.id}`, {
+    method: "PATCH",
+    body: c.change,
+  });
+  if (!r.ok) return refused(r.error.message, r.error.code);
+  return {
+    ok: true,
+    line: printable(patchLine(c, r.body)),
+    participant: r.body,
+  };
+}
+
 export async function runCommand(
   d: DaemonAddress,
   roomId: string | undefined,
   c: RouteCommand,
 ): Promise<Outcome> {
-  if (c.verb === "new") {
-    const agents = c.body.agents?.map((a) =>
-      Object.fromEntries(Object.entries(a).filter(([, v]) => v)),
-    );
-    const body = Object.fromEntries(
-      Object.entries({ ...c.body, agents }).filter(([, v]) => v),
-    );
-    const r = await call<RoomDto>(d, "/rooms", { method: "POST", body });
-    if (!r.ok) return refused(r.error.message, r.error.code);
-    const off = notOn(c.body.agents?.[0]?.model, r.body.participants[0]);
-    return {
-      ok: true,
-      line: printable(`opened room ${r.body.title ?? r.body.id}${off}`),
-      room: r.body,
-    };
-  }
-  if (c.verb === "loop") {
-    // The recipe first: a missing one opens no room.
-    const start = await loopMessage(c, c.body.cwd);
-    if ("error" in start) return refused(start.error, "no_recipe");
-    const r = await call<RoomDto>(d, "/rooms", {
-      method: "POST",
-      body: c.body,
-    });
-    if (!r.ok) return refused(r.error.message, r.error.code);
-    const opened = `opened room ${printable(r.body.title ?? r.body.id)}`;
-    const asked = c.body.agents?.[0]?.model;
-    const po = r.body.participants[0];
-    if (!modelConfirmed(asked, po)) {
-      return refused(
-        `${opened}, but ${ORCHESTRATOR} ` +
-          printable(
-            `${notConfirmedOn(asked, po)}. The room has no start. To drop the room: kapelle chat dismiss ${r.body.id}`,
-          ),
-        "model_not_confirmed",
-        r.body,
-      );
-    }
-    const sent = await call<MessageAccepted>(
-      d,
-      `/rooms/${r.body.id}/messages`,
-      {
-        method: "POST",
-        body: { text: start.text },
-      },
-    );
-    if (!sent.ok) {
-      return refused(
-        `${opened}, but its first message failed: ${sent.error.message}`,
-        sent.error.code,
-        r.body,
-      );
-    }
-    return {
-      ok: true,
-      line: `${opened}; ${ORCHESTRATOR} has the start`,
-      room: r.body,
-    };
-  }
-  if (c.verb === "config") {
-    const keys = Object.keys(c.patch);
-    if (!keys.length) {
-      if (!c.replace) return { ok: true, line: "config: nothing changed" };
-      return refused(
-        "config: nothing entered; enter a value or fix the file by hand",
-        "invalid_request",
-      );
-    }
-    const r = await call<ConfigView>(
-      d,
-      `/config?cwd=${encodeURIComponent(c.cwd)}`,
-      { method: c.replace ? "PUT" : "PATCH", body: c.patch },
-    );
-    if (!r.ok) return refused(r.error.message, r.error.code);
-    const line = c.replace
-      ? `replaced ${printable(r.body.path)} with ${keys.join(", ")}; ${CONFIG_APPLIES}`
-      : `saved ${keys.join(", ")} to ${printable(r.body.path)}; ${CONFIG_APPLIES}`;
-    return { ok: true, line };
-  }
+  if (c.verb === "new") return openRoom(d, c);
+  if (c.verb === "loop") return startLoop(d, c);
+  if (c.verb === "config") return saveConfig(d, c);
   // The hall, from any view (M11-1).
   if (c.verb === "chat") {
     return addAgent(d, HALL_ID, c.agent, "started a chat with");
   }
   if (!roomId) return refused("no room: open one first");
-  const room = `/rooms/${roomId}`;
-  switch (c.verb) {
-    case "dismiss": {
-      const r = await call<RoomDto>(d, `${room}/dismiss`, { method: "POST" });
-      if (!r.ok) return refused(r.error.message, r.error.code);
-      return { ok: true, line: `dismissed ${roomId}`, room: r.body };
-    }
-    case "delete": {
-      let r = await call<void>(d, room, { method: "DELETE" });
-      let dismissed: RoomDto | undefined;
-      if (!r.ok && r.error.code === "room_active") {
-        const closed = await call<RoomDto>(d, `${room}/dismiss`, {
-          method: "POST",
-        });
-        if (!closed.ok && closed.error.code !== "room_dismissed") {
-          return refused(closed.error.message, closed.error.code);
-        }
-        if (closed.ok) dismissed = closed.body;
-        else {
-          const got = await call<RoomDto>(d, room);
-          if (got.ok) dismissed = got.body;
-        }
-        r = await call<void>(d, room, { method: "DELETE" });
-      }
-      if (!r.ok) return refused(r.error.message, r.error.code, dismissed);
-      return { ok: true, line: `deleted ${roomId}` };
-    }
-    case "title": {
-      const r = await call<RoomDto>(d, room, {
-        method: "PATCH",
-        body: { title: c.title },
-      });
-      if (!r.ok) return refused(r.error.message, r.error.code);
-      return {
-        ok: true,
-        line: `renamed the room to ${printable(c.title)}`,
-        room: r.body,
-      };
-    }
-    case "cap": {
-      const r = await call<RoomDto>(d, room, {
-        method: "PATCH",
-        body: { turnCap: c.turnCap },
-      });
-      if (!r.ok) return refused(r.error.message, r.error.code);
-      return {
-        ok: true,
-        line: `raised the orchestrator turn cap to ${c.turnCap}`,
-        room: r.body,
-      };
-    }
-    case "add":
-      return addAgent(d, roomId, c.agent, "added");
-    case "remove": {
-      const r = await call<RoomDto>(d, `${room}/agents/${c.id}`, {
-        method: "DELETE",
-      });
-      if (!r.ok) return refused(r.error.message, r.error.code);
-      return { ok: true, line: `removed ${c.name}` };
-    }
-    case "cancel": {
-      const r = await call<ParticipantDto>(
-        d,
-        `${room}/agents/${c.id}/turns/current/cancel`,
-        { method: "POST" },
-      );
-      if (!r.ok) return refused(r.error.message, r.error.code);
-      return { ok: true, line: `cancelling ${c.name}'s turn` };
-    }
-    case "forward": {
-      const r = await call<ParticipantDto>(
-        d,
-        `${room}/agents/${c.id}/fast-forward`,
-        { method: "POST", body: { from: c.fromId } },
-      );
-      if (!r.ok) return refused(r.error.message, r.error.code);
-      return {
-        ok: true,
-        line: `moved ${c.name} up to ${c.fromName}'s commit`,
-      };
-    }
-    case "patch": {
-      const r = await call<ParticipantDto>(d, `${room}/agents/${c.id}`, {
-        method: "PATCH",
-        body: c.change,
-      });
-      if (!r.ok) return refused(r.error.message, r.error.code);
-      const { name, role, mode, model, thoughtLevel } = c.change;
-      const line =
-        name !== undefined
-          ? `renamed ${c.name} to ${r.body.name}`
-          : role === null
-            ? `${c.name} has no role`
-            : role !== undefined
-              ? `${c.name} is now ${r.body.role}`
-              : model !== undefined
-                ? modelChanged(c.name, model, r.body)
-                : thoughtLevel !== undefined
-                  ? levelChanged(c.name, thoughtLevel, r.body)
-                  : `${c.name} is now in ${mode} mode`;
-      return { ok: true, line: printable(line), participant: r.body };
-    }
+  if (
+    c.verb === "dismiss" ||
+    c.verb === "delete" ||
+    c.verb === "title" ||
+    c.verb === "cap"
+  ) {
+    return runRoomLifecycle(d, roomId, c);
   }
+  return runRosterCommand(d, roomId, c);
 }
