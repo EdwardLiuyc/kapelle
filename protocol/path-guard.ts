@@ -2,7 +2,8 @@
  * The workspace path guard. It reads the disk to compare realpaths.
  *
  * **The path guard is not the policy.** It applies in every mode, `auto`
- * included. A missing tail is resolved through its nearest existing ancestor;
+ * included. Reads may leave the root only with `allowReadOutsideRoot`; writes
+ * never may. A missing tail is resolved through its nearest existing ancestor;
  * an unresolved symlink is refused rather than followed at write time.
  */
 

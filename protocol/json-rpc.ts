@@ -55,6 +55,7 @@ export function encodeJsonRpcLine(message: OutgoingMessage): string {
  * A JSON object is a message; primitives and arrays are malformed lines.
  */
 export function parseJsonRpcLine(raw: string): ParsedJsonRpcLine {
+  // Before `trim`, which would copy the whole oversized line.
   if (raw.length > MAX_LINE_LENGTH) {
     return { kind: "oversized", length: raw.length };
   }
@@ -70,6 +71,7 @@ export function parseJsonRpcLine(raw: string): ParsedJsonRpcLine {
     return { kind: "malformed", line };
   }
 
+  // JSON is untrusted here: only a non-null, non-array object can be a message.
   // pi-lens-ignore: no-runtime-typeof
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     return { kind: "malformed", line };

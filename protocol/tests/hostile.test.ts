@@ -476,6 +476,12 @@ test("a non-JSON line on stdout is ignored and the turn still ends", async (t) =
   assert.equal(run.stopReason, "end_turn");
 });
 
+test("a JSON null line is ignored and the turn still ends", async (t) => {
+  const run = await attack(t, "non-object-json");
+  assert.match(run.text, /OUTCOME=sent/);
+  assert.equal(run.stopReason, "end_turn");
+});
+
 test("a line past the length cap is dropped and the turn still ends", async (t) => {
   const run = await attack(t, "oversized");
   // The flood is a well-formed `agent_message_chunk`, so nothing but the cap
