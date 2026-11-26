@@ -8,7 +8,8 @@
  * Tests and integration helpers are allowed to import anything.
  *
  * Inside `core/`, no file in `core/room/` imports `core/room.ts`, not even a
- * type: the agent parts work with no room (M12-8c).
+ * type: the agent parts work with no room (M12-8c). `core/chat.ts` does not
+ * either: a chat is built from those parts, and is not a room (M11-12).
  *
  * The checker works on a graph so a made-up graph can prove each rule without
  * creating files. Declaration-level `import type` / `export type` edges are
@@ -253,6 +254,11 @@ const checkGraph = (graph: SourceGraph): string[] => {
       // even for a type.
       if (file.startsWith("core/room/") && target === "core/room.ts") {
         fail("core/room/ may not import core/room.ts");
+        continue;
+      }
+      // M11-12: a chat is built from those parts, and is not a room.
+      if (file === "core/chat.ts" && target === "core/room.ts") {
+        fail("core/chat.ts may not import core/room.ts");
         continue;
       }
       if (edge.typeOnly) continue;
@@ -650,6 +656,17 @@ test("the checker rejects a core/room/ import of core/room.ts, type-only too", (
     "core/room/b.ts imports ../room.ts: core/room/ may not import core/room.ts",
     "core/room/c.ts imports ../room.js: core/room/ may not import core/room.ts",
     "core/room/d.ts imports ../room.js: core/room/ may not import core/room.ts",
+  ]);
+});
+
+test("the checker rejects a core/chat.ts import of core/room.ts, type-only too", () => {
+  const graph = makeGraph({
+    "core/room.ts": [],
+    "core/chat.ts": [["./room.ts", true], ["./room/member.ts"]],
+    "core/room/member.ts": [],
+  });
+  assert.deepEqual(checkGraph(graph), [
+    "core/chat.ts imports ./room.ts: core/chat.ts may not import core/room.ts",
   ]);
 });
 

@@ -60,12 +60,17 @@ export const roomFile = (root: string, roomId: string) =>
  * optional field does not grow back during a sweep.
  */
 export function writeRoomRecord(path: string, record: RoomRecord): void {
-  const tmp = `${path}.${process.pid}.tmp`;
   const { tombstones, ...rest } = record;
-  const written = tombstones?.length ? { ...rest, tombstones } : rest;
+  writeRecord(path, tombstones?.length ? { ...rest, tombstones } : rest);
+}
+
+/** An owner's record file, written whole or not at all: `room.json`, or a
+ *  chat's `chat.json` (`core/chat.ts`). */
+export function writeRecord(path: string, record: object): void {
+  const tmp = `${path}.${process.pid}.tmp`;
   // The tmp+rename below is the atomic write; the repo has no JSON-store seam.
   // pi-lens-ignore: no-raw-json-store-write
-  writeFileSync(tmp, `${JSON.stringify(written, null, 2)}\n`, "utf8");
+  writeFileSync(tmp, `${JSON.stringify(record, null, 2)}\n`, "utf8");
   renameSync(tmp, path);
 }
 
@@ -207,20 +212,18 @@ export function readRoomRecord(path: string): RoomRecord {
  */
 export function crashed(record: RoomRecord): RoomRecord {
   if (record.status !== "active") return record;
-  const crashedStatus = (p: ParticipantRecord): ParticipantStatus => {
-    if (p.status === "busy") return "killed";
-    if (p.status === "idle") return "paused";
-    return p.status;
-  };
   return {
     ...record,
     status: "paused",
-    participants: record.participants.map((p) =>
-      p.status === "busy" || p.status === "idle"
-        ? { ...p, status: crashedStatus(p) }
-        : p,
-    ),
+    participants: record.participants.map(crashedParticipant),
   };
+}
+
+/** One participant as `crashed` leaves it; a chat's record uses it alone. */
+export function crashedParticipant(p: ParticipantRecord): ParticipantRecord {
+  if (p.status === "busy") return { ...p, status: "killed" };
+  if (p.status === "idle") return { ...p, status: "paused" };
+  return p;
 }
 
 /** Read the checkout once when a participant is first tombstoned, so its
@@ -266,8 +269,10 @@ function rememberTombstone(
   return true;
 }
 
-/** Hold a tombstone's checkout, so a dismiss can release it like a member. */
-function adoptTombstone(
+/** Hold a saved participant's checkout with no harness, so a release can
+ *  remove it as a member's: a room's tombstone, or a chat whose remove a
+ *  crash cut short. */
+export function adoptCheckout(
   worktrees: Worktrees | null,
   saved: ParticipantRecord,
 ): void {
@@ -317,7 +322,7 @@ export async function tombstoneUnknownAgents(
     const next = isNew ? await syncTombstoneCheckout(saved) : saved;
     if (next !== saved) changed = true;
     tombstones[i] = next;
-    adoptTombstone((await places.saved(next)).worktrees, next);
+    adoptCheckout((await places.saved(next)).worktrees, next);
     if (isNew) {
       log(
         `room ${record.id} at ${roomFile(root, record.id)}: participant ` +

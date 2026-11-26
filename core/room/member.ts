@@ -145,6 +145,38 @@ export function ownWatchdog(
   return { watchdog, limits, stop: () => clearInterval(sweep) };
 }
 
+/** §M0-4: every measured harness ends a cancelled turn within 64 ms, so a
+ *  turn still live after 2 s is not going to end by itself. An owner's
+ *  pause waits this long. */
+export const PAUSE_GRACE_MS = 2_000;
+
+/** The lines after which an owner saves its record: each changes what
+ *  `recordOf` gives. */
+export const SAVED_ON: ReadonlySet<string> = new Set([
+  "_client_participant_added",
+  "_client_participant_changed",
+  "_client_participant_removed",
+  "_client_participant_revived",
+  "_client_user_message",
+  "_client_turn_ended",
+  "_client_harness_exited",
+]);
+
+/** A stderr log per harness start in `dir`, as `AcpAgent` opens them with
+ *  `ax`: a revive must not write into the first harness's file. */
+export function stderrLogs(dir: string) {
+  let starts = 0;
+  return (participantId: string) => {
+    const first = join(dir, `${participantId}.stderr.log`);
+    // The time tells two daemons apart; the count, two starts in one
+    // millisecond.
+    starts += 1;
+    return existsSync(first)
+      ? join(dir, `${participantId}.${Date.now()}-${starts}.stderr.log`)
+      : first;
+  };
+}
+
 /** What an owner lends each participant, and what it hears back. A member
  *  reads some fields once, when it is made, and others at each call, so an
  *  owner never replaces a field once its first member exists. */

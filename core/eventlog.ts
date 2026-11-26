@@ -44,6 +44,10 @@
  * whole room. No `agent`: a harness name is not unique in a room, and a
  * display name changes on a rename, while the id never does.
  *
+ * **A chat's line names its chat** (M11-12, #556): `{seq, at, chatId,
+ * update}`, with `seq` from 1 in each chat. A chat has one agent, so the line
+ * needs no participant id.
+ *
  * **A room's log is reopened after a restart** (M6-7a, #151):
  * `reopenEventLog` restores saved offsets or scans the old file, cuts a
  * partial last line, and goes on appending with `seq` carried on.
@@ -108,9 +112,17 @@ interface RoomEventEnvelope {
   update: AgentEvent;
 }
 
+/** One line of a chat's log, before `seq` and `at` (M11-12). */
+interface ChatEventEnvelope {
+  chatId: string;
+  update: AgentEvent;
+}
+
 export interface EventLog {
   /** The bus listener. Ignored once the log is closed or has failed. */
-  append: (event: AgentEventEnvelope | RoomEventEnvelope) => void;
+  append: (
+    event: AgentEventEnvelope | RoomEventEnvelope | ChatEventEnvelope,
+  ) => void;
   /**
    * Sends every committed line after `after`, then each new one as it
    * commits, until the log closes or `signal` aborts. `line` has no newline.

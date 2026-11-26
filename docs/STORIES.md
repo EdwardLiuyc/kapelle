@@ -4514,6 +4514,12 @@ and it is not a room: no roster, no orchestrator, no title, no turn cap, no `@na
   `removing` finishes the remove. A dirty checkout is kept and a notice names it.
 
 Nothing reaches the API yet.
+**Decided at pickup 2026-11-26 (#556):** `chat.json` keeps `removedAt`, set when the
+remove starts, for M11-14's reap and M11-16's list. A `keep` release says nothing of a
+checkout it keeps, so the chat adds the notice itself; it goes in the archived
+`chat.json` and is the remove's answer. `finishChatRemove` finishes a `removing` chat,
+and M11-14 calls it at boot. A scratch folder is `scratch/chats/<participantId>`, as
+M11-2's. A chat's `ask` question waits as `{roomId: <chatId>, …}` until M11-13.
 *Done when* tests against `mock-agent.mjs` cover two turns with memory kept, a restart
 and a revive, the mode, model and level, a remove that moves the folder, a crash before
 and after the move with the record at `removing`, a dirty checkout kept and named, and

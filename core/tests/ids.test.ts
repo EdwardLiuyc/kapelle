@@ -18,6 +18,8 @@ import {
   assertTaskId,
   branchName,
   HALL_ID,
+  isChatId,
+  newChatId,
   newParticipantId,
   newRoomId,
   newRunId,
@@ -73,11 +75,14 @@ test("branchName validates both halves it is given", () => {
   assert.throws(() => branchName(newRunId(), "build.lock"), /invalid task id/);
   assert.throws(
     () => branchName("not-a-run-id", "plan"),
-    /invalid run or room id/,
+    /invalid run, room or chat id/,
   );
   // The hall owns a namespace too (M11-2), but only under its own id.
   assert.equal(branchName(HALL_ID, "p-a"), "kapelle/hall/p-a");
-  assert.throws(() => branchName("hall2", "p-a"), /invalid run or room id/);
+  assert.throws(
+    () => branchName("hall2", "p-a"),
+    /invalid run, room or chat id/,
+  );
 });
 
 test("a room id is its own namespace: branchName takes it, assertRunId does not", () => {
@@ -89,6 +94,17 @@ test("a room id is its own namespace: branchName takes it, assertRunId does not"
   // But nothing that takes a run id from the command line may accept one —
   // `kapelle merge <runId>` must not reach into a room's branches (S9).
   assert.throws(() => assertRunId(roomId), /invalid run id/);
+});
+
+test("a chat id is its own namespace too (M11-12)", () => {
+  const chatId = newChatId(new Date("2026-11-26T12:34:56.789Z"));
+  assert.match(chatId, /^chat-20261126-123456-[0-9a-z]{4}$/);
+  assert.ok(isChatId(chatId));
+  assert.ok(!isChatId(newRoomId()), "a room id is not a chat id");
+  assert.ok(!isChatId("chat-../x"));
+  // Each chat owns its branches, so a remove touches one chat only.
+  assert.equal(branchName(chatId, "p-a"), `kapelle/${chatId}/p-a`);
+  assert.throws(() => assertRunId(chatId), /invalid run id/);
 });
 
 test("a participant id is opaque, ref-safe, and a legal task id", () => {

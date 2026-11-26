@@ -19,7 +19,10 @@
   // from nowhere and calls all four unused. knip has no notion of a second,
   // opt-in test suite, so they are ignored rather than misdeclared as
   // production roots. `npm run check` still type-checks them.
-  "ignore": ["protocol/types.ts", "integration/**"],
+  //
+  // core/chat.ts (M11-12) is built ahead of its consumer: only its tests
+  // reach it until M11-13's `/chats` routes import it. Drop the entry then.
+  "ignore": ["protocol/types.ts", "integration/**", "core/chat.ts"],
   // script(1) is util-linux's, spawned by tests/attach.test.ts and
   // tests/chat-tui*.test.ts to give `attach` (M2-9) and chat.ts a real
   // pseudo-terminal. A system binary, not an npm one, so nothing lists it.
