@@ -13,7 +13,7 @@
  *   `daemon add`;
  * - generic help or usage, not the unknown name: a bare `--bogus`, `demo`;
  * - refused by name: `loop`, `loop list`, each `room` verb, `daemon start`
- *   (through `daemon.ts`'s `parseArgs`) and `chat` (through `chat.ts`).
+ *   (through `daemon/main.ts`'s `parseArgs`) and `chat` (through `chat.ts`).
  *
  * `chat` subverbs are delegated to `chat.ts`; this file pins the handoff, not
  * that parser. `bare kapelle` has no flags by definition, so it is covered in
