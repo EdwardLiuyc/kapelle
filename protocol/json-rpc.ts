@@ -50,7 +50,10 @@ export function encodeJsonRpcLine(message: OutgoingMessage): string {
   return `${JSON.stringify(message)}\n`;
 }
 
-/** Decode one stdout line, leaving its logging and dispatch to `AcpAgent`. */
+/**
+ * Decode one stdout line, leaving its logging and dispatch to `AcpAgent`.
+ * A JSON object is a message; primitives and arrays are malformed lines.
+ */
 export function parseJsonRpcLine(raw: string): ParsedJsonRpcLine {
   if (raw.length > MAX_LINE_LENGTH) {
     return { kind: "oversized", length: raw.length };
@@ -59,10 +62,17 @@ export function parseJsonRpcLine(raw: string): ParsedJsonRpcLine {
   const line = raw.trim();
   if (!line) return { kind: "empty" };
 
+  let parsed: unknown;
   try {
-    return { kind: "message", message: JSON.parse(line) as IncomingMessage };
+    parsed = JSON.parse(line);
   } catch {
     // Agents MUST NOT put non-ACP data on stdout, but be forgiving.
     return { kind: "malformed", line };
   }
+
+  // pi-lens-ignore: no-runtime-typeof
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { kind: "malformed", line };
+  }
+  return { kind: "message", message: parsed as IncomingMessage };
 }
