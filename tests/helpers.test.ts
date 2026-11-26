@@ -2,8 +2,9 @@
  * Shared subprocess cleanup (#428): graceful exits flush V8 coverage, and a
  * stuck process still meets the bounded SIGKILL fallback. Also the wait
  * helpers' budgets (#442): a spent budget still checks once. `roomLog` ignores
- * an unterminated last line (#572), and `countedGit`'s log (#322) keeps every
- * new call after a snapshot.
+ * an unterminated last line (#572), `liveRoomLog` treats only a missing file
+ * as empty, and `countedGit`'s log (#322) keeps every new call after a
+ * snapshot.
  */
 
 import assert from "node:assert/strict";
@@ -20,6 +21,7 @@ import {
   daemonApi,
   gitRepo,
   gone,
+  liveRoomLog,
   MOCK_AGENT,
   roomLog,
   spawnCli,
@@ -208,6 +210,34 @@ test("roomLog ignores an unterminated last line (#572)", async (t) => {
     await roomLog(root, id),
     [first, second],
     "the completed line appears on the next read",
+  );
+});
+
+test("liveRoomLog treats only a missing log as empty (#572)", async (t) => {
+  const root = await tempDir(t);
+  const previousStateHome = process.env.XDG_STATE_HOME;
+  process.env.XDG_STATE_HOME = await tempDir(t);
+  t.after(() => {
+    if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = previousStateHome;
+  });
+  const state = stateDirFor(root);
+  const id = "room-live-log";
+  const dir = join(state, "rooms", id);
+  const file = join(dir, "events.jsonl");
+  await mkdir(dir, { recursive: true });
+
+  assert.deepEqual(
+    await liveRoomLog(root, id),
+    [],
+    "a log not written yet is empty",
+  );
+
+  await writeFile(file, "{ not JSON }\n");
+  await assert.rejects(
+    liveRoomLog(root, id),
+    SyntaxError,
+    "a malformed complete line is still a failure",
   );
 });
 

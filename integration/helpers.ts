@@ -1143,6 +1143,20 @@ export async function roomLog(
   );
 }
 
+/** A live room's log: a missing file means no line yet, so return none.
+ *  Every other failure, including a malformed complete line, fails the test. */
+export async function liveRoomLog(
+  root: string,
+  id: string,
+): Promise<(RoomEventLine & { update: Record<string, unknown> })[]> {
+  try {
+    return await roomLog(root, id);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw err;
+  }
+}
+
 /** The answers in `lines`, in order. */
 export const answersIn = (lines: { update: Record<string, unknown> }[]) =>
   lines
