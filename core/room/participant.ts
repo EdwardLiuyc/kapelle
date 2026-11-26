@@ -1,7 +1,8 @@
 /**
- * One participant (M12-8b): its harness, from the spawn to the stop. The
- * room (`core/room.ts`) holds the roster, the checkouts and the record; the
- * queue is `core/room/turns.ts`.
+ * One participant (M12-8b): its harness, from the spawn to the stop. It
+ * knows no room (M12-8c): it has an owner, which lends it an id, notices, a
+ * stop flag and a watchdog, and hears of each turn's end. Its add, remove and
+ * record are `core/room/member.ts`; the queue is `core/room/turns.ts`.
  *
  * **A real session reports its models and login state** (M9-4) to
  * `noteSession`, from the `session/new` or `session/load` response and an
@@ -16,7 +17,9 @@
  * a fresh session and does not remember earlier turns (Half A). The log gets
  * `_client_participant_revived` and the participant reads `resumed:
  * "loaded"` or `"fresh"`. The mode is sent again either way: a load does not
- * keep it (§Mode after load). A dismissed room never revives.
+ * keep it (§Mode after load). A stopped owner never revives it: the
+ * participant then reads `dismissed` and refuses a send as `room_dismissed`,
+ * a room's words, the one owner so far.
  *
  * **A load can remember less than the files show** (§M0-9). That happened
  * only to a harness stopped during a turn, cancelled or cut: the cut turn
@@ -33,8 +36,8 @@
  * **A harness may rename its branch or rebase it (M6-6a).** After every turn
  * the participant reads the checkout again (`checkoutIdentity`): the branch
  * `HEAD` names, and the commit the branch's own reflog says its latest rebase
- * moved it onto. A rename updates the participant, and the room follows it
- * into the held checkout and `room.json` (`onCheckout`); a client that shows
+ * moved it onto. A rename updates the participant, and the owner follows it
+ * into the held checkout and its record (`onCheckout`); a client that shows
  * the branch reads the room again when the turn ends. A rebase also moves the participant's saved `baseSha`. The
  * whole-branch diff independently finds the current merge base from the
  * configured base ref, so it does not depend on this reflog read. A restore
@@ -164,7 +167,8 @@ function levelsOf(o: LevelOption): { id: string; name: string }[] {
 /** Who the participant is, and where it starts. */
 interface Seat {
   id: string;
-  roomId: string;
+  /** Its owner's id, which the permission queue names it by. */
+  ownerId: string;
   request: AgentRequest;
   /** Its own checkout, or the cwd when there are no worktrees. */
   worktree: string;
@@ -173,28 +177,29 @@ interface Seat {
   saved?: ParticipantRecord;
 }
 
-/** What the room lends it. */
+/** What its owner lends it. */
 interface Lent {
   bus: EventBus;
   permissions: PermissionQueue;
-  /** The room's and the checkout's notices; the participant adds the lines
+  /** The owner's and the checkout's notices; the participant adds the lines
    *  that depend on its mode. */
   notices: () => readonly RoomNotice[];
   /** The stderr log for the next harness, or undefined for none. */
   stderrLog: () => string | undefined;
-  dismissed: () => boolean;
+  /** True once the owner stops for good: no revive, no send. */
+  stopped: () => boolean;
   watchdog: Watchdog;
   limits: WatchdogLimits;
 }
 
-/** What it tells the room. */
+/** What it tells its owner. */
 interface Hooks {
   /** A revive gave the harness a new process. */
   onRevive: () => void;
   /** A turn ended that was not a reply's or a copy's, and not cut by a
-   *  stop: the room sends its answer on (M8-2). */
-  onAnswer: (worker: Participant, answer: Answer) => void;
-  /** The checkout's branch or rebase base changed; the room follows it in
+   *  stop: a room sends its answer on (M8-2). */
+  onTurnEnd: (worker: Participant, answer: Answer) => void;
+  /** The checkout's branch or rebase base changed; the owner follows it in
    *  the held checkout record. Absent when there is no worktree. */
   onCheckout?: (next: {
     branch: string;
@@ -205,7 +210,7 @@ interface Hooks {
   report?: (seen: Seen) => void;
 }
 
-/** What the room drives a participant with, beside its `Participant`. */
+/** What the owner drives a participant with, beside its `Participant`. */
 export interface ParticipantControl {
   participant: Participant;
   /** The model a revive asks for, which `room.json` keeps: the request's,
@@ -235,14 +240,14 @@ export interface ParticipantControl {
 }
 
 /**
- * One participant. A new one has no harness until the room calls `launch`;
+ * One participant. A new one has no harness until the owner calls `launch`;
  * a restored one has none until its next message revives it. On a throw,
  * `launch` has stopped whatever it started; the caller releases the
  * checkout.
  */
 export function createParticipant({
   id,
-  roomId,
+  ownerId,
   permissions,
   request: {
     spec,
@@ -258,12 +263,12 @@ export function createParticipant({
   bus,
   notices,
   stderrLog,
-  dismissed,
+  stopped: ownerStopped,
   watchdog,
   limits,
   saved,
   onRevive,
-  onAnswer,
+  onTurnEnd,
   onCheckout,
   report,
 }: Seat & Lent & Hooks): ParticipantControl {
@@ -296,7 +301,7 @@ export function createParticipant({
   const policy: Policy = (req) =>
     mode === "ask"
       ? permissions.roomPolicy(
-          { roomId, participantId: id, turn: turns },
+          { roomId: ownerId, participantId: id, turn: turns },
           bus,
           turnAbort.signal,
         )(req)
@@ -410,7 +415,7 @@ export function createParticipant({
   };
   /** Tells every client the result of a change: the model in use, or
    *  `null` when the harness names none, so each one reads the notice too.
-   *  It also makes the room save `asked` and drop `pendingModel`. */
+   *  It also makes the owner save `asked` and drop `pendingModel`. */
   const announceModel = (levelMoved = false) => {
     bus.emit({
       agent: id,
@@ -811,7 +816,8 @@ export function createParticipant({
     };
     // A stop sends nothing, also one that came during the checkout read.
     const finish = (answer: Answer | undefined) => {
-      if (answer && !stopping && !dismissed()) onAnswer(participant, answer);
+      if (answer && !stopping && !ownerStopped())
+        onTurnEnd(participant, answer);
     };
     let ready: Promise<void> | undefined;
     if (!agent) ready = revive();
@@ -876,7 +882,7 @@ export function createParticipant({
     id,
     bus,
     begin,
-    closed: () => Boolean(stopped) || stopping || dismissed(),
+    closed: () => Boolean(stopped) || stopping || ownerStopped(),
   });
   const { drop, hold } = queue;
 
@@ -932,7 +938,7 @@ export function createParticipant({
   const setMode = (next: ClientMode) => {
     const leftAsk = mode === "ask" && next !== "ask";
     mode = next;
-    if (leftAsk) permissions.answerParticipant(roomId, id, next === "auto");
+    if (leftAsk) permissions.answerParticipant(ownerId, id, next === "auto");
     if (agent) agent.allowReadOutsideRoot = readsOutside();
     warn();
   };
@@ -1052,7 +1058,7 @@ export function createParticipant({
       ];
     },
     status: () => {
-      if (dismissed()) return "dismissed";
+      if (ownerStopped()) return "dismissed";
       if (queue.busy()) return "busy";
       return stopped ?? "idle";
     },
@@ -1066,7 +1072,7 @@ export function createParticipant({
       return orderedBy;
     },
     send(text, sender, kind) {
-      if (dismissed()) {
+      if (ownerStopped()) {
         throw new RoomRefusal("room_dismissed", "the room is dismissed");
       }
       if (stopping) {

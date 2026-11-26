@@ -79,6 +79,66 @@ const PARTICIPANT_STATUSES: readonly ParticipantStatus[] = [
   "dismissed",
 ];
 
+/**
+ * One participant's record, checked and made whole (M12-8c): a room keeps
+ * one per participant in `room.json`, and any other owner can keep one the
+ * same way. `fail` makes the error, so the owner names the file and the list.
+ */
+export function readParticipantRecord(
+  raw: unknown,
+  fail: (why: string) => Error,
+): ParticipantRecord {
+  const p = raw as Record<string, unknown> | null | undefined;
+  for (const key of ["id", "name", "harness", "worktree", "sessionId"]) {
+    if (typeof p?.[key] !== "string") {
+      throw fail(`a participant's "${key}" is not a string`);
+    }
+  }
+  // SAFETY: the loop above proved `p` is an object.
+  const r = p as Record<string, unknown>;
+  if (typeof r.agent !== "string" && typeof r.cmd !== "string") {
+    throw fail(`participant ${r.id} names no "agent" or "cmd"`);
+  }
+  if (!MODES.includes(r.mode as ClientMode)) {
+    throw fail(`participant ${r.id} has mode ${JSON.stringify(r.mode)}`);
+  }
+  if (!PARTICIPANT_STATUSES.includes(r.status as ParticipantStatus)) {
+    throw fail(`participant ${r.id} has status ${JSON.stringify(r.status)}`);
+  }
+  // The contract's set is closed (R44): a client may trust it.
+  if (r.role !== undefined && !ROLES.includes(r.role as Role)) {
+    throw fail(`participant ${r.id} has role ${JSON.stringify(r.role)}`);
+  }
+  // SAFETY: the checks above cover every required ParticipantRecord field.
+  const saved = r as unknown as ParticipantRecord;
+  return {
+    ...saved,
+    settings: {
+      allowReadOutsideRoot: saved.settings?.allowReadOutsideRoot === true,
+    },
+    notices: Array.isArray(saved.notices) ? saved.notices : [],
+    // A `turns` that is not a whole number, or an `orderedBy` that is not a
+    // string, is dropped, so it is never saved again.
+    turns: Number.isInteger(saved.turns) ? saved.turns : undefined,
+    orderedBy:
+      typeof saved.orderedBy === "string" ? saved.orderedBy : undefined,
+    model:
+      typeof saved.model === "string" && saved.model ? saved.model : undefined,
+    pendingModel:
+      typeof saved.pendingModel === "string" && saved.pendingModel
+        ? saved.pendingModel
+        : undefined,
+    thoughtLevel:
+      typeof saved.thoughtLevel === "string" && saved.thoughtLevel
+        ? saved.thoughtLevel
+        : undefined,
+    pendingThoughtLevel:
+      typeof saved.pendingThoughtLevel === "string" && saved.pendingThoughtLevel
+        ? saved.pendingThoughtLevel
+        : undefined,
+  };
+}
+
 /** `room.json`, read and checked, or a throw naming what is wrong. The file
  *  is ours, so the check is for a crash or a hand edit, not an attack: it
  *  is in the operator's own state directory, next to what it names. */
@@ -112,76 +172,12 @@ export function readRoomRecord(path: string): RoomRecord {
   if (repositories?.some((path) => typeof path !== "string")) {
     throw bad('"repositories" must name strings');
   }
-  const participants = r.participants as Record<string, unknown>[];
-  const tombstones = (r.tombstones ?? []) as Record<string, unknown>[];
-  for (const [where, records] of [
-    ["participants", participants],
-    ["tombstones", tombstones],
-  ] as const) {
-    for (const p of records) {
-      for (const key of ["id", "name", "harness", "worktree", "sessionId"]) {
-        if (typeof p?.[key] !== "string") {
-          throw bad(
-            `the ${where} list: a participant's "${key}" is not a string`,
-          );
-        }
-      }
-      if (typeof p.agent !== "string" && typeof p.cmd !== "string") {
-        throw bad(
-          `the ${where} list: participant ${p.id} names no "agent" or "cmd"`,
-        );
-      }
-      if (!MODES.includes(p.mode as ClientMode)) {
-        throw bad(
-          `the ${where} list: participant ${p.id} has mode ${JSON.stringify(p.mode)}`,
-        );
-      }
-      if (!PARTICIPANT_STATUSES.includes(p.status as ParticipantStatus)) {
-        throw bad(
-          `the ${where} list: participant ${p.id} has status ${JSON.stringify(p.status)}`,
-        );
-      }
-      // The contract's set is closed (R44): a client may trust it.
-      if (p.role !== undefined && !ROLES.includes(p.role as Role)) {
-        throw bad(
-          `the ${where} list: participant ${p.id} has role ${JSON.stringify(p.role)}`,
-        );
-      }
-    }
-  }
-  const normalise = (p: Record<string, unknown>): ParticipantRecord => {
-    // SAFETY: the checks above cover every required ParticipantRecord field.
-    const saved = p as unknown as ParticipantRecord;
-    return {
-      ...saved,
-      settings: {
-        allowReadOutsideRoot: saved.settings?.allowReadOutsideRoot === true,
-      },
-      notices: Array.isArray(saved.notices) ? saved.notices : [],
-      // A `turns` that is not a whole number, or an `orderedBy` that is not a
-      // string, is dropped, so it is never saved again.
-      turns: Number.isInteger(saved.turns) ? saved.turns : undefined,
-      orderedBy:
-        typeof saved.orderedBy === "string" ? saved.orderedBy : undefined,
-      model:
-        typeof saved.model === "string" && saved.model
-          ? saved.model
-          : undefined,
-      pendingModel:
-        typeof saved.pendingModel === "string" && saved.pendingModel
-          ? saved.pendingModel
-          : undefined,
-      thoughtLevel:
-        typeof saved.thoughtLevel === "string" && saved.thoughtLevel
-          ? saved.thoughtLevel
-          : undefined,
-      pendingThoughtLevel:
-        typeof saved.pendingThoughtLevel === "string" &&
-        saved.pendingThoughtLevel
-          ? saved.pendingThoughtLevel
-          : undefined,
-    };
-  };
+  const list = (where: string, records: unknown[]) =>
+    records.map((p) =>
+      readParticipantRecord(p, (why) => bad(`the ${where} list: ${why}`)),
+    );
+  const participants = list("participants", r.participants);
+  const tombstones = list("tombstones", (r.tombstones ?? []) as unknown[]);
   return {
     ...(raw as RoomRecord),
     turnCap:
@@ -193,8 +189,8 @@ export function readRoomRecord(path: string): RoomRecord {
         ? (r.turnCount as number)
         : undefined,
     notices: Array.isArray(r.notices) ? (r.notices as RoomNotice[]) : [],
-    participants: participants.map(normalise),
-    tombstones: tombstones.map(normalise),
+    participants,
+    tombstones,
     ...(repositories?.length && { repositories: repositories as string[] }),
   };
 }

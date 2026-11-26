@@ -7,6 +7,9 @@
  * `core/`, `protocol/`, `client/contract.ts` and daemon files, but never chat.
  * Tests and integration helpers are allowed to import anything.
  *
+ * Inside `core/`, no file in `core/room/` imports `core/room.ts`, not even a
+ * type: the agent parts work with no room (M12-8c).
+ *
  * The checker works on a graph so a made-up graph can prove each rule without
  * creating files. Declaration-level `import type` / `export type` edges are
  * erased at runtime; inline type specifiers still load their module under
@@ -239,6 +242,12 @@ const checkGraph = (graph: SourceGraph): string[] => {
       const fail = (reason: string) =>
         problems.push(`${file} imports ${edge.spec}: ${reason}`);
 
+      // M12-8c: the agent parts work with no room, so they name none, not
+      // even for a type.
+      if (file.startsWith("core/room/") && target === "core/room.ts") {
+        fail("core/room/ may not import core/room.ts");
+        continue;
+      }
       if (edge.typeOnly) continue;
       if (edge.spec.startsWith("node:")) continue;
 
@@ -619,6 +628,18 @@ test("the top-level entries may import their actual lower layers", () => {
     "daemon/http.ts": [],
   });
   assert.deepEqual(checkGraph(allowed), []);
+});
+
+test("the checker rejects a core/room/ import of core/room.ts, type-only too", () => {
+  const graph = makeGraph({
+    "core/room.ts": [["./room/a.ts"]],
+    "core/room/a.ts": [["../room.ts", true]],
+    "core/room/b.ts": [["../room.ts"], ["./a.ts"]],
+  });
+  assert.deepEqual(checkGraph(graph), [
+    "core/room/a.ts imports ../room.ts: core/room/ may not import core/room.ts",
+    "core/room/b.ts imports ../room.ts: core/room/ may not import core/room.ts",
+  ]);
 });
 
 test("type-only imports stay allowed", () => {
