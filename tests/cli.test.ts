@@ -41,6 +41,7 @@ const git = async (cwd: string, ...args: string[]) =>
 import { API_VERSION } from "../client/contract.ts";
 import { stateDirFor } from "../core/runtime.ts";
 import {
+  assertAbsent,
   gitRepo,
   HOSTILE_AGENT,
   MOCK_AGENT,
@@ -145,7 +146,7 @@ test("--version beside a prompt is a usage error, not a harness run", async (t) 
   assert.equal(r.code, 1);
   assert.equal(r.stdout, "");
   assert.match(r.stderr, /--version takes no other arguments/);
-  await assert.rejects(readFile(marker), "the harness did not start");
+  await assertAbsent(marker, "the harness did not start");
 });
 
 test("--version is not a value for a missing flag", async (t) => {
@@ -202,7 +203,7 @@ test("setup with an extra positional is a usage error, not a prompt", async (t) 
   assert.equal(r.stdout, "");
   assert.match(r.stderr, /^usage: kapelle setup$/m);
   assert.doesNotMatch(r.stderr, /no daemon is listening/);
-  await assert.rejects(readFile(marker), "setup usage must not start an agent");
+  await assertAbsent(marker, "setup usage must not start an agent");
   await assert.rejects(
     readFile(join(runtime, "kapelle", "daemon.json")),
     "setup usage must not look for or start a daemon",

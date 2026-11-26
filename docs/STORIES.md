@@ -4990,14 +4990,16 @@ and each usage error. Today at least `kapelle workspace --bogus` ignores the unk
 lists the verbs that ignore an unknown flag today.
 
 **M12-10b · The CLI parses with `parseArgs` and refuses an unknown flag · M · needs M12-10a**
-D5. `cli.ts` uses `parseArgs` from `node:util`, as `chat.ts` and `daemon.ts` do: strict,
-with `allowPositionals`, and one option list per verb, still in `cli.ts`. An unknown flag
-is refused with its name and the verb's usage. The refusals that are product rules stay,
-such as `--agent` beside `--file`. `CHANGELOG.md` names the change. Moving verbs into a
-`cli/` folder is not part of this story. #394 clears old pi-lens warnings in the same
-file; take it with this story or just before it.
-*Done when* M12-10a's tests pass unchanged, except the unknown-flag cases, which now expect
-the refusal.
+D5. `cli.ts` uses `parseArgs` from `node:util`, as `chat.ts` and
+`daemon/main.ts` do. It is strict, sets `allowPositionals`, and keeps one option list per
+verb, still in `cli.ts`. An unknown flag is refused with its name and the verb's usage.
+The refusals that are product rules stay, such as `--agent` beside `--file`.
+`CHANGELOG.md` names the change. Moving verbs into a `cli/` folder is not part of this
+story. #394 clears old pi-lens warnings in the same file; take it with this story or just
+before it.
+*Done when* M12-10a's tests pass unchanged, except the unknown-flag cases. Unknown
+flags now expect the refusal; `--`, repeated value flags and missing-value handling,
+including its wording, may change to `parseArgs`' behaviour.
 
 **M12-11 · A harness's title is cut before it is kept · S · needs nothing**
 D2. A tool call's title comes from the harness, and only the 32 MiB line limit bounds it.

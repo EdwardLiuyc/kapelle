@@ -20,6 +20,7 @@ import {
   addRepo as added,
   alive,
   api,
+  assertAbsent,
   bootDaemon as boot,
   chatOnPty,
   gitRepo,
@@ -72,7 +73,7 @@ test("kapelle alone starts a daemon, opens the chat, and /leave leaves it runnin
     PI_MARKER: marker,
   });
   await new Promise((ok) => setTimeout(ok, 300));
-  await assert.rejects(readFile(marker), "bare kapelle started a harness");
+  await assertAbsent(marker, "bare kapelle started a harness");
   const file = join(runtime, "kapelle", "daemon.json");
   const { pid, port, token } = JSON.parse(await readFile(file, "utf8"));
   t.after(() => stopProcess(pid));
