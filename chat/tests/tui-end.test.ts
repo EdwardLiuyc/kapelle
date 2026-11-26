@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type DaemonAddress, VersionRefused } from "../../client/daemon.ts";
-import { lostRoomEnd } from "../tui.ts";
+import { daemonGoneEnd, lostRoomEnd } from "../tui.ts";
 
 const LOCAL: DaemonAddress = { port: 4719, token: "tok", fromClient: false };
 const REMOTE: DaemonAddress = { ...LOCAL, fromClient: true };
@@ -43,6 +43,27 @@ test("a remote client is sent to its SSH tunnel, not a local daemon (#567)", () 
   const line = result.lines.join("\n");
   assert.match(line, /local port 4719/);
   assert.doesNotMatch(line, /kapelle daemon start/);
+});
+
+test("with no room, a local daemon names the command that starts one (#567)", () => {
+  assert.deepEqual(daemonGoneEnd(undefined, LOCAL), {
+    code: 1,
+    lines: [LOCAL_STOPPED],
+  });
+});
+
+test("with no room, a remote client is sent to its SSH tunnel (#567)", () => {
+  const result = daemonGoneEnd(undefined, REMOTE);
+  assert.deepEqual(result, { code: 1, lines: [REMOTE_STOPPED] });
+  assert.doesNotMatch(result.lines.join("\n"), /kapelle daemon start/);
+});
+
+test("with no room, a daemon message keeps its own words (#567)", () => {
+  const message = "the daemon speaks API 2.0 and this client 1.25";
+  assert.deepEqual(daemonGoneEnd(message, REMOTE), {
+    code: 1,
+    lines: [`! ${message}`],
+  });
 });
 
 test("a hidden hall whose stream ends with the daemon up names no hall id (M11-1)", () => {

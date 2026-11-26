@@ -285,6 +285,19 @@ function daemonStoppedLine(d: DaemonAddress): string {
   return "! the daemon stopped: start it with kapelle daemon start, then run kapelle chat";
 }
 
+/** How the screen ends when no room is left and the daemon is gone: a
+ *  daemon message keeps its own words, otherwise a local daemon gets the
+ *  start command and a configured remote client gets the tunnel check. */
+export function daemonGoneEnd(
+  message: string | undefined,
+  daemon: DaemonAddress,
+): { code: number; lines: string[] } {
+  return {
+    code: 1,
+    lines: [message ? `! ${message}` : daemonStoppedLine(daemon)],
+  };
+}
+
 /** How the screen ends when every room's stream is gone. A refused version
  *  always keeps its own words; a hidden hall that ends last with no daemon
  *  gets the local start command, or the tunnel check for a configured
@@ -1240,7 +1253,8 @@ function chatTui(
 
     quit = (why) => {
       if (why.kind === "gone") {
-        end(1, why.message ? `! ${why.message}` : daemonStoppedLine(d));
+        const settled = daemonGoneEnd(why.message, d);
+        end(settled.code, ...settled.lines);
         return;
       }
       const { roomId, ended, err } = why;
