@@ -532,6 +532,16 @@ test("a chat record is checked against its folder and chat shape (M11-12)", asyn
       record: { ...good, lifecycle: "removing" },
       error: /"removedAt" is required/,
     },
+    {
+      why: "a notice with no text",
+      record: { ...good, notices: [{ kind: "x" }] },
+      error: /"notices" is not a list of notices/,
+    },
+    {
+      why: "notices that are not a list",
+      record: { ...good, notices: "kept" },
+      error: /"notices" is not a list of notices/,
+    },
   ];
   for (const one of cases) {
     writeFileSync(file, JSON.stringify(one.record));

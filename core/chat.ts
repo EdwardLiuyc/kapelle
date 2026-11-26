@@ -199,7 +199,10 @@ export async function openChat({
  * The chat `chat.json` names, as an earlier daemon left it. No harness
  * starts: its agent waits, `paused`, `killed` or `exited`, for its next
  * message. Its checkout is held again, never created, and its log reopened
- * with `seq` carried on. A chat that is not `active` throws.
+ * with `seq` carried on. A chat that is not `active` throws. So does one
+ * whose harness no longer resolves: a room keeps such a participant as a
+ * tombstone (#312), and a chat has no roster to keep it in. What a boot does
+ * with that chat is M11-13's to decide.
  */
 export async function restoreChat({
   id,
@@ -225,7 +228,9 @@ export async function restoreChat({
  * Finishes a remove a daemon left at `removing` (M11-14 calls it at boot).
  * Before the move, the harness died with the daemon: the checkout is
  * released here, then the folder moves. After the move only the record is
- * left to say `archived`. Answers the notices it added.
+ * left to say `archived`. Answers the notices it added. It throws when the
+ * saved folder cannot be opened, such as a repository that is gone; the
+ * chat then stays `removing`, so the caller must survive the throw.
  */
 export async function finishChatRemove(
   id: string,
@@ -591,6 +596,14 @@ function readChatRecord(path: string, id: string): ChatRecord {
   ) {
     throw bad('"repositories" is not a list of strings');
   }
+  // A finish reads each notice's text, so a bad one is named here.
+  const notices = r.notices ?? [];
+  if (
+    !Array.isArray(notices) ||
+    notices.some((n) => typeof (n as RoomNotice | null)?.text !== "string")
+  ) {
+    throw bad('"notices" is not a list of notices with a "text"');
+  }
   const participant = readParticipantRecord(r.participant, (why) =>
     bad(`the participant: ${why}`),
   );
@@ -605,7 +618,7 @@ function readChatRecord(path: string, id: string): ChatRecord {
   }
   return {
     ...(raw as ChatRecord),
-    notices: Array.isArray(r.notices) ? (r.notices as RoomNotice[]) : [],
+    notices: notices as RoomNotice[],
     participant,
   };
 }
