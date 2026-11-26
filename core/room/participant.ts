@@ -38,7 +38,7 @@
  * `HEAD` names, and the commit the branch's own reflog says its latest rebase
  * moved it onto. A rename updates the participant, and the owner follows it
  * into the held checkout and its record (`onCheckout`); a client that shows
- * the branch re-reads that record when the turn ends. A rebase also
+ * the branch reads its owner again when the turn ends. A rebase also
  * moves the participant's saved `baseSha`. The whole-branch diff independently
  * finds the current merge base from the configured base ref, so it does not
  * depend on this reflog read. A restore reads the checkout once too, because a
@@ -825,7 +825,7 @@ export function createParticipant({
     else if (wanted || wantedLevel !== undefined) ready = sendPending();
     // **Before the turn's own end line**, so a client that reloads the diff
     // on `_client_turn_ended` already has the rebased `baseSha`, and one that
-    // re-reads the owner's record then sees the new branch.
+    // reads its owner again then sees the new branch.
     const after = async () => {
       try {
         await syncCheckout();
