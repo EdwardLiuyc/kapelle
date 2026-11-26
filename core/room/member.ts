@@ -469,9 +469,10 @@ export async function restoreMember(
 /**
  * Stops a participant the caller already took off its roster, logs
  * `_client_participant_removed`, and releases its checkout. A kept checkout
- * is the owner's to report, since the participant is gone.
+ * is the owner's to report, since the participant is gone. Answers what
+ * `release` does: whether the release wrote a notice.
  */
-export async function removeMember(owner: Owner, m: Member): Promise<void> {
+export async function removeMember(owner: Owner, m: Member): Promise<boolean> {
   const { id, worktree } = m.participant;
   // No `finally` for the release: `stop()` cannot reject. It awaits the
   // harness's exit, which only resolves, and a turn whose handlers only
@@ -484,7 +485,7 @@ export async function removeMember(owner: Owner, m: Member): Promise<void> {
     agent: id,
     update: { sessionUpdate: "_client_participant_removed" },
   });
-  await release(id, worktree, owner.onNotice, m.place);
+  return release(id, worktree, owner.onNotice, m.place);
 }
 
 /** The record of one participant, as its owner's record file keeps it. */

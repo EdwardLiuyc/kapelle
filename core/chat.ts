@@ -13,7 +13,9 @@
  * repository. `chat.json` is saved as `room.json` is: whole, a moment after
  * each line that changes it. It names the repository root of each folder
  * the chat opened (#476), so the sweep and a remove find its checkout and
- * branch.
+ * branch. Its `updatedAt` moves at each of those saves (a message, a turn's
+ * end, a revive, a mode, model or level change) and at a remove, never at a
+ * pause or a restore. `removedAt` dates the remove.
  *
  * **Where it works.** In a repository it gets the checkout
  * `wt/<chatId>/<participantId>` on the branch `kapelle/<chatId>/<participantId>`,
@@ -398,12 +400,16 @@ async function buildChat(
       );
     }
   };
+  // Each save a change asks for moves `updatedAt`. The saves at open, a
+  // pause and a restore do not: a restart is no activity.
   let saveQueued = false;
   const saveSoon = () => {
     if (saveQueued || !saving) return;
     saveQueued = true;
     setImmediate(() => {
       saveQueued = false;
+      if (!saving) return;
+      meta.updatedAt = new Date().toISOString();
       save();
     });
   };
@@ -479,8 +485,9 @@ async function buildChat(
     const before = notices.length;
     // The stop cancels the turn and the queue, so each open question is
     // denied, then the harness stops and the release follows.
-    await removeMember(owner, m);
-    if (notices.length === before) nameKept(m.participant, m.place, notices);
+    if (!(await removeMember(owner, m))) {
+      nameKept(m.participant, m.place, notices);
+    }
     watch.stop();
     save();
     // No save may land in the old folder once it moves.

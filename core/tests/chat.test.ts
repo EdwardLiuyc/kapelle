@@ -10,7 +10,13 @@
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { promisify } from "node:util";
@@ -153,6 +159,25 @@ test("a chat keeps its memory across two turns and a restart, on its own log (M1
   }
 });
 
+test("chat.json's updatedAt moves on activity, not on a pause or a restore (M11-12)", async (t) => {
+  const repo = await gitRepo(t);
+  const chat = await chatIn(t, repo);
+  const file = join(chatDir(chat.id), "chat.json");
+  const opened = readJson(file);
+  assert.equal(opened.updatedAt, opened.createdAt);
+  const tick = () => new Promise((ok) => setTimeout(ok, 5));
+  await tick();
+  await chat.participant.send("one");
+  await chat.pause();
+  const active = readJson(file).updatedAt;
+  assert.ok(active > opened.createdAt, "a turn moves updatedAt");
+
+  await tick();
+  const back = await restoreChat({ ...deps(), id: chat.id });
+  await back.pause();
+  assert.equal(readJson(file).updatedAt, active, "a restart is no activity");
+});
+
 test("a chat's mode, model and level change, and chat.json keeps them (M11-12)", async (t) => {
   const repo = await gitRepo(t);
   const chat = await chatIn(t, repo, "levels");
@@ -285,6 +310,48 @@ test("a remove cancels the turn, drops its queue and denies its open question (M
     logOf(archivedChatDir(chat.id)).at(-1)?.update.sessionUpdate,
     "_client_participant_removed",
     "the remove's last line survives the close and move",
+  );
+});
+
+test("another notice during a remove does not hide the kept checkout's (M11-12)", async (t) => {
+  const repo = await gitRepo(t);
+  const bus = createEventBus();
+  const agent = await loadingMock(t, "diff-first");
+  const chat = await openChat({
+    bus,
+    permissions: createPermissionQueue(60_000),
+    agent: roomAgent({ agent, name: "solo", cwd: repo, mode: "ask" }),
+  });
+  t.after(() => chat.pause());
+  const { worktree } = chat.participant;
+  writeFileSync(join(worktree, "work.txt"), "work\n");
+  // An `ask` turn waits on its question, so the remove cuts a live turn.
+  void chat.participant.send("live");
+  for (const until = Date.now() + 10_000; Date.now() < until; ) {
+    if (chat.participant.status() === "busy") break;
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+  assert.equal(chat.participant.status(), "busy");
+
+  // The turn's end saves the record. A folder where the save writes its
+  // temp file makes that save fail and add its own notice, during the
+  // remove. It goes before the move, so the archive can be written.
+  const tmp = join(chatDir(chat.id), `chat.json.${process.pid}.tmp`);
+  bus.addListener(({ update }) => {
+    if (update.sessionUpdate === "_client_participant_removed") {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+  const removing = chat.remove();
+  mkdirSync(tmp);
+  const notices = (await removing).map((n) => n.text);
+  assert.ok(
+    notices.some((text) => text.startsWith("cannot save the chat record")),
+    `the other notice landed during the remove: ${notices.join(" | ")}`,
+  );
+  assert.ok(
+    notices.some((text) => text.includes(worktree)),
+    `the kept checkout is still named: ${notices.join(" | ")}`,
   );
 });
 
