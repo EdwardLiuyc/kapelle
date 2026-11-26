@@ -19,12 +19,15 @@
  * that parser. `bare kapelle` has no flags by definition, so it is covered in
  * the handoff section only.
  *
- * Current parser quirks pinned here, and the cases M12-10b may change: the
- * first repeated value flag wins, a missing value is reported by `flag()`,
+ * Current hand-parser quirks pinned here, and the cases M12-10b may change:
+ * the first repeated value flag wins, a missing value is reported by `flag()`,
  * and `--` is not a separator: `positionalAt` skips it and the token after it.
+ * `daemon start` and `chat` use `parseArgs`, so their repeated value flag keeps
+ * the last value and `--` ends their options.
  */
 
 import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { access, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -32,6 +35,7 @@ import test, { type TestContext } from "node:test";
 import { stateDirFor } from "../core/runtime.ts";
 import {
   type CliResult,
+  childEnv,
   gitRepo,
   REPO,
   spawnCli,
@@ -53,6 +57,13 @@ const SETUP_USAGE = /^usage: kapelle setup$/m;
 const DEMO_USAGE = /^usage: kapelle demo$/m;
 const NOT_A_REPO = /not a git repository, so it has no workspace to move to/;
 const STARTER = /starter\s+.*assets\/loops\/starter\.md/;
+
+// `script` from util-linux gives the CLI a real TTY; BSD's takes other flags.
+const noScript = spawnSync("script", ["--version"])
+  .stdout?.toString()
+  .includes("util-linux")
+  ? false
+  : "needs util-linux script for a TTY";
 
 type Expectation = {
   name: string;
@@ -464,7 +475,7 @@ test("a flag with no value records today's outcome", {
   ]);
 });
 
-test("a repeated value flag keeps today's first value", {
+test("a repeated value flag records today's outcome", {
   concurrency: 4,
   timeout: 60_000,
 }, async (t) => {
@@ -768,7 +779,7 @@ test("a value after a boolean flag stays positional", {
   ]);
 });
 
-test("-- keeps today's non-separator behaviour", {
+test("`--` records today's outcome", {
   concurrency: 4,
   timeout: 60_000,
 }, async (t) => {
@@ -1082,6 +1093,12 @@ test("every argument refusal owned by cli.ts is pinned", {
       stderr: "--version takes no other arguments",
     },
     {
+      name: "--version beside --file",
+      args: ["--version", "--file", f.missing1],
+      code: 1,
+      stderr: "--version takes no other arguments",
+    },
+    {
       name: "run without a file",
       args: ["run"],
       code: 1,
@@ -1304,6 +1321,49 @@ test("every argument refusal owned by cli.ts is pinned", {
       stderr: DEMO_USAGE,
     },
   ]);
+});
+
+test("room send on a TTY refuses a name with no text", {
+  skip: noScript,
+  timeout: 20_000,
+}, async (t) => {
+  const f = await fixture(t);
+  const marker = join(f.markers, randomUUID());
+  const child = spawn(
+    "script",
+    [
+      "-qfec",
+      `${JSON.stringify(process.execPath)} cli.ts room send ann`,
+      "/dev/null",
+    ],
+    { cwd: REPO, env: childEnv({ ...f.env, PI_MARKER: marker }) },
+  );
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8").on("data", (text) => (stdout += text));
+  child.stderr.setEncoding("utf8").on("data", (text) => (stderr += text));
+  t.after(() => {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+  });
+  const code = await new Promise<number | null>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", resolve);
+  });
+  await absent(marker, "the harness started");
+  await absent(f.daemonRecord, "a daemon record was written");
+  const name = "room send on a TTY";
+  check(
+    name,
+    { code, stdout, stderr },
+    {
+      name,
+      args: [],
+      code: 1,
+      stdout: /room send needs the text: after the name, or piped on stdin/,
+    },
+  );
 });
 
 test("kapelle chat passes its arguments through to chat.ts", {
