@@ -145,7 +145,9 @@ export function ownWatchdog(
   return { watchdog, limits, stop: () => clearInterval(sweep) };
 }
 
-/** What an owner lends each participant, and what it hears back. */
+/** What an owner lends each participant, and what it hears back. A member
+ *  reads some fields once, when it is made, and others at each call, so an
+ *  owner never replaces a field once its first member exists. */
 export interface Owner {
   /** Names the checkouts, the branches and the queue's asker. */
   id: string;

@@ -64,7 +64,8 @@ const targetOf = (
   if (!spec?.startsWith(".")) return undefined;
   const target = toSlash(join(dirname(file), spec));
   // NodeNext lets a `.js` specifier name a `.ts` source. Map it back, so
-  // every rule sees the file it reaches.
+  // every rule sees the file it reaches. This assumes no source is a `.js`
+  // file: the walk reads only `.ts` (`sourceFiles`), and none exists today.
   if (target.endsWith(".js")) return `${target.slice(0, -3)}.ts`;
   return target;
 };
