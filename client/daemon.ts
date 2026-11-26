@@ -49,6 +49,12 @@ export function clientConfigPath(env: NodeJS.ProcessEnv = process.env): string {
 const messageOf = (err: unknown) =>
   err instanceof Error ? err.message : String(err);
 
+/** RFC 6750's bearer-token characters. A header value outside this set can make
+ *  `Headers.set` throw with the value in its message, which would log the key. */
+const BEARER_TOKEN = /^[A-Za-z0-9._~+/-]+=*$/;
+const isBearerToken = (value: unknown): value is string =>
+  typeof value === "string" && BEARER_TOKEN.test(value);
+
 /** A configured address as a daemon address, or a strict refusal. */
 function configuredAddress(
   value: unknown,
@@ -60,36 +66,23 @@ function configuredAddress(
       `${where}: "daemonAddress" must be an absolute http://127.0.0.1:<port> address.`,
     );
   }
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new Error(
-      `${where}: "daemonAddress" must be an absolute http://127.0.0.1:<port> address.`,
-    );
-  }
-  if (
-    url.protocol !== "http:" ||
-    url.hostname !== "127.0.0.1" ||
-    url.port === "" ||
-    Number(url.port) < 1 ||
-    url.username !== "" ||
-    url.password !== "" ||
-    url.pathname !== "/" ||
-    url.search !== "" ||
-    url.hash !== ""
-  ) {
+  // Parse the text, not a URL: WHATWG URL drops an explicit :80 and accepts
+  // IPv4 shorthands such as 127.1, though this setting promises the exact form.
+  const match = /^http:\/\/127\.0\.0\.1:([1-9][0-9]{0,4})$/.exec(value);
+  const port = match ? Number(match[1]) : undefined;
+  if (port === undefined || port > 65535) {
     throw new Error(
       `${where}: "daemonAddress" must be exactly ` +
         `http://127.0.0.1:<port>, with no path, query, fragment or credentials.`,
     );
   }
-  if (typeof key !== "string" || key === "" || key.trim() !== key) {
+  if (!isBearerToken(key)) {
     throw new Error(
-      `${where}: "accessKey" must be a non-empty string with no surrounding whitespace.`,
+      `${where}: "accessKey" must be a bearer token (letters, digits, ` +
+        `-._~+/ and optional = padding).`,
     );
   }
-  return { port: Number(url.port), token: key };
+  return { port, token: key };
 }
 
 /**
@@ -252,6 +245,9 @@ export function request(
   path: string,
   init?: RequestInit,
 ): Promise<Response> {
+  if (!isBearerToken(d.token)) {
+    throw new Error("the daemon access key is not a valid bearer token");
+  }
   const headers = new Headers(init?.headers);
   headers.set("authorization", `Bearer ${d.token}`);
   if (init?.body !== undefined) headers.set("content-type", "application/json");

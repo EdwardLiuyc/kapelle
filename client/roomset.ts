@@ -17,10 +17,10 @@
  * its stream normally (`daemon/main.ts`, `shutdown`). So a stream that ends
  * when no daemon answers is a stop, and it waits too.
  * `followDaemon` reads the client daemon setting or `daemon.json` on every
- * call, through `address`. A new token gets `GET /version` once, then the
- * screen's one address object takes it in
- * place, so every later call goes to the new daemon. A restart writes no line
- * (E5), so each room is read again then for its `paused` and `killed`.
+ * call, through `address`. A new address gets `GET /version` once, then the
+ * screen's one address object takes it in place, so every later call goes to
+ * the new daemon. A restart writes no line (E5), so each room is read again
+ * then for its `paused` and `killed`.
  *
  * `readRoom` and `reconcile` are here too: the piped screen follows its one
  * room with them. `reconcile` says what happened, not a line. Its lines name
@@ -81,7 +81,7 @@ const WAIT_MS = 30_000;
 
 /**
  * `address`, over `d`: the one address object a screen passes to every call.
- * A new token in the client daemon setting or `daemon.json` is checked with
+ * A new address in the client daemon setting or `daemon.json` is checked with
  * `GET /version` once, then `d` takes it in place and `onNew` runs with the
  * `minor` warning, if any. A different `major` throws `VersionRefused` to this
  * call and every later one.
@@ -91,17 +91,21 @@ export function followDaemon(
   address: ReadAddress,
   onNew: (warning?: string) => void,
 ): ReadAddress {
-  let checking: { token: string; done: Promise<void> } | undefined;
+  let checking: { address: DaemonAddress; done: Promise<void> } | undefined;
   return async () => {
     const fresh = await address();
-    if (fresh.token === d.token) return d;
-    if (checking?.token !== fresh.token) {
+    if (fresh.port === d.port && fresh.token === d.token) return d;
+    if (
+      !checking ||
+      checking.address.port !== fresh.port ||
+      checking.address.token !== fresh.token
+    ) {
       const done = (async () => {
         const warning = await checkVersion(fresh);
         Object.assign(d, fresh);
         onNew(warning);
       })();
-      checking = { token: fresh.token, done };
+      checking = { address: fresh, done };
       // A daemon that did not answer is asked again on the next call.
       done.catch((err) => {
         if (!(err instanceof VersionRefused) && checking?.done === done) {
@@ -279,7 +283,7 @@ export interface RoomSet {
    *  after a successful delete and chooses where to go. */
   drop(id: string): void;
   /** Reads the daemon address now, as the next poll would, so a send right
-   *  after a restart has the new token. Never throws: a call on `d` says why. */
+   *  after a restart has the new address. Never throws: a call on `d` says why. */
   fresh(): Promise<void>;
 }
 

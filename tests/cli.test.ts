@@ -642,6 +642,7 @@ async function fakeDaemon(
 async function fakeRemoteDaemon(
   t: TestContext,
   routes: (path: string, res: ServerResponse) => void,
+  apiVersion: { major: number; minor: number } = API_VERSION,
 ) {
   const seen: { path: string; authorization: string | undefined }[] = [];
   const server = createServer((req, res) => {
@@ -653,7 +654,7 @@ async function fakeRemoteDaemon(
     if (req.url === "/version") {
       res.end(
         JSON.stringify({
-          apiVersion: API_VERSION,
+          apiVersion,
           capabilities: [],
         }),
       );
@@ -722,6 +723,58 @@ test("client.json wins over daemon.json for ps and chat list", async (t) => {
   assert.ok(remote.seen.some((r) => r.path === "/runs"));
   assert.ok(remote.seen.some((r) => r.path === "/rooms"));
   assert.ok(remote.seen.every((r) => r.authorization === "Bearer remote-key"));
+  assert.ok(remote.seen.every((r) => !r.path.includes("remote-key")));
+});
+
+test("attach checks a new client address even when the key stays the same", async (t) => {
+  const configHome = await tempDir(t);
+  let firstStream: ServerResponse | undefined;
+  const state = (res: ServerResponse) => {
+    res.end(JSON.stringify({ status: "running", tasks: [] }));
+  };
+  const first = await fakeRemoteDaemon(t, (path, res) => {
+    if (path === "/runs/r1") {
+      state(res);
+      return;
+    }
+    if (path === "/runs/r1/events") {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.flushHeaders();
+      firstStream = res;
+      return;
+    }
+    res.end("[]");
+  });
+  const second = await fakeRemoteDaemon(
+    t,
+    (path, res) => {
+      if (path === "/runs/r1") {
+        state(res);
+        return;
+      }
+      if (path === "/runs/r1/events") {
+        res.writeHead(200, { "content-type": "text/event-stream" }).end();
+        return;
+      }
+      res.end("[]");
+    },
+    { major: API_VERSION.major + 1, minor: 0 },
+  );
+  await writeClientDaemon(configHome, first.origin, "same-key");
+
+  const attach = spawnCli(t, ["attach", "r1"], "cli.ts", {
+    XDG_CONFIG_HOME: configHome,
+  });
+  await attach.waitFor("attached to r1");
+  assert.ok(firstStream, "attach opened no event stream");
+  await writeClientDaemon(configHome, second.origin, "same-key");
+  firstStream.destroy();
+
+  const r = await attach.done;
+  assert.equal(r.code, 1, r.stderr);
+  assert.match(r.stderr, /update the client or the daemon/);
+  assert.ok(second.seen.some((entry) => entry.path === "/version"));
+  assert.ok(!second.seen.some((entry) => entry.path.endsWith("/events")));
 });
 
 test("a configured client never starts a local daemon", async (t) => {

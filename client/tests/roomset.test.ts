@@ -797,6 +797,23 @@ for (const how of ["a crash", "a clean stop"]) {
   });
 }
 
+test("a client setting moves the screen to a new port under the same token", async (t) => {
+  const old = await fake(t, "same-key");
+  const { file, address } = daemonFile(old.d);
+  const d = { ...old.d };
+  const { set, said } = follow(t, d, address);
+  set.start([]);
+  await until(() => old.polls >= 1);
+
+  const next = await fake(t, "same-key");
+  file.now = next.d;
+  await set.fresh();
+
+  assert.deepEqual(d, next.d, "the screen took the new port");
+  assert.deepEqual(said.restarts, [undefined]);
+  assert.deepEqual(said.ends, []);
+});
+
 test("a restart during a held read waits its turn and reads the new daemon once", async (t) => {
   const old = await fake(t);
   old.holdReads = true;

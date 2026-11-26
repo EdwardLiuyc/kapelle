@@ -90,8 +90,9 @@ a credential.
 `daemonAddress` must be exactly `http://127.0.0.1:<port>`: no HTTPS, host
 name, path, query, fragment or credentials. That loopback form is what an SSH
 tunnel reaches today (D6). `accessKey` is sent as the bearer token; until
-M11-8 it is the daemon's current token, copied by hand. The key must never
-appear in a URL, request path or log.
+M11-8 it is the daemon's current token, copied by hand. It must be a bearer
+token: one or more letters, digits, or `-._~+/`, then optional `=` padding.
+The key must never appear in a URL, request path or log.
 
 Both keys must be present together. A missing file or `{}` is no opinion and
 falls back to `daemon.json`. A present setting wins over `daemon.json`: the
@@ -111,7 +112,7 @@ daemon machine.
 | only one key | refused: both must be set together |
 | unknown key | refused, naming the known keys |
 | not a plain `0600` file owned by you | refused |
-| bad address or empty key | refused; the key is not echoed |
+| bad address or invalid key | refused; the key is not echoed |
 
 ## Project file — `<repo>/.kapelle/config.json`
 

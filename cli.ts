@@ -1128,13 +1128,14 @@ async function attachRun(): Promise<number> {
     !only || taskId === only || taskId === "run";
   const first = await findDaemon();
   if (!first) return 1;
-  // The token of the last daemon whose version passed (B5). A restart brings
-  // a new token, and maybe a new version. The check runs when the stream
-  // connects, not on every call: a permission answer sent between a restart
-  // and the next connect is not checked. At worst it lands on a daemon whose
-  // contract has changed; the connect that follows refuses that daemon and
-  // ends the stream.
-  let checked = first.token;
+  // The address of the last daemon whose version passed (B5). A restart or a
+  // client-setting edit can bring a new port, token and version. The check
+  // runs when the stream connects, not on every call: a permission answer sent
+  // between a restart and the next connect is not checked. At worst it lands
+  // on a daemon whose contract has changed; the connect that follows refuses
+  // that daemon and ends the stream.
+  let checkedPort = first.port;
+  let checkedToken = first.token;
   // Both connection files are read again on every call: a daemon that
   // restarts while this is attached has a new token, and maybe a new port
   // (M5-6). A configured client daemon wins over `daemon.json`.
@@ -1159,16 +1160,17 @@ async function attachRun(): Promise<number> {
   // whole restart inside one read-to-fetch gap. Retry on 401 if it is seen.
   // The window covers the version check below too: a 401 there is a
   // `VersionRefused`, and it also ends the stream.
-  // A new token is checked before its stream opens, and a different `major`
+  // A new address is checked before its stream opens, and a different `major`
   // is a `VersionRefused`, which ends the stream rather than retries it.
   const connect: Connect = async (after, signal) => {
     const d = await freshDaemon();
     if (d === "missing") return undefined;
     if (d === "unready") throw new Error("the daemon is starting");
-    if (d.token !== checked) {
+    if (d.port !== checkedPort || d.token !== checkedToken) {
       const warning = await checkVersion(d, signal);
       if (warning) console.error(`! ${warning}`);
-      checked = d.token;
+      checkedPort = d.port;
+      checkedToken = d.token;
     }
     return request(d, `${path}/events`, {
       signal,

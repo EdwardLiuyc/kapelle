@@ -87,18 +87,16 @@ test("client.json is strict, private and a full loopback origin", async (t) => {
   await writeFile(file, "{}", { mode: 0o600 });
 
   assert.equal(await readClientDaemon(file), undefined);
-  await writeFile(
-    file,
-    JSON.stringify({
-      daemonAddress: "http://127.0.0.1:4719",
-      accessKey: "key",
-    }),
-    { mode: 0o600 },
-  );
-  assert.deepEqual(await readClientDaemon(file), {
-    port: 4719,
-    token: "key",
-  });
+  for (const [daemonAddress, port] of [
+    ["http://127.0.0.1:4719", 4719],
+    ["http://127.0.0.1:80", 80],
+    ["http://127.0.0.1:65535", 65535],
+  ] as const) {
+    await writeFile(file, JSON.stringify({ daemonAddress, accessKey: "key" }), {
+      mode: 0o600,
+    });
+    assert.deepEqual(await readClientDaemon(file), { port, token: "key" });
+  }
 
   const bad: [unknown, RegExp][] = [
     [{ daemonAddress: "http://127.0.0.1:4719" }, /must be set together/],
@@ -127,6 +125,18 @@ test("client.json is strict, private and a full loopback origin", async (t) => {
       /must be exactly/,
     ],
     [
+      { daemonAddress: "http://127.0.0.1:65536", accessKey: "key" },
+      /must be exactly/,
+    ],
+    [
+      { daemonAddress: "http://127.1:4719", accessKey: "key" },
+      /must be exactly/,
+    ],
+    [
+      { daemonAddress: "http://127.0.0.1:4719/", accessKey: "key" },
+      /must be exactly/,
+    ],
+    [
       { daemonAddress: "http://127.0.0.1:4719/path", accessKey: "key" },
       /must be exactly/,
     ],
@@ -138,6 +148,13 @@ test("client.json is strict, private and a full loopback origin", async (t) => {
       /must be exactly/,
     ],
     [{ daemonAddress: "http://127.0.0.1:4719", accessKey: "" }, /accessKey/],
+    [
+      {
+        daemonAddress: "http://127.0.0.1:4719",
+        accessKey: "SECRET\nTOKEN",
+      },
+      /accessKey/,
+    ],
   ];
   for (const [body, expected] of bad) {
     await writeFile(file, JSON.stringify(body), { mode: 0o600 });
@@ -179,6 +196,18 @@ test("an unreachable daemon error names its origin, never the access key", async
     assert.doesNotMatch(err.message, /SECRET-TOKEN/);
     return true;
   });
+});
+
+test("an invalid access key is refused by version check without echoing it", async () => {
+  await assert.rejects(
+    checkVersion({ port: 1, token: "SECRET\nTOKEN" }),
+    (err) => {
+      assert.ok(err instanceof Error);
+      assert.match(err.message, /access key is not a valid bearer token/);
+      assert.doesNotMatch(err.message, /SECRET/);
+      return true;
+    },
+  );
 });
 
 test("the same version passes silently, with the token sent", async (t) => {
