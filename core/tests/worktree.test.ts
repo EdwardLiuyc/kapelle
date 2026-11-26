@@ -517,6 +517,17 @@ test("a crash between checkout and branch removal finishes only an untouched bra
   assert.equal(await hasBranch(root, "worked"), true, "committed work stays");
 });
 
+test("a commit release with no checkout keeps the branch and says so (#19)", async (t) => {
+  const root = await repo(t);
+  const { worktrees } = await openWorktrees(root, RUN_ID);
+  assert.ok(worktrees);
+  const path = await worktrees.acquire("plan");
+  await git(root, "worktree", "remove", "--force", path);
+  const warning = await worktrees.release("plan", "commit");
+  assert.match(String(warning), /nothing was committed/);
+  assert.equal(await hasBranch(root, "plan"), true, "a run keeps its branch");
+});
+
 for (const status of ["done", "warned"] as const) {
   test(`a ${status} task with an empty diff leaves the branch at its base`, async (t) => {
     const root = await repo(t);

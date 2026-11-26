@@ -1218,7 +1218,9 @@ export async function openWorktrees(
         // A crash can land between `worktree remove` and `branch -D`: the
         // checkout is gone and only its branch is left. Finish that remove
         // when the branch is still ours and at its base. A branch that moved
-        // may hold committed work, so it is kept and named.
+        // may hold committed work, so it is kept and named. Only `keep`
+        // deletes: a `commit` keeps a branch at its base (#19), and with no
+        // checkout there is nothing to commit.
         if (!existsSync(task.path)) {
           const head = await tryGitLine(
             root,
@@ -1230,6 +1232,12 @@ export async function openWorktrees(
             return (
               `left branch ${task.branch}: its checkout is gone and the ` +
               `branch is not one ${runId} created. Nothing was removed.`
+            );
+          }
+          if (action === "commit") {
+            return (
+              `left branch ${task.branch}: its checkout is gone, so nothing ` +
+              "was committed. Nothing was removed."
             );
           }
           if (head !== task.baseSha) {
