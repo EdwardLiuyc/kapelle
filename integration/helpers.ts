@@ -5,11 +5,11 @@
  * against the **actual harness binaries**, so they need credentials and spend
  * real tokens; they stay out of CI because `node --test` does not discover the
  * suffix. Run them with `npm run test:harness`. Most of this file serves the
- * other kind, which **does** run in CI: `tests/cli.test.ts`, the contract
- * tests, and the daemon suites (`tests/daemon*.test.ts`, `tests/attach.test.ts`,
- * `tests/chat-*.test.ts`), whose own helpers are the last section. They use
- * `mock-agent.mjs`, so everything here except `twoTurns` must stay
- * credential-free.
+ * other kind, which **does** run in CI: `tests/cli.test.ts`,
+ * `tests/cli-flags.test.ts`, the contract tests, and the daemon suites
+ * (`tests/daemon*.test.ts`, `tests/attach.test.ts`, `tests/chat-*.test.ts`),
+ * whose own helpers are the last section. They use `mock-agent.mjs`, so
+ * everything here except `twoTurns` must stay credential-free.
  *
  * **Assert on what we control, never on what the model says.** File on disk or
  * not, exit code, our own notice lines. A test that greps for the agent's prose
@@ -55,7 +55,7 @@ import {
   resolveEnv,
 } from "../protocol/registry.ts";
 
-/** The repository root, and the cwd of every subprocess spawned here. */
+/** The repository root, and the default cwd of subprocesses spawned here. */
 export const REPO = join(import.meta.dirname, "..");
 
 /**
