@@ -1118,7 +1118,8 @@ export async function bootFinding(t: TestContext, path: string) {
   return { d, runtime };
 }
 
-/** Every line of a room's log, read from disk. */
+/** Every complete line of a room's log, read from disk. A live writer can
+ *  leave its last line partial, so callers that need a later event poll. */
 export async function roomLog(
   root: string,
   id: string,
@@ -1129,9 +1130,12 @@ export async function roomLog(
     join(stateDirFor(root), "rooms", id, "events.jsonl"),
     "utf8",
   );
+  const lines = text.split("\n");
+  // The final piece is either empty after a newline or the writer's partial
+  // line. It is not an event until its newline is on disk.
+  lines.pop();
   return (
-    text
-      .split("\n")
+    lines
       .filter(Boolean)
       // A malformed event log is a test failure, not something to swallow.
       // pi-lens-ignore: unchecked-throwing-call-js

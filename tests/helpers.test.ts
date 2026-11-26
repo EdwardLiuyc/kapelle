@@ -1,15 +1,17 @@
 /**
  * Shared subprocess cleanup (#428): graceful exits flush V8 coverage, and a
  * stuck process still meets the bounded SIGKILL fallback. Also the wait
- * helpers' budgets (#442): a spent budget still checks once. And
- * `countedGit`'s log (#322): a slice after a snapshot keeps every new call.
+ * helpers' budgets (#442): a spent budget still checks once. `roomLog` ignores
+ * a partial last line (#572), and `countedGit`'s log (#322) keeps every new
+ * call after a snapshot.
  */
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
+import { stateDirFor } from "../core/runtime.ts";
 import {
   addRepo,
   alive,
@@ -161,6 +163,40 @@ test("until checks once even when its budget is already spent (#442)", async () 
     /timed out waiting for a false check/,
   );
   assert.equal(checks, 2);
+});
+
+test("roomLog ignores a partial last line (#572)", async (t) => {
+  const root = await tempDir(t);
+  const state = stateDirFor(root);
+  const id = "room-partial";
+  const dir = join(state, "rooms", id);
+  const file = join(dir, "events.jsonl");
+  await mkdir(dir, { recursive: true });
+  t.after(() => rm(state, { recursive: true, force: true }));
+
+  const first = {
+    seq: 1,
+    at: "2026-11-26T00:00:00.000Z",
+    roomId: id,
+    participantId: "p-12345678",
+    update: { sessionUpdate: "_client_user_message", text: "one" },
+  };
+  const second = { ...first, seq: 2, update: { ...first.update, text: "two" } };
+  const secondLine = JSON.stringify(second);
+  await writeFile(file, `${JSON.stringify(first)}\n${secondLine.slice(0, -1)}`);
+
+  assert.deepEqual(
+    await roomLog(root, id),
+    [first],
+    "the partial second line is not an event",
+  );
+
+  await writeFile(file, `${secondLine.slice(-1)}\n`, { flag: "a" });
+  assert.deepEqual(
+    await roomLog(root, id),
+    [first, second],
+    "the completed line appears on the next read",
+  );
 });
 
 test("countedGit keeps the first call after a snapshot (#322)", async (t) => {
