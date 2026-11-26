@@ -668,11 +668,10 @@ export const MEASURED = {
   measuredOn: { version: "0.1.0", date: "2026-09-29" },
 } as const satisfies NonNullable<AgentEntry["measured"]>;
 
-/** A registry entry for the mock with a store and a measured load. The generated
- *  id is unique, so a restored participant resolves it again with
- *  `measured.loads`. Removed after the test. It changes the module's own
- *  `AGENTS`, which is process-local: `node:test` gives each test file its own
- *  process, and the unique entry is deleted after its test. */
+/** Registers a mock with a store and a measured load under a generated id, so a
+ *  restored participant resolves it again with `measured.loads`. Removed after
+ *  the test. The `AGENTS` change is process-local: `node:test` gives each test
+ *  file its own process, and the unique entry is deleted after its test. */
 export async function loadingMock(
   t: TestContext,
   scenario: string,
