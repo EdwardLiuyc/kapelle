@@ -142,7 +142,10 @@ and the person's shell (`chat/tui/term.ts`).
 
 | Path | What it is |
 | --- | --- |
-| `protocol/agent.ts` | `AcpAgent`: one harness subprocess, JSON-RPC over stdio. |
+| `protocol/agent.ts` | `AcpAgent`: one harness subprocess and its ACP session; the `toolCallId` map and write decisions. |
+| `protocol/json-rpc.ts` | Newline-delimited JSON-RPC framing and the 32 MiB stdout-line refusal. |
+| `protocol/path-guard.ts` | The disk-reading, realpath-based workspace guard; it applies in every mode. |
+| `protocol/permission.ts` | Pure policy-answer interpretation and permission-option selection. |
 | `protocol/registry.ts` | The whole adapter layer: one entry per harness, `launch` plus `measured`. |
 | `protocol/types.ts` | Hand-written wire types, and the `_client_*` synthetic events. |
 | `core/policy.ts` | `safe` / `ask` / `auto`, mode negotiation, `resolvePolicy`. |
@@ -214,12 +217,12 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
   logs in (D6, as amended). npm runs the package's own install scripts as the daemon's
   user: the one place kapelle runs third-party code outside a harness. The check box and
   the registry's pin are what contain it, so never widen either without the person.
-- **Never let a mode turn off the path guard.** See the top of `protocol/agent.ts`.
+- **Never let a mode turn off the path guard.** See the top of `protocol/path-guard.ts`.
 - **Never move the `toolCallId` map out of `AcpAgent`.** See the top of `protocol/agent.ts`.
 - **Never let an approval cover more than one write of the bytes the person saw.** See
   the top of `protocol/agent.ts`.
 - **Never fall back to `options[0]` when `pickOption` finds no match**, on any permission
-  request. See the top of `protocol/agent.ts`.
+  request. See the top of `protocol/permission.ts`.
 - **Never send `modeMap.auto`, and send the mode again after a `session/load`.** See
   `harnessModeId` in `core/policy.ts`, and the top of `core/room/participant.ts` for when
   a room sends it.

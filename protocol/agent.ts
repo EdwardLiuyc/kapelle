@@ -1,10 +1,8 @@
 /**
- * `AcpAgent`: one harness subprocess, JSON-RPC over stdio, and the path guard.
+ * `AcpAgent`: one harness subprocess and its ACP session over stdio.
  *
- * Five rules keep each decision honest. They are easy to break:
+ * Two rules keep each decision honest. They are easy to break:
  *
- * - **The path guard is not the policy.** `#guardPath` compares realpaths
- *   and applies in every mode, `auto` included.
  * - **The `toolCallId → {title, kind, rawInput}` map stays here.** A
  *   permission request can carry only a `toolCallId`, so without the map
  *   every decision goes blind. A finished call, or one outside a turn, keeps
@@ -13,34 +11,33 @@
  * - **An approval covers one write per file it named, of the bytes the
  *   person saw** (#310). A denial is sticky. The detail is at
  *   `#writeDecisions`.
- * - **`pickOption` returns `null` rather than guess.** Never fall back to
- *   `options[0]` (#13): claude 0.49.0 listed `allow_always` first, so a
- *   denial could become a lasting grant.
- * - **Only a yes for the `session` may send `allow_always`** (M12-4). A
- *   plain `true` is a yes `once`, and `pickOption` then takes `allow_once`
- *   or nothing. `ask` and `safe` answer `once`; only `auto` answers
- *   `session`. Our own rule above does not change with it.
  */
 
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createWriteStream, type WriteStream } from "node:fs";
-import { lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, relative, resolve } from "node:path";
 import { createInterface } from "node:readline";
-
+import {
+  encodeJsonRpcLine,
+  type IncomingMessage,
+  MAX_LINE_LENGTH,
+  type OutgoingMessage,
+  parseJsonRpcLine,
+} from "./json-rpc.ts";
+import { guardPathOnDisk } from "./path-guard.ts";
+import { answerScope, type PolicyAnswer, pickOption } from "./permission.ts";
 import type {
   AgentCapabilities,
   AgentEvent,
   Implementation,
   InitializeResponse,
-  JsonRpcError,
   LoadSessionResponse,
   McpServer,
   NewSessionResponse,
   PermissionOption,
-  PermissionOptionId,
   PromptResponse,
   ReadTextFileResponse,
   RequestPermissionResponse,
@@ -57,6 +54,8 @@ import type {
   ToolKind,
   WriteTextFileResponse,
 } from "./types.ts";
+
+export type { PolicyAnswer } from "./permission.ts";
 
 const PROTOCOL_VERSION = 1;
 
@@ -95,22 +94,6 @@ const DEFAULT_STOP_GRACE_MS = 5_000;
 const STDIO_DRAIN_MS = 250;
 
 /**
- * The longest stdout line this client will parse (M1b-6, issue #22).
- *
- * Counted in UTF-16 units rather than bytes — for JSON-RPC's ASCII-heavy
- * payloads the two are within a rounding error, and `Buffer.byteLength` on
- * every line of every turn is a cost paid for nothing. 32 MiB is far above any
- * real payload: the largest thing that legitimately crosses this wire is a
- * file's contents in an `fs/read_text_file` reply, which the harness asked for.
- *
- * ponytail: `readline` has already buffered the whole line by the time we see
- * it, so this refuses the payload rather than bounding the memory that held
- * it. A real bound means a manual chunk scanner over stdout in place of
- * `createInterface`; upgrade to one if this ever fires against a live harness.
- */
-const MAX_LINE_LENGTH = 32 * 1024 * 1024;
-
-/**
  * The policy a caller who supplied none gets.
  *
  * It is not `safePolicy`: the policies live in `core/policy.ts` since M1a-5 and
@@ -136,7 +119,7 @@ interface PolicyToolCall {
 }
 
 /**
- * One file a tool call would write, named after `#guardPath` (M4-6), so a
+ * One file a tool call would write, named after `guardPathOnDisk` (M4-6), so a
  * path outside the root never gets here. `core/` turns it into a diff for a
  * person; the policy never reads it.
  */
@@ -155,15 +138,6 @@ export interface PolicyRequest {
   toolCall: PolicyToolCall;
   options: PermissionOption[];
 }
-
-/**
- * A policy's answer (M12-4). `true` is yes, `once`: `pickOption` takes only
- * `allow_once`. `{ allow: true, scope: "session" }` is yes, and the harness
- * may keep it: `pickOption` may take `allow_always` when no `allow_once` is
- * offered. Only `auto` answers `session`. Anything else is a denial; an
- * unknown answer never allows.
- */
-export type PolicyAnswer = boolean | { allow: true; scope: "session" };
 
 export type Policy = (
   req: PolicyRequest,
@@ -246,22 +220,6 @@ function settled({ title, kind, status }: RememberedToolCall) {
   return { title, kind, status };
 }
 
-type OutgoingMessage =
-  | { jsonrpc: "2.0"; id: number | string; method: string; params?: unknown }
-  | { jsonrpc: "2.0"; method: string; params?: unknown }
-  | { jsonrpc: "2.0"; id: number | string; result: unknown }
-  | { jsonrpc: "2.0"; id: number | string; error: JsonRpcError };
-
-/** A line off the agent's stdout, before we know which of the three it is. */
-interface IncomingMessage {
-  jsonrpc?: string;
-  id?: number | string;
-  method?: string;
-  params?: unknown;
-  result?: unknown;
-  error?: JsonRpcError;
-}
-
 interface ReadTextFileParams {
   path: string;
   line?: number;
@@ -315,8 +273,8 @@ export class SpawnError extends Error {}
  * the whole `PromptResponse` (#62 B3), the cancel-intent event (#62 R4) and
  * stderr capture on death. Nothing from the story is outstanding.
  */
-// A verbatim port of acp.mjs's single class — the story is "essentially
-// intact", so splitting it is a refactor this change deliberately does not make.
+// The subprocess, ACP session, write decisions and stderr stay together;
+// framing, path containment and option selection have their own modules.
 // pi-lens-ignore: large-class
 export class AcpAgent {
   name: string;
@@ -844,32 +802,27 @@ export class AcpAgent {
     if (this.#closed) return;
     if (!this.#proc) throw new Error(`agent "${this.name}" is not started`);
     // Messages are newline-delimited and must not contain embedded newlines.
-    this.#proc.stdin.write(`${JSON.stringify(msg)}\n`);
+    this.#proc.stdin.write(encodeJsonRpcLine(msg));
   }
 
   #onLine(raw: string): void {
-    // Before `trim`, which would copy the whole thing. Unconditional, not
-    // `#log`: a refusal is exactly the event a run must not be silent about,
-    // and a harness that reaches this length is not having a normal turn.
-    if (raw.length > MAX_LINE_LENGTH) {
+    const parsed = parseJsonRpcLine(raw);
+    // Unconditional, not `#log`: a refusal is exactly the event a run must not
+    // be silent about, and a harness that reaches this length is not having a
+    // normal turn.
+    if (parsed.kind === "oversized") {
       process.stderr.write(
-        `[${this.name}] oversized stdout line dropped: ${raw.length} chars (max ${MAX_LINE_LENGTH})\n`,
+        `[${this.name}] oversized stdout line dropped: ${parsed.length} chars (max ${MAX_LINE_LENGTH})\n`,
       );
       return;
     }
-
-    const line = raw.trim();
-    if (!line) return;
-
-    let msg: IncomingMessage;
-    try {
-      msg = JSON.parse(line) as IncomingMessage;
-    } catch {
-      // Agents MUST NOT put non-ACP data on stdout, but be forgiving.
-      this.#log(`ignoring non-JSON stdout: ${line.slice(0, 200)}`);
+    if (parsed.kind === "empty") return;
+    if (parsed.kind === "malformed") {
+      this.#log(`ignoring non-JSON stdout: ${parsed.line.slice(0, 200)}`);
       return;
     }
 
+    const msg = parsed.message;
     if (msg.method && msg.id !== undefined) {
       void this.#onRequest(msg);
       return;
@@ -1008,39 +961,15 @@ export class AcpAgent {
 
   // ---------- client-side capabilities ----------
 
-  /**
-   * The absolute path to use, or a throw naming the root it left.
-   *
-   * The prefix check is on **realpaths** (M1b-6, issue #22). `resolve` is
-   * string arithmetic and never touches the filesystem, so before this a
-   * symlink sitting inside the root and pointing outside it read as in-root
-   * and was followed — the hole `protocol/tests/agent.test.ts` recorded as a
-   * documented gap rather than a pass.
-   *
-   * What is returned is still the resolved-but-not-realpathed path, so a write
-   * lands where the harness asked and `_client_wrote_file` reports that name.
-   * Following the link at write time is safe because it is the same link this
-   * check just resolved.
-   */
-  async #guardPath(p: string, { write }: { write: boolean }): Promise<string> {
-    const abs = resolve(this.cwd, p);
-    const root = await realPathOrNearest(this.cwd);
-    const real = await realPathOrNearest(abs);
-    const inRoot = real === root || real.startsWith(root + sep);
-    if (!inRoot && (write || !this.allowReadOutsideRoot)) {
-      throw new Error(
-        `path outside workspace root refused: ${real} (root: ${root})`,
-      );
-    }
-    return abs;
-  }
-
   async #readTextFile({
     path,
     line,
     limit,
   }: ReadTextFileParams): Promise<ReadTextFileResponse> {
-    const abs = await this.#guardPath(path, { write: false });
+    const abs = await guardPathOnDisk(this.cwd, path, {
+      write: false,
+      allowReadOutsideRoot: this.allowReadOutsideRoot,
+    });
     let content = await readFile(abs, "utf8");
     if (line != null || limit != null) {
       const lines = content.split("\n");
@@ -1127,7 +1056,7 @@ export class AcpAgent {
     path,
     content,
   }: WriteTextFileParams): Promise<WriteTextFileResponse> {
-    const abs = await this.#guardPath(path, { write: true });
+    const abs = await guardPathOnDisk(this.cwd, path, { write: true });
     const decision = this.#writeDecisions.get(abs);
     if (decision === "denied") {
       throw new Error(`write refused by policy: ${abs}`);
@@ -1202,7 +1131,7 @@ export class AcpAgent {
     const edits: PolicyEdit[] = [];
     for (const w of wanted) {
       try {
-        const abs = await this.#guardPath(w.path, { write: true });
+        const abs = await guardPathOnDisk(this.cwd, w.path, { write: true });
         edits.push({ ...w, abs, path: relative(this.cwd, abs) });
       } catch {
         // Outside the root: no diff. The write itself is refused later.
@@ -1314,86 +1243,7 @@ export class AcpAgent {
   }
 }
 
-/**
- * The real path of `p`, following symlinks as far as the filesystem goes.
- *
- * `realpath` throws on a path that does not exist, which every write to a new
- * file is, so a plain missing tail is resolved against the nearest ancestor
- * that does exist and re-appended. An unresolved symlink is refused instead:
- * rejoining its name would hide its target from the guard, and a later write
- * would follow it (#309). Links that resolve normally return above. The
- * blanket refusal is intentional: it includes in-root targets and cycles,
- * without growing a second resolver for links no caller needs to follow.
- */
-async function realPathOrNearest(p: string): Promise<string> {
-  try {
-    return await realpath(p);
-  } catch {
-    const parent = dirname(p);
-    if (parent === p) return p;
-    let isSymlink = false;
-    try {
-      const stats = await lstat(p);
-      isSymlink = stats.isSymbolicLink();
-    } catch {
-      // A plain missing tail is resolved through its parent below.
-    }
-    if (isSymlink) throw new Error(`unresolved symlink refused: ${p}`);
-    return join(await realPathOrNearest(parent), basename(p));
-  }
-}
-
 /** The hash an approved write's text is kept as (#310): small, unlike the text. */
 function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
-}
-
-/**
- * What a policy answer means. Only an explicit yes allows, and only the
- * `session` answer may reach `allow_always`. Anything else — `false`, or a
- * value that fell through the type at runtime — is a denial, never a guess.
- */
-type AnswerScope = "deny" | "once" | "session";
-
-function answerScope(answer: PolicyAnswer): AnswerScope {
-  if (answer === true) return "once";
-  // `answer &&` also stops a value that slipped past the type, such as
-  // `undefined`, before it is read.
-  return answer && answer.allow === true && answer.scope === "session"
-    ? "session"
-    : "deny";
-}
-
-/**
- * Choose an optionId matching our allow/reject decision, or `null`.
- *
- * `null` means the harness offered nothing that says what we decided. The
- * pre-M1a-5 tail returned `options[0]` there, which fails open: measured
- * 2026-09-02 (issue #13), claude orders its list `allow_always` first, so a
- * *denial* with no reject option would have selected "Always Allow all Write"
- * — a persisted grant. Every list the three harnesses actually send carries
- * `reject_once`, so the tail never fired; nothing in the protocol promises
- * that, and the failure would have been invisible because the denial is still
- * what `_client_permission` records.
- *
- * A yes `once` takes only `allow_once` (M12-4): the harness that hears
- * "always" may stop asking for that tool, and `ask` and `safe` never mean
- * that. Only a yes for the `session` may reach `allow_always`. An answer that
- * is neither an explicit yes nor an explicit no is a denial.
- */
-function pickOption(
-  options: PermissionOption[] = [],
-  scope: AnswerScope,
-): PermissionOptionId | null {
-  const want: PermissionOption["kind"][] =
-    scope === "deny"
-      ? ["reject_once", "reject_always"]
-      : scope === "once"
-        ? ["allow_once"]
-        : ["allow_once", "allow_always"];
-  for (const kind of want) {
-    const hit = options.find((o) => o.kind === kind);
-    if (hit) return hit.optionId;
-  }
-  return null;
 }
