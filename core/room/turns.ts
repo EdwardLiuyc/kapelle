@@ -5,7 +5,7 @@
  * one starts.
  *
  * A prompt *during* a live turn is still refused, here as `busy` and below
- * as `AcpAgent`'s in-flight guard (#62 R5).
+ * as `AcpAgent`'s in-flight guard (`protocol/agent.ts`, #62 R5).
  *
  * **A message names its participant, and a busy one queues it** (M6-4).
  * `send` starts a turn, or puts the message in a FIFO queue behind the live

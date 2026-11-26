@@ -6,7 +6,7 @@
  * **A real session reports its models and login state** (M9-4) to
  * `noteSession`, from the `session/new` or `session/load` response and an
  * auth notice. A load gives a login state only for an agent whose load needs
- * one (M9-4b). The room never waits for the notice.
+ * one (M9-4b). The participant never waits for the notice.
  *
  * **A stopped participant revives on its next message.** `paused`, `killed`
  * and `exited` all take the same path: a new harness in the same checkout.
@@ -31,11 +31,11 @@
  * the session's whole history.
  *
  * **A harness may rename its branch or rebase it (M6-6a).** After every turn
- * the room reads the checkout again (`checkoutIdentity`): the branch `HEAD`
- * names, and the commit the branch's own reflog says its latest rebase moved
- * it onto. A rename updates the participant, the held checkout and
- * `room.json`; a client that shows the branch reads the room again when the
- * turn ends. A rebase also moves the participant's saved `baseSha`. The
+ * the participant reads the checkout again (`checkoutIdentity`): the branch
+ * `HEAD` names, and the commit the branch's own reflog says its latest rebase
+ * moved it onto. A rename updates the participant, and the room follows it
+ * into the held checkout and `room.json` (`onCheckout`); a client that shows
+ * the branch reads the room again when the turn ends. A rebase also moves the participant's saved `baseSha`. The
  * whole-branch diff independently finds the current merge base from the
  * configured base ref, so it does not depend on this reflog read. A restore
  * reads the checkout once too, because a crash can leave `room.json` older
@@ -51,10 +51,11 @@
  * open decisions are denied as `cancel`; a mode that leaves `ask` answers
  * them as `mode_change`.
  *
- * **A participant may ask for a model** (M9-5). The room sets the session's
- * option with `category: "model"` after every start, a load too, right after
- * the mode, so before the first turn. Whether a load keeps the model was not
- * measured; sending it again makes that not matter (decided 2026-10-29). A
+ * **A participant may ask for a model** (M9-5). The participant sets the
+ * session's option with `category: "model"` after every start, a load too,
+ * right after the mode, so before the first turn. Whether a load keeps the
+ * model was not measured; sending it again makes that not matter (decided
+ * 2026-10-29). A
  * refused model, or a harness with no model option, never fails the add or
  * the revive: the harness stays on the model it had, and a notice says so
  * (decided 2026-10-29). `model` on the participant is the one in use.
@@ -76,7 +77,7 @@
  * **A participant may ask for a thinking level** (M9-9), at its add or
  * during a chat, as for the model. It is the option with `category:
  * "thought_level"`, and its list belongs to the model (§Thinking level). The
- * room keeps that option as the harness last sent it: the session's, then
+ * participant keeps that option as the harness last sent it: the session's, then
  * the reply to each set of the model or of the level. A reply with no level
  * option means the model has none. Five rules come from the measurement and
  * the pickup (decided 2026-11-17, #501):
@@ -127,16 +128,13 @@ import { checkoutIdentity } from "../worktree.ts";
 import { createTurns, type Message } from "./turns.ts";
 import {
   type AgentRequest,
+  ANSWER_CAP,
+  type Answer,
   type Participant,
   type ParticipantRecord,
   type RoomNotice,
   RoomRefusal,
-  type Sender,
 } from "./types.ts";
-
-/** How much of each answer block a turn keeps for its reply (M8-2), in
- *  UTF-8 bytes. A cut never splits a character. */
-export const ANSWER_CAP = 64 * 1024;
 
 /** The longest start of `text` that fits in `bytes` of UTF-8. A streaming
  *  decode holds back a character the cut would split. */
@@ -144,19 +142,6 @@ const fitBytes = (text: string, bytes: number) =>
   new TextDecoder().decode(Buffer.from(text).subarray(0, bytes), {
     stream: true,
   });
-
-/** A turn that ended, as its reply or copy needs it (M8-2). */
-export interface Answer {
-  /** The message the turn started from, and its sender. */
-  text: string;
-  from?: Sender;
-  /** The stop reason, `cancelled by the person`, `cancelled`, or `error`. */
-  end: string;
-  calls: number;
-  /** The answer, the error, or empty after a cancel or an exit. */
-  body: string;
-  cut: boolean;
-}
 
 /** A thinking level option that is a list (M9-9). */
 type LevelOption = Extract<SessionConfigOption, { type: "select" }>;

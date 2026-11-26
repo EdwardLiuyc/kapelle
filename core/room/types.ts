@@ -16,6 +16,10 @@ import type { EventLog } from "../eventlog.ts";
 /** How many messages may wait behind a participant's live turn (R41). */
 export const QUEUE_BOUND = 16;
 
+/** How much of each answer block a turn keeps for its reply (M8-2), in
+ *  UTF-8 bytes. A cut never splits a character. */
+export const ANSWER_CAP = 64 * 1024;
+
 /** How many worker messages a room's orchestrator may send by default (M8-7). */
 export const DEFAULT_ORCHESTRATOR_TURN_CAP = 40;
 
@@ -341,4 +345,17 @@ export interface Room {
   /** For a dismissed room nobody was handed: stops every save, a queued
    *  one too, and removes the room's folder, its record and log included. */
   forget(): void;
+}
+
+/** A turn that ended, as its reply or copy needs it (M8-2). */
+export interface Answer {
+  /** The message the turn started from, and its sender. */
+  text: string;
+  from?: Sender;
+  /** The stop reason, `cancelled by the person`, `cancelled`, or `error`. */
+  end: string;
+  calls: number;
+  /** The answer, the error, or empty after a cancel or an exit. */
+  body: string;
+  cut: boolean;
 }

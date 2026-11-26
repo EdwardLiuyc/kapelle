@@ -125,8 +125,6 @@ import type { EventBus } from "./events.ts";
 import { newParticipantId } from "./ids.ts";
 import type { PermissionQueue } from "./permissions.ts";
 import {
-  ANSWER_CAP,
-  type Answer,
   createParticipant,
   type ParticipantControl,
 } from "./room/participant.ts";
@@ -138,6 +136,8 @@ import {
 } from "./room/record.ts";
 import {
   type AgentRequest,
+  ANSWER_CAP,
+  type Answer,
   DEFAULT_ORCHESTRATOR_TURN_CAP,
   type Later,
   type Participant,
