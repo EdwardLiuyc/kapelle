@@ -16,8 +16,6 @@
  */
 
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import type { RoomDto, RoomEventLine } from "../client/contract.ts";
 import {
@@ -42,12 +40,12 @@ import { createPermissionQueue } from "../core/permissions.ts";
 import type { Participant } from "../core/room/types.ts";
 import { roomAgent } from "../core/room/validate.ts";
 import { openRoom } from "../core/room.ts";
-import { stateDirFor } from "../core/runtime.ts";
 import { openWorktrees } from "../core/worktree.ts";
 import {
   gitRepo,
   isolateStateHome,
   MOCK_AGENT,
+  roomLog,
 } from "../integration/helpers.ts";
 
 isolateStateHome();
@@ -111,11 +109,7 @@ async function record(t: TestContext): Promise<Recording> {
 
   await room.remove(bob.id);
   await room.dismiss();
-  const log = join(stateDirFor(repo), "rooms", roomId, "events.jsonl");
-  const lines = (await readFile(log, "utf8"))
-    .split("\n")
-    .filter(Boolean)
-    .map((l) => JSON.parse(l) as RoomEventLine);
+  const lines = (await roomLog(repo, roomId)) as unknown as RoomEventLine[];
   return { lines, alice: alice.id, bob: bob.id, carol: carol.id };
 }
 
@@ -797,12 +791,8 @@ async function recordRevive(t: TestContext) {
   });
   t.after(() => room.dismiss());
   const dora = room.participants[0] as Participant;
-  const log = join(stateDirFor(repo), "rooms", roomId, "events.jsonl");
   const read = async () =>
-    (await readFile(log, "utf8"))
-      .split("\n")
-      .filter(Boolean)
-      .map((l) => JSON.parse(l) as RoomEventLine);
+    (await roomLog(repo, roomId)) as unknown as RoomEventLine[];
   const first = dora.send("one");
   for (const until = Date.now() + 5_000; ; ) {
     const spawned = (await read()).find(
