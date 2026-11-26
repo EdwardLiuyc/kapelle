@@ -5,6 +5,7 @@ import { test } from "node:test";
 
 import {
   encodeJsonRpcLine,
+  MAX_LINE_LENGTH,
   type OutgoingMessage,
   parseJsonRpcLine,
 } from "../json-rpc.ts";
@@ -35,5 +36,15 @@ test("blank and non-JSON lines are classified without a message", () => {
   assert.deepEqual(parseJsonRpcLine("not json"), {
     kind: "malformed",
     line: "not json",
+  });
+});
+
+test("the 32 MiB cap admits the limit and refuses one more character", () => {
+  assert.equal(MAX_LINE_LENGTH, 32 * 1024 * 1024);
+  const atLimit = " ".repeat(MAX_LINE_LENGTH);
+  assert.deepEqual(parseJsonRpcLine(atLimit), { kind: "empty" });
+  assert.deepEqual(parseJsonRpcLine(`${atLimit} `), {
+    kind: "oversized",
+    length: MAX_LINE_LENGTH + 1,
   });
 });

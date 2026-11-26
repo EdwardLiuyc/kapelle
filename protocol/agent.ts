@@ -818,7 +818,9 @@ export class AcpAgent {
     }
     if (parsed.kind === "empty") return;
     if (parsed.kind === "malformed") {
-      this.#log(`ignoring non-JSON stdout: ${parsed.line.slice(0, 200)}`);
+      this.#log(
+        `ignoring malformed JSON-RPC stdout: ${parsed.line.slice(0, 200)}`,
+      );
       return;
     }
 
