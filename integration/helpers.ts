@@ -47,7 +47,12 @@ import type {
 import { newRoomId } from "../core/ids.ts";
 import { stateDirFor } from "../core/runtime.ts";
 import { AcpAgent } from "../protocol/agent.ts";
-import { AGENTS, resolveAgent, resolveEnv } from "../protocol/registry.ts";
+import {
+  AGENTS,
+  type AgentEntry,
+  resolveAgent,
+  resolveEnv,
+} from "../protocol/registry.ts";
 
 /** The repository root, and the cwd of every subprocess spawned here. */
 export const REPO = join(import.meta.dirname, "..");
@@ -661,12 +666,13 @@ export const MEASURED = {
   modeMap: { safe: "id-safe", ask: "id-ask", auto: "id-auto" },
   usage: "per-turn",
   measuredOn: { version: "0.1.0", date: "2026-09-29" },
-} as const;
+} as const satisfies NonNullable<AgentEntry["measured"]>;
 
-/** A registry entry for the mock with a store and a measured load, named
- *  `id`, so a restored participant resolves it again with `measured.loads`.
- *  Removed after the test. It changes the module's own `AGENTS`, which is safe
- *  only because the tests in one file run in turn and each id is unique. */
+/** A registry entry for the mock with a store and a measured load. The generated
+ *  id is unique, so a restored participant resolves it again with
+ *  `measured.loads`. Removed after the test. It changes the module's own
+ *  `AGENTS`, which is process-local: `node:test` gives each test file its own
+ *  process, and the unique entry is deleted after its test. */
 export async function loadingMock(
   t: TestContext,
   scenario: string,
