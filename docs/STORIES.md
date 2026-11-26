@@ -4997,8 +4997,8 @@ such as `--agent` beside `--file`. `CHANGELOG.md` names the change. Moving verbs
 `cli/` folder is not part of this story. #394 clears old pi-lens warnings in the same
 file; take it with this story or just before it.
 *Done when* M12-10a's tests pass unchanged, except the unknown-flag cases. Unknown
-flags now expect the refusal; `--`, repeated value flags and the missing-value wording
-may change to `parseArgs`' behaviour.
+flags now expect the refusal; `--`, repeated value flags and missing-value handling,
+including its wording, may change to `parseArgs`' behaviour.
 
 **M12-11 · A harness's title is cut before it is kept · S · needs nothing**
 D2. A tool call's title comes from the harness, and only the 32 MiB line limit bounds it.

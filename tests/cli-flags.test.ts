@@ -27,7 +27,7 @@
  */
 
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { access, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -37,6 +37,7 @@ import {
   type CliResult,
   childEnv,
   gitRepo,
+  noPty,
   REPO,
   spawnCli,
   tempDir,
@@ -57,13 +58,6 @@ const SETUP_USAGE = /^usage: kapelle setup$/m;
 const DEMO_USAGE = /^usage: kapelle demo$/m;
 const NOT_A_REPO = /not a git repository, so it has no workspace to move to/;
 const STARTER = /starter\s+.*assets\/loops\/starter\.md/;
-
-// `script` from util-linux gives the CLI a real TTY; BSD's takes other flags.
-const noScript = spawnSync("script", ["--version"])
-  .stdout?.toString()
-  .includes("util-linux")
-  ? false
-  : "needs util-linux script for a TTY";
 
 type Expectation = {
   name: string;
@@ -1324,7 +1318,7 @@ test("every argument refusal owned by cli.ts is pinned", {
 });
 
 test("room send on a TTY refuses a name with no text", {
-  skip: noScript,
+  skip: noPty,
   timeout: 20_000,
 }, async (t) => {
   const f = await fixture(t);
