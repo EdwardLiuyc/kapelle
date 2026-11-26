@@ -1137,7 +1137,9 @@ export async function roomLog(
   return (
     lines
       .filter(Boolean)
-      // A malformed event log is a test failure, not something to swallow.
+      // A malformed complete line is a test failure, not something to
+      // swallow. The unterminated tail above is not an event, even when its
+      // JSON happens to parse.
       // pi-lens-ignore: unchecked-throwing-call-js
       .map((l) => JSON.parse(l))
   );
