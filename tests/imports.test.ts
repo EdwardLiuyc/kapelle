@@ -60,8 +60,14 @@ const toSlash = (path: string) => path.split(sep).join("/");
 const targetOf = (
   file: string,
   spec: string | undefined,
-): string | undefined =>
-  spec?.startsWith(".") ? toSlash(join(dirname(file), spec)) : undefined;
+): string | undefined => {
+  if (!spec?.startsWith(".")) return undefined;
+  const target = toSlash(join(dirname(file), spec));
+  // NodeNext lets a `.js` specifier name a `.ts` source. Map it back, so
+  // every rule sees the file it reaches.
+  if (target.endsWith(".js")) return `${target.slice(0, -3)}.ts`;
+  return target;
+};
 
 /** Comments are legal between the tokens of an import; they are not tokens. */
 const withoutComments = (source: string): string =>
@@ -635,10 +641,14 @@ test("the checker rejects a core/room/ import of core/room.ts, type-only too", (
     "core/room.ts": [["./room/a.ts"]],
     "core/room/a.ts": [["../room.ts", true]],
     "core/room/b.ts": [["../room.ts"], ["./a.ts"]],
+    "core/room/c.ts": [["../room.js", true]],
+    "core/room/d.ts": [["../room.js"]],
   });
   assert.deepEqual(checkGraph(graph), [
     "core/room/a.ts imports ../room.ts: core/room/ may not import core/room.ts",
     "core/room/b.ts imports ../room.ts: core/room/ may not import core/room.ts",
+    "core/room/c.ts imports ../room.js: core/room/ may not import core/room.ts",
+    "core/room/d.ts imports ../room.js: core/room/ may not import core/room.ts",
   ]);
 });
 
