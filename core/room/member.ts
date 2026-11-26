@@ -444,6 +444,8 @@ export async function removeMember(owner: Owner, m: Member): Promise<void> {
 }
 
 /** The record of one participant, as its owner's record file keeps it. */
+// One literal keeps every optional record field in the file's own order.
+// pi-lens-ignore: high-complexity
 export function recordOf(m: Member): ParticipantRecord {
   const p = m.participant;
   const asked = m.asked();

@@ -84,6 +84,8 @@ const PARTICIPANT_STATUSES: readonly ParticipantStatus[] = [
  * one per participant in `room.json`, and any other owner can keep one the
  * same way. `fail` makes the error, so the owner names the file and the list.
  */
+// One pass keeps the first bad field and the owner's exact error text stable.
+// pi-lens-ignore: high-complexity
 export function readParticipantRecord(
   raw: unknown,
   fail: (why: string) => Error,
