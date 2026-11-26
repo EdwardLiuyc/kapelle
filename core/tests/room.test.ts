@@ -39,6 +39,8 @@ import {
   HOSTILE_AGENT,
   hasBranch,
   isolateStateHome,
+  loadingMock,
+  MEASURED,
   MOCK_AGENT,
   tempDir,
 } from "../../integration/helpers.ts";
@@ -881,17 +883,6 @@ test("removing a participant drops its queue and reports it", async (t) => {
 });
 
 // --- modes and permissions (M6-5, #149) --------------------------------------
-
-/** A `measured` half for the mock: ids the test can tell apart, and a
- *  harness that never asks, so its containment line names the mode. */
-const MEASURED = {
-  shell: "internal",
-  argvChannel: "notification",
-  asksPermission: false,
-  modeMap: { safe: "id-safe", ask: "id-ask", auto: "id-auto" },
-  usage: "per-turn",
-  measuredOn: { version: "0.1.0", date: "2026-09-29" },
-} as const;
 
 /** A room whose one participant runs the mock with `fields`, and every
  *  event its bus carried. `spec` overrides registry fields, such as a
@@ -2270,31 +2261,6 @@ test("a record with a bad role, title or tombstone field is refused", async (t) 
 });
 
 // --- session/load on revive (M6-7b) -----------------------------------------
-
-/** A registry entry for the mock with a store and a measured load, named
- *  `id`, so a restored room resolves it again with `measured.loads`. Removed
- *  after the test. It changes the module's own `AGENTS`, which is safe only
- *  because the tests in one file run in turn and each id is unique. */
-async function loadingMock(
-  t: TestContext,
-  scenario: string,
-  { loads = true, args = [] }: { loads?: boolean; args?: string[] } = {},
-) {
-  const store = await tempDir(t);
-  const id = `mock-load-${newRoomId()}`;
-  AGENTS[id] = {
-    launch: {
-      command: process.execPath,
-      args: [MOCK_AGENT, "--scenario", scenario, "--store", store, ...args],
-    },
-    maxMode: "auto",
-    measured: { ...MEASURED, ...(loads && { loads: true as const }) },
-  };
-  t.after(() => {
-    delete AGENTS[id];
-  });
-  return id;
-}
 
 /** `pausable`, on a `loadingMock`. */
 async function loading(
