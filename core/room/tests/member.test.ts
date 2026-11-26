@@ -17,11 +17,9 @@ import { promisify } from "node:util";
 import {
   gitRepo,
   isolateStateHome,
-  MOCK_AGENT,
-  tempDir,
+  loadingMock,
 } from "../../../integration/helpers.ts";
 import type { AgentEventEnvelope } from "../../../protocol/agent.ts";
-import { AGENTS } from "../../../protocol/registry.ts";
 import { createEventBus } from "../../events.ts";
 import { newRoomId } from "../../ids.ts";
 import { createPermissionQueue } from "../../permissions.ts";
@@ -44,33 +42,6 @@ const git = async (cwd: string, ...args: string[]) =>
   (await promisify(execFile)("git", args, { cwd })).stdout.trim();
 
 isolateStateHome();
-
-/** A registry entry for the mock with a store and a measured load, so a
- *  revive loads. Removed after the test. */
-async function loadingMock(t: TestContext) {
-  const store = await tempDir(t);
-  const id = `mock-load-${newRoomId()}`;
-  AGENTS[id] = {
-    launch: {
-      command: process.execPath,
-      args: [MOCK_AGENT, "--scenario", "remember", "--store", store],
-    },
-    maxMode: "auto",
-    measured: {
-      shell: "internal",
-      argvChannel: "notification",
-      asksPermission: false,
-      modeMap: { safe: "id-safe", ask: "id-ask", auto: "id-auto" },
-      usage: "per-turn",
-      measuredOn: { version: "0.1.0", date: "2026-09-29" },
-      loads: true,
-    },
-  };
-  t.after(() => {
-    delete AGENTS[id];
-  });
-  return id;
-}
 
 /** An owner that is not a room, in `repo`, and every event its bus carried. */
 async function soloOwner(t: TestContext, repo: string) {
@@ -104,7 +75,7 @@ async function soloOwner(t: TestContext, repo: string) {
 }
 
 test("one participant with no room: two turns, a pause, a load and a remove", async (t) => {
-  const agent = await loadingMock(t);
+  const agent = await loadingMock(t, "remember");
   const repo = await gitRepo(t);
   const { owner, events, notices, of } = await soloOwner(t, repo);
   const m = await addMember(owner, roomAgent({ agent, name: "solo" }));

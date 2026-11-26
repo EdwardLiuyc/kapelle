@@ -44,9 +44,15 @@ import type {
   RoomDto,
   RoomEventLine,
 } from "../client/contract.ts";
+import { newRoomId } from "../core/ids.ts";
 import { stateDirFor } from "../core/runtime.ts";
 import { AcpAgent } from "../protocol/agent.ts";
-import { AGENTS, resolveAgent, resolveEnv } from "../protocol/registry.ts";
+import {
+  AGENTS,
+  type AgentEntry,
+  resolveAgent,
+  resolveEnv,
+} from "../protocol/registry.ts";
 
 /** The repository root, and the cwd of every subprocess spawned here. */
 export const REPO = join(import.meta.dirname, "..");
@@ -650,6 +656,42 @@ export const MOCK_AGENT = join(REPO, "mock-agent.mjs");
 
 /** Its opposite: the harness that attacks the client (M1b-6). Absolute for the same reason. */
 export const HOSTILE_AGENT = join(REPO, "hostile-agent.mjs");
+
+/** A `measured` half for the mock: ids the test can tell apart, and a
+ *  harness that never asks, so its containment line names the mode. */
+export const MEASURED = {
+  shell: "internal",
+  argvChannel: "notification",
+  asksPermission: false,
+  modeMap: { safe: "id-safe", ask: "id-ask", auto: "id-auto" },
+  usage: "per-turn",
+  measuredOn: { version: "0.1.0", date: "2026-09-29" },
+} as const satisfies NonNullable<AgentEntry["measured"]>;
+
+/** Registers a mock with a store and a measured load under a generated id, so a
+ *  restored participant resolves it again with `measured.loads`. Removed after
+ *  the test. The `AGENTS` change is process-local: `node:test` gives each test
+ *  file its own process, and the unique entry is deleted after its test. */
+export async function loadingMock(
+  t: TestContext,
+  scenario: string,
+  { loads = true, args = [] }: { loads?: boolean; args?: string[] } = {},
+) {
+  const store = await tempDir(t);
+  const id = `mock-load-${newRoomId()}`;
+  AGENTS[id] = {
+    launch: {
+      command: process.execPath,
+      args: [MOCK_AGENT, "--scenario", scenario, "--store", store, ...args],
+    },
+    maxMode: "auto",
+    measured: { ...MEASURED, ...(loads && { loads: true as const }) },
+  };
+  t.after(() => {
+    delete AGENTS[id];
+  });
+  return id;
+}
 
 /** The prompt every write test uses. One file, one word, nothing to interpret. */
 export const WRITE_PROMPT =
