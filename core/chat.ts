@@ -204,7 +204,7 @@ export async function restoreChat({
   ...deps
 }: ChatDeps & { id: string }): Promise<Chat> {
   assertChatId(id);
-  const record = readChatRecord(join(chatDir(id), "chat.json"));
+  const record = readChatRecord(join(chatDir(id), "chat.json"), id);
   if (record.lifecycle !== "active") {
     throw new Error(`chat ${id} is ${record.lifecycle}, not active`);
   }
@@ -232,14 +232,14 @@ export async function finishChatRemove(
   assertChatId(id);
   const live = chatDir(id);
   const at = existsSync(join(live, "chat.json")) ? live : archivedChatDir(id);
-  const record = readChatRecord(join(at, "chat.json"));
+  const record = readChatRecord(join(at, "chat.json"), id);
   if (record.lifecycle !== "removing") {
     throw new Error(`chat ${id} is ${record.lifecycle}, not removing`);
   }
   const notices = [...record.notices];
   const before = notices.length;
+  const saved = record.participant;
   if (at === live) {
-    const saved = record.participant;
     const places = ownerPlaces(
       id,
       live,
@@ -254,9 +254,41 @@ export async function finishChatRemove(
     if (!(await release(saved.id, saved.worktree, onNotice, place))) {
       nameKept(saved, place, notices);
     }
+  } else {
+    // The move only follows a release. A checkout still on disk was kept, but
+    // a second crash, after the move and before this record write, lost its
+    // notice with the live record. Name it again before finishing.
+    nameKeptSaved(saved, notices);
   }
+  // Persist the notices before the folder moves, as `remove` does, so a second
+  // crash cannot lose them whether it lands before or after the move.
+  writeRecord(join(at, "chat.json"), { ...record, notices });
   archive(id, at, { ...record, notices });
   return notices.slice(before);
+}
+
+/** Names a checkout a release kept, once, when the record has already moved. */
+function nameKeptSaved(
+  p: { worktree: string; branch?: string; scratch?: true },
+  notices: RoomNotice[],
+): void {
+  if (!p.scratch && p.branch === undefined) return;
+  const text = keptText(p);
+  if (!text || notices.some((n) => n.text.includes(p.worktree))) return;
+  notices.push({ text });
+}
+
+/** The line that names a checkout a release kept with work in it. */
+function keptText(p: {
+  worktree: string;
+  branch?: string;
+  scratch?: true;
+}): string | undefined {
+  if (!existsSync(p.worktree)) return undefined;
+  return p.scratch
+    ? `the scratch folder ${p.worktree} is kept: it holds work`
+    : `the checkout ${p.worktree}${p.branch ? ` on ${p.branch}` : ""} is ` +
+        "kept: it holds work";
 }
 
 /** Names a checkout a release kept with work in it, once: a `keep` release
@@ -266,12 +298,10 @@ function nameKept(
   place: Place,
   notices: RoomNotice[],
 ): void {
-  if (!place.worktrees || !existsSync(p.worktree)) return;
-  const text =
-    `the checkout ${p.worktree}${p.branch ? ` on ${p.branch}` : ""} is ` +
-    "kept: it holds work";
+  if (!place.worktrees) return;
+  const text = keptText(p);
   // A remove a crash cut short can come here twice.
-  if (!notices.some((n) => n.text === text)) notices.push({ text });
+  if (text && !notices.some((n) => n.text === text)) notices.push({ text });
 }
 
 /** Moves a chat's folder to the archive, unless it is there, and marks it
@@ -395,6 +425,7 @@ async function buildChat(
     // A chat's lifecycle says it was archived. Its participant keeps one of
     // the chat statuses rather than reading a room's `dismissed`.
     stoppedStatus: "idle",
+    stoppedMessage: "the chat is removed",
     watchdog: watch.watchdog,
     limits: watch.limits,
     ...(noteSession && { noteSession }),
@@ -516,8 +547,8 @@ async function buildChat(
   return chat;
 }
 
-/** `chat.json`, read and checked, or a throw naming what is wrong. */
-function readChatRecord(path: string): ChatRecord {
+/** `chat.json` for `id`, read and checked, or a throw naming what is wrong. */
+function readChatRecord(path: string, id: string): ChatRecord {
   const bad = (why: string) => new Error(`${path}: ${why}`);
   let raw: unknown;
   try {
@@ -530,6 +561,9 @@ function readChatRecord(path: string): ChatRecord {
   if (typeof r.id !== "string" || !isChatId(r.id)) {
     throw bad('"id" is not a chat id');
   }
+  if (r.id !== id) {
+    throw bad(`"id" is ${JSON.stringify(r.id)}, not ${JSON.stringify(id)}`);
+  }
   for (const key of ["createdAt", "updatedAt"]) {
     if (typeof r[key] !== "string") throw bad(`"${key}" is not a string`);
   }
@@ -539,6 +573,9 @@ function readChatRecord(path: string): ChatRecord {
   if (r.removedAt !== undefined && typeof r.removedAt !== "string") {
     throw bad('"removedAt" is not a string');
   }
+  if (r.lifecycle !== "active" && r.removedAt === undefined) {
+    throw bad(`"removedAt" is required when the lifecycle is ${r.lifecycle}`);
+  }
   const repositories = r.repositories;
   if (
     repositories !== undefined &&
@@ -547,11 +584,21 @@ function readChatRecord(path: string): ChatRecord {
   ) {
     throw bad('"repositories" is not a list of strings');
   }
+  const participant = readParticipantRecord(r.participant, (why) =>
+    bad(`the participant: ${why}`),
+  );
+  if (participant.role !== undefined) {
+    throw bad("the participant has a role; a chat has no roles");
+  }
+  if (participant.status === "dismissed") {
+    throw bad(
+      'the participant has status "dismissed"; a chat uses idle, busy, ' +
+        "exited, paused or killed",
+    );
+  }
   return {
     ...(raw as ChatRecord),
     notices: Array.isArray(r.notices) ? (r.notices as RoomNotice[]) : [],
-    participant: readParticipantRecord(r.participant, (why) =>
-      bad(`the participant: ${why}`),
-    ),
+    participant,
   };
 }

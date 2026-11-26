@@ -17,6 +17,7 @@ import {
   assertRunId,
   assertTaskId,
   branchName,
+  branchPrefix,
   HALL_ID,
   isChatId,
   newChatId,
@@ -103,6 +104,7 @@ test("a chat id is its own namespace too (M11-12)", () => {
   assert.ok(!isChatId(newRoomId()), "a room id is not a chat id");
   assert.ok(!isChatId("chat-../x"));
   // Each chat owns its branches, so a remove touches one chat only.
+  assert.equal(branchPrefix(chatId), `kapelle/${chatId}/`);
   assert.equal(branchName(chatId, "p-a"), `kapelle/${chatId}/p-a`);
   assert.throws(() => assertRunId(chatId), /invalid run id/);
 });

@@ -202,6 +202,8 @@ export interface Owner {
    *  participant; a chat keeps a participant status and archives its
    *  lifecycle instead. */
   stoppedStatus?: ParticipantStatus;
+  /** What a send refused because the owner stopped says. */
+  stoppedMessage?: string;
   watchdog: Watchdog;
   limits: WatchdogLimits;
   /** Gets what each real session said (M9-4, `core/check.ts`). */
@@ -254,6 +256,7 @@ function makeMember(
     stderrLog: () => owner.stderrLog(id),
     stopped: owner.stopped,
     ...(owner.stoppedStatus && { stoppedStatus: owner.stoppedStatus }),
+    ...(owner.stoppedMessage && { stoppedMessage: owner.stoppedMessage }),
     watchdog: owner.watchdog,
     limits: owner.limits,
     ...(saved && { saved }),

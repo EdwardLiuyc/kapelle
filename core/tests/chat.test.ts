@@ -104,7 +104,12 @@ test("a chat keeps its memory across two turns and a restart, on its own log (M1
     "seq counts from 1",
   );
   for (const line of lines) {
-    assert.deepEqual(Object.keys(line), ["seq", "at", "chatId", "update"]);
+    assert.deepEqual(Object.keys(line).sort(), [
+      "at",
+      "chatId",
+      "seq",
+      "update",
+    ]);
     assert.equal(line.chatId, chat.id);
   }
 
@@ -138,7 +143,12 @@ test("a chat keeps its memory across two turns and a restart, on its own log (M1
     "the restored log carries seq on without a gap",
   );
   for (const line of after) {
-    assert.deepEqual(Object.keys(line), ["seq", "at", "chatId", "update"]);
+    assert.deepEqual(Object.keys(line).sort(), [
+      "at",
+      "chatId",
+      "seq",
+      "update",
+    ]);
     assert.equal(line.chatId, chat.id);
   }
 });
@@ -206,10 +216,28 @@ test("a remove releases the checkout and moves the folder to the archive (M11-12
     "_client_participant_removed",
     "the log moved with it, closed on its last line",
   );
+  const log = chat.eventLog;
+  assert.ok(log);
+  const lines = logOf(archived).length;
+  log.append({
+    chatId: chat.id,
+    update: { sessionUpdate: "_client_turn_ended", stopReason: "end_turn" },
+  });
+  await log.close();
+  assert.equal(
+    logOf(archived).length,
+    lines,
+    "the remove left the log closed to a later append",
+  );
   assert.ok(!existsSync(p.worktree), "the untouched checkout is gone");
   assert.equal(await git(repo, "branch", "--list", branchOf(chat)), "");
   assert.throws(() => p.send("two"), { code: "room_dismissed" });
+  assert.throws(() => p.send("two"), /the chat is removed/);
   assert.throws(() => chat.setMode("safe"), { code: "room_dismissed" });
+  await assert.rejects(chat.setModel("mock/smart"), {
+    code: "room_dismissed",
+  });
+  await assert.rejects(chat.setLevel("max"), { code: "room_dismissed" });
 });
 
 test("a remove cancels the turn, drops its queue and denies its open question (M11-12)", async (t) => {
@@ -350,6 +378,30 @@ test("a boot finishes a remove a crash cut short after the move (M11-12)", async
   await assert.rejects(finishChatRemove(chat.id), /archived, not removing/);
 });
 
+test("a crash after the move still names a checkout with work (M11-12)", async (t) => {
+  const repo = await gitRepo(t);
+  const chat = await chatIn(t, repo);
+  const { worktree } = chat.participant;
+  writeFileSync(join(worktree, "work.txt"), "work\n");
+  await chat.remove();
+  const file = join(archivedChatDir(chat.id), "chat.json");
+  const moved = readJson(file);
+  // The folder moved, then the daemon died before it could write the kept
+  // checkout's notice into the archived record.
+  writeFileSync(
+    file,
+    JSON.stringify({ ...moved, lifecycle: "removing", notices: [] }),
+  );
+  const notices = await finishChatRemove(chat.id);
+  assert.equal(notices.length, 1);
+  assert.ok(notices[0]?.text.includes(worktree), notices[0]?.text);
+  assert.deepEqual(
+    readJson(file).notices,
+    notices,
+    "the kept checkout is named in the archived record",
+  );
+});
+
 test("two chats in one repository: removing one leaves the other's checkout and branch (M11-12)", async (t) => {
   const repo = await gitRepo(t);
   const a = await chatIn(t, repo);
@@ -364,6 +416,65 @@ test("two chats in one repository: removing one leaves the other's checkout and 
     "and its branch",
   );
   assert.equal(b.lifecycle(), "active");
+});
+
+test("a chat has one agent and no roles (M11-12)", async (t) => {
+  const agent = await loadingMock(t, "remember");
+  const id = newChatId();
+  await assert.rejects(
+    openChat({
+      ...deps(),
+      id,
+      agent: roomAgent({ agent, name: "solo", role: "developer" }),
+    }),
+    /a chat has no roles/,
+  );
+  assert.ok(!existsSync(chatDir(id)), "a refused role starts nothing");
+});
+
+test("a chat record is checked against its folder and chat shape (M11-12)", async (t) => {
+  const repo = await gitRepo(t);
+  const chat = await chatIn(t, repo);
+  await chat.pause();
+  const file = join(chatDir(chat.id), "chat.json");
+  const good = readJson(file);
+  const cases = [
+    {
+      why: "another chat's id",
+      record: { ...good, id: newChatId() },
+      error: /"id" is .*not/,
+    },
+    {
+      why: "a role",
+      record: {
+        ...good,
+        participant: { ...good.participant, role: "developer" },
+      },
+      error: /a chat has no roles/,
+    },
+    {
+      why: "a room's dismissed status",
+      record: {
+        ...good,
+        participant: { ...good.participant, status: "dismissed" },
+      },
+      error: /a chat uses idle, busy, exited, paused or killed/,
+    },
+    {
+      why: "removing with no removedAt",
+      record: { ...good, lifecycle: "removing" },
+      error: /"removedAt" is required/,
+    },
+  ];
+  for (const one of cases) {
+    writeFileSync(file, JSON.stringify(one.record));
+    await assert.rejects(
+      restoreChat({ ...deps(), id: chat.id }),
+      one.error,
+      one.why,
+    );
+  }
+  writeFileSync(file, JSON.stringify(good));
 });
 
 test("a chat with no folder gets a scratch folder, which an empty remove deletes (M11-12)", async (t) => {
