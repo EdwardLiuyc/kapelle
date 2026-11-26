@@ -120,6 +120,8 @@ name an existing repository folder on the daemon machine.
 | unknown key | refused, naming the known keys |
 | not a plain file owned by you, or mode other than `0600` (including `0400`) | refused |
 | bad address or invalid key | refused; the key is not echoed |
+| `kapelle demo` | refused: its folder and agent are local |
+| non-detached `kapelle run --file` | refused; use `--detach` |
 
 ## Project file — `<repo>/.kapelle/config.json`
 

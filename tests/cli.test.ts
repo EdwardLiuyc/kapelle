@@ -784,6 +784,8 @@ test("a configured client refuses demo before starting or contacting a daemon", 
   const configHome = await tempDir(t);
   const remote = await fakeRemoteDaemon(t, (_path, res) => res.end("[]"));
   await writeClientDaemon(configHome, remote.origin);
+  // demo must refuse before it touches the runtime folder.
+  await writeFile(join(runtime, "kapelle"), "blocked", { mode: 0o600 });
 
   const r = await spawnCli(t, ["demo"], "cli.ts", {
     XDG_RUNTIME_DIR: runtime,
@@ -794,6 +796,7 @@ test("a configured client refuses demo before starting or contacting a daemon", 
   assert.match(r.stderr, /daemon machine/);
   assert.equal(remote.seen.length, 0, "demo must not contact a remote daemon");
   assert.doesNotMatch(r.stderr, /remote-key/);
+  assert.equal(await readFile(join(runtime, "kapelle"), "utf8"), "blocked");
 });
 
 test("a configured client names the unreachable daemon address", async (t) => {

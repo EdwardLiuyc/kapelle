@@ -355,11 +355,11 @@ export async function checkVersion(
     // Every other status is the daemon's own refusal, normalized by `call`.
     if (r.status === 404) {
       throw new VersionRefused(
-        `the daemon has no API version (this client speaks ${ours}); ${stopHint}`,
+        `the daemon at ${tried} has no API version (this client speaks ${ours}); ${stopHint}`,
       );
     }
     throw new VersionRefused(
-      `the daemon refused GET /version: ${r.error.message}; ${stopHint}`,
+      `the daemon at ${tried} refused GET /version: ${r.error.message}; ${stopHint}`,
     );
   }
   const theirs = r.body?.apiVersion;
@@ -369,10 +369,10 @@ export async function checkVersion(
     !Number.isInteger(theirs.minor)
   ) {
     throw new VersionRefused(
-      `the daemon has no readable API version (this client speaks ${ours}); ${stopHint}`,
+      `the daemon at ${tried} has no readable API version (this client speaks ${ours}); ${stopHint}`,
     );
   }
-  const both = `the daemon speaks API ${theirs.major}.${theirs.minor} and this client ${ours}`;
+  const both = `the daemon at ${tried} speaks API ${theirs.major}.${theirs.minor} and this client ${ours}`;
   if (theirs.major !== API_VERSION.major) {
     throw new VersionRefused(
       `${both}; update the client or the daemon, then ${stopHint}`,

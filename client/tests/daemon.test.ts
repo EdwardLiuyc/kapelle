@@ -293,6 +293,7 @@ test("remote version refusals name the remote stop location on every path", asyn
     await assert.rejects(checkVersion({ ...d, fromClient: true }), (err) => {
       assert.ok(err instanceof Error, name);
       assert.match(err.message, /machine that runs it/, name);
+      assert.ok(err.message.includes(`http://127.0.0.1:${d.port}`), name);
       assert.doesNotMatch(err.message, /kapelle daemon stop/, name);
       return true;
     });
@@ -398,8 +399,8 @@ test("a non-404 /version refusal keeps the daemon's message", async (t) => {
     assert.ok(err instanceof StreamClosed);
     assert.equal(
       err.message,
-      "the daemon refused GET /version: missing or wrong token; " +
-        "stop it with: kapelle daemon stop",
+      `the daemon at http://127.0.0.1:${d.port} refused GET /version: ` +
+        "missing or wrong token; stop it with: kapelle daemon stop",
     );
     return true;
   });
