@@ -1,12 +1,16 @@
 # Config
 
-Three sources set the knobs that do not belong in a run file (M2-7, #37):
+Four sources set configuration that does not belong in a run file (M2-7, #37;
+M11-4, #478):
 
 - **User level** — `$XDG_CONFIG_HOME/kapelle/config.json`, or
   `~/.config/kapelle/config.json` when `XDG_CONFIG_HOME` is unset or relative.
   Holds the daemon-wide knobs, `port` and `permissionTimeoutMs`. One daemon
   serves every added repository (M2-1), so these cannot come from one
   repository's file.
+- **Client level** — `$XDG_CONFIG_HOME/kapelle/client.json`, beside the user
+  file. Holds `daemonAddress` and `accessKey` for a client that reaches a
+  daemon elsewhere. The daemon never reads it.
 - **Project level** — `<repo>/.kapelle/config.json`. Holds the run defaults:
   `stallIdleMs`, `stallRepeatCount`, `ttlMs`, `maxConcurrency` and
   `retentionMs`, plus `orchestratorTurnCap` for new rooms and `linkPaths` for
@@ -23,13 +27,15 @@ Three sources set the knobs that do not belong in a run file (M2-7, #37):
   participant with its own `cwd` (M11-2) gets the `linkPaths` of the
   repository it works in. The room's watchdog limits, turn cap and retention
   still come from the room's repository.
-- **Environment** — `KAPELLE_*`. Overrides both files; for the run knobs an
-  explicit run-file value still wins.
+- **Environment** — `KAPELLE_*`. Overrides the user and project files; it does
+  not set the client connection. For the run knobs an explicit run-file value
+  still wins.
 
-Both files are strict: an unknown key or a wrong type is refused naming the
-file and the key, because a silently-ignored `stallIdleMs` typo is a watchdog
-that never fires. A missing file is no opinion, never an error. Only `/config`
-creates the project file, and nothing creates the user file. Unknown `KAPELLE_*` names are the one warning path: the prefix is
+All three files are strict: an unknown key or a wrong type is refused naming
+the file and the key, because a silently-ignored `stallIdleMs` typo is a
+watchdog that never fires. A missing file is no opinion, never an error. Only
+`/config` creates the project file; nothing creates the user or client file.
+Unknown `KAPELLE_*` names are the one warning path: the prefix is
 also the secret namespace (`SECRET_PREFIX`, stripped from every harness), so an
 unknown name may be a secret rather than a typo.
 
@@ -40,6 +46,7 @@ Legend: **✅ happy** · **⚠ warning** · **❌ bad**.
 | Config | Read by | Not read by |
 | --- | --- | --- |
 | User file | the daemon's start, however it is reached: `kapelle daemon start` or bare `kapelle` starting one (M9-2) | in-process CLI, merge, sweep |
+| Client file | `cli.ts` for daemon-facing HTTP calls and the bare-client auto-start decision; `chat.ts` and `chat/`; the non-detached `run --file` and `kapelle demo` checks read it only to refuse | the daemon process, explicit `kapelle daemon start`/`stop`, `merge`, `workspace`, sweep |
 | Project file | `POST /repos`, `POST /runs` (each request), `POST /rooms` and each room the daemon restores at start (its stall limits and turn cap), `kapelle run --file`, `sweepBoot` per repository, `GET /config`, `PATCH /config` and `PUT /config` | plain `kapelle "prompt"`, `merge` |
 | `KAPELLE_*` env | the daemon's start (including bare `kapelle`), every run-default and room-cap resolution, `kapelle run --file` | plain prompt, merge |
 
@@ -65,6 +72,56 @@ refuses the daemon start (one line, exit 1), before the instance claim.
 | ❌ | unreadable | `chmod 000` | `cannot read <path>: …` |
 | ❌ | a directory, a symlink, someone else's, or group/other-writable | `chmod 666` | `<path> must be a plain file owned by you and not writable by anyone else.` |
 | ⚠ | — | — | files never warn; strict refusal is the only failure mode |
+
+## Client file — `$XDG_CONFIG_HOME/kapelle/client.json`
+
+Client-local connection settings only. The daemon never reads this file; on a
+remote client there need not be a daemon or `config.json` on that machine.
+The file must be a plain file owned by you with mode exactly `0600`, because it
+holds a credential. A stricter `0400` is refused too, as decided at pickup (#478).
+
+```json
+{
+  "daemonAddress": "http://127.0.0.1:4719",
+  "accessKey": "the token from daemon.json"
+}
+```
+
+`daemonAddress` must be exactly `http://127.0.0.1:<port>`: no HTTPS, host
+name, path, query, fragment or credentials. That loopback form is what an SSH
+tunnel reaches today (D6). `accessKey` is sent as the bearer token; until
+M11-8 it is the daemon's current token, copied by hand. It must be a bearer
+token: one or more letters, digits, or `-._~+/`, then optional `=` padding.
+The key must never appear in a URL, request path or log.
+
+Both keys must be present together. A missing file or `{}` is no opinion and
+falls back to `daemon.json`. A present setting wins over `daemon.json`: the
+client never starts a daemon and never reads the runtime file. If the
+configured daemon does not answer, the error names the address it tried.
+
+`kapelle daemon stop` only reads the local `daemon.json`; it never stops a
+daemon named by this file. When a configured daemon refuses its API version,
+the message says to stop it on the machine that runs it. `kapelle demo` is
+refused because its folder and `demo-agent.mjs` are local; run it on the
+daemon machine instead.
+
+With a client setting active, a non-detached `kapelle run --file` is refused
+with a message that points to `--detach`; running it locally would put the
+harness on the wrong machine. A one-shot `kapelle "<prompt>"` still runs
+locally by design: only `run --file` has a daemon-backed `--detach` path.
+`--detach` is the supported remote run path, but until M11-5 its `--cwd` must
+name an existing repository folder on the daemon machine.
+
+| Case | Result |
+| --- | --- |
+| file absent, or `{}` | no opinion; use `daemon.json` |
+| valid pair | use the configured origin and bearer key |
+| only one key | refused: both must be set together |
+| unknown key | refused, naming the known keys |
+| not a plain file owned by you, or mode other than `0600` (including `0400`) | refused |
+| bad address or invalid key | refused; the key is not echoed |
+| `kapelle demo` | refused: its folder and agent are local |
+| non-detached `kapelle run --file` | refused; use `--detach` |
 
 ## Project file — `<repo>/.kapelle/config.json`
 
@@ -192,6 +249,7 @@ Known name → knob → accepted values:
 | `retentionMs` | `sweepBoot` option (tests) → `KAPELLE_RETENTION_MS` → project config → default | 30 days |
 | `orchestratorTurnCap` | room PATCH → `KAPELLE_ORCHESTRATOR_TURN_CAP` → project config → default | 40 |
 | `linkPaths` | project config only (no env, no run-file field) | no links |
+| `daemonAddress`, `accessKey` | client config only (no env or flag) | none; use `daemon.json` when the client file is absent or empty |
 
 Notes:
 
@@ -200,17 +258,21 @@ Notes:
   the user config is read once at daemon start. `KAPELLE_*` is read at daemon
   start for the daemon-wide knobs, then re-read for every run-default
   resolution and per repository by the boot sweep.
+- The client connection is read by each client command that needs a daemon;
+  it has no environment or command-line override.
 - `0` is a meaningful watchdog value (signal disabled) and a meaningful
   `retentionMs` (reap every terminal run and dismissed room on the next sweep); `port: 0` means
   an OS-chosen port.
 
 ## Where this lives
 
-- `core/config.ts` — key sets, value rules, both file readers, the `KAPELLE_*`
-  reader, `warnUnknownConfigEnv`, `resolveRunDefaults`, `DEFAULT_RETENTION_MS`,
-  `resolveRetentionMs`, `resolveOrchestratorTurnCap`, `readProjectLinkPaths`,
-  and for `/config` `projectConfigView`, `saveProjectConfig` and
-  `replaceProjectConfig`.
+- `core/config.ts` — key sets, value rules, both daemon/project file readers,
+  the `KAPELLE_*` reader, `warnUnknownConfigEnv`, `resolveRunDefaults`,
+  `DEFAULT_RETENTION_MS`, `resolveRetentionMs`, `resolveOrchestratorTurnCap`,
+  `readProjectLinkPaths`, and for `/config` `projectConfigView`,
+  `saveProjectConfig` and `replaceProjectConfig`.
+- `client/daemon.ts` — `clientConfigPath`, the strict `client.json` reader,
+  the client-over-`daemon.json` resolver, the HTTP transport and version check.
 - `client/config.ts` — the `/config` rows as lines, the invalid-file lines, and the
   form's values as a `PATCH` or `PUT /config` body.
 - `core/worktree.ts` — `openWorktrees` plans and makes the `linkPaths` mirrors,
@@ -221,7 +283,9 @@ Notes:
 - `daemon/routes/repos.ts` — `postRepo`, `GET /config`, `PATCH /config`,
   `PUT /config`.
 - `daemon/routes/runs.ts` — `postRun`.
-- `cli.ts` — `runFromFile`, the project-config defaults for `--file`.
+- `cli.ts` — `findDaemon`, the M11-4 `run --file` and `demo` refusals,
+  `runFromFile`, and the project-config defaults for `--file`.
+- `chat/common.ts` — the screen's `client.json`-first address read.
 - `core/runfile.ts` — `RunDefaults` and the task > run > config > built-in chain.
 - `core/sweep.ts` — the boot sweep and its use of the per-repository retention
   window.

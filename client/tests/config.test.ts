@@ -98,6 +98,7 @@ test("an empty replacement is refused before it sends a request (#504)", async (
   const d: DaemonAddress = {
     port: (server.address() as AddressInfo).port,
     token: "tok",
+    fromClient: false,
   };
 
   const out = await runCommand(d, undefined, {
@@ -130,6 +131,7 @@ test("a replacement request is PUT /config with the whole form value set (#504)"
   const d: DaemonAddress = {
     port: (server.address() as AddressInfo).port,
     token: "tok",
+    fromClient: false,
   };
 
   const out = await runCommand(d, undefined, {

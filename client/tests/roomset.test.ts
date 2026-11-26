@@ -23,6 +23,7 @@ import type { DaemonAddress } from "../daemon.ts";
 import {
   type End,
   type Ended,
+  followDaemon,
   type ReadAddress,
   reconcile,
   roomSet,
@@ -42,15 +43,26 @@ const entry = (id: string): RoomListEntry => ({
 
 /** A daemon whose answers the test sets. A room missing from `status`
  *  answers `404`; a number there is the HTTP status. */
+// Its knobs and answers are one controllable daemon fixture.
+// pi-lens-ignore: high-complexity, high-fan-out
 async function fake(t: TestContext, token = "tok") {
   /** Reads whose answer waits for `releaseRead`. */
   const held: (() => void)[] = [];
   /** Polls whose answer waits for `releaseLists`. */
   const heldLists: (() => void)[] = [];
+  /** Version checks whose answer waits for `releaseVersion`. */
+  const heldVersions: (() => void)[] = [];
   const daemon = {
-    d: { port: 0, token } as DaemonAddress,
+    d: { port: 0, token, fromClient: false } as DaemonAddress,
     /** What `GET /version` answers. */
     version: { ...API_VERSION } as { major: number; minor: number },
+    /** When set, a `GET /version` answer waits for `releaseVersion`. */
+    holdVersion: false,
+    /** How many times `GET /version` was asked. */
+    versionChecks: 0,
+    releaseVersion: () => {
+      for (const answer of heldVersions.splice(0)) answer();
+    },
     /** The `Last-Event-ID` of each stream asked for. */
     after: [] as string[],
     /** What `GET /rooms` answers, and with which status. */
@@ -98,8 +110,17 @@ async function fake(t: TestContext, token = "tok") {
     res
       .writeHead(status, { "content-type": "application/json" })
       .end(JSON.stringify(body));
+  // One handler owns the fake daemon's routes.
+  // pi-lens-ignore: high-complexity
   const server = createServer((req, res) => {
     if (req.url === "/version") {
+      daemon.versionChecks++;
+      if (daemon.holdVersion) {
+        heldVersions.push(() =>
+          json(res, 200, { apiVersion: daemon.version, capabilities: [] }),
+        );
+        return;
+      }
       return json(res, 200, { apiVersion: daemon.version, capabilities: [] });
     }
     const [, , id, events] = (req.url ?? "/").split("/");
@@ -797,6 +818,59 @@ for (const how of ["a crash", "a clean stop"]) {
   });
 }
 
+test("a source-file change with the same port and token is rechecked", async (t) => {
+  const server = await fake(t, "same-key");
+  const d = { ...server.d, fromClient: false };
+  const now = { ...server.d, fromClient: true };
+  await followDaemon(
+    d,
+    async () => now,
+    () => {},
+  )();
+  assert.equal(server.versionChecks, 1);
+  assert.equal(d.fromClient, true);
+});
+
+test("a client setting moves the screen to a new port under the same token", async (t) => {
+  const old = await fake(t, "same-key");
+  const { file, address } = daemonFile(old.d);
+  const d = { ...old.d };
+  const { set, said } = follow(t, d, address);
+  set.start([]);
+  await until(() => old.polls >= 1);
+
+  const next = await fake(t, "same-key");
+  file.now = next.d;
+  await set.fresh();
+
+  assert.deepEqual(d, next.d, "the screen took the new port");
+  assert.deepEqual(said.restarts, [undefined]);
+  assert.deepEqual(said.ends, []);
+});
+
+test("the newest of two address changes wins when their checks finish out of order", async (t) => {
+  const old = await fake(t, "same-key");
+  old.holdVersion = true;
+  const next = await fake(t, "same-key");
+  const d = { ...old.d, token: "before" };
+  let now: DaemonAddress = old.d;
+  const fresh = followDaemon(
+    d,
+    async () => now,
+    () => {},
+  );
+
+  const first = fresh();
+  await until(() => old.versionChecks === 1);
+  now = next.d;
+  const second = fresh();
+  await until(() => d.port === next.d.port && d.token === next.d.token);
+  old.releaseVersion();
+  await Promise.all([first, second]);
+
+  assert.deepEqual(d, next.d, "the newest configured address wins");
+});
+
 test("a restart during a held read waits its turn and reads the new daemon once", async (t) => {
   const old = await fake(t);
   old.holdReads = true;
@@ -925,7 +999,7 @@ test("a new token whose version check fails is checked again", async (t) => {
   await until(() => old.streams.has("r1"));
   old.stop();
   // `daemon.json` names the new token before its daemon answers.
-  file.now = { port: old.d.port, token: "tok2" };
+  file.now = { port: old.d.port, token: "tok2", fromClient: false };
   await new Promise((r) => setTimeout(r, WAIT_MS / 3));
   const next = await fake(t, "tok2");
   next.status.set("r1", "paused");

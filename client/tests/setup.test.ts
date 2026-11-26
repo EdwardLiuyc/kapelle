@@ -148,6 +148,7 @@ test("an install stream cut after its headers is not a missing daemon (M9-3b)", 
   const d = {
     port: (server.address() as AddressInfo).port,
     token: "test",
+    fromClient: false,
   };
   await assert.rejects(
     installAgents(d, ["claude"], () => {}),

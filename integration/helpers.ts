@@ -263,8 +263,9 @@ export function isolateStateHome(): void {
 /**
  * The child environment, with the ambient config namespace removed. M2-7's
  * config reads `KAPELLE_*` from the process, so an exported knob would change
- * what these tests measure; a caller that means to set one passes it in
- * `env`, which still wins.
+ * what these tests measure. M11-4's `client.json` is isolated too, so a real
+ * remote setting cannot redirect a test. A caller that means to set either
+ * passes it in `env`, which still wins.
  */
 export function childEnv(env?: Record<string, string>): NodeJS.ProcessEnv {
   const base: NodeJS.ProcessEnv = { ...process.env };
@@ -272,6 +273,7 @@ export function childEnv(env?: Record<string, string>): NodeJS.ProcessEnv {
     if (name.startsWith("KAPELLE_")) delete base[name];
   }
   base.XDG_STATE_HOME = SPAWNED_STATE_HOME;
+  base.XDG_CONFIG_HOME = join(SPAWNED_STATE_HOME, "config-home");
   return env ? { ...base, ...env } : base;
 }
 

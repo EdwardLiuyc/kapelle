@@ -16,11 +16,11 @@
  * clean stop closes the listener first, then pauses each room, which ends
  * its stream normally (`daemon/main.ts`, `shutdown`). So a stream that ends
  * when no daemon answers is a stop, and it waits too.
- * `followDaemon` reads `daemon.json` on every call, through `address`,
- * because `client/` may not import `core/runtime.ts` (S8). A new token gets
- * `GET /version` once, then the screen's one address object takes it in
- * place, so every later call goes to the new daemon. A restart writes no line
- * (E5), so each room is read again then for its `paused` and `killed`.
+ * `followDaemon` reads the client daemon setting or `daemon.json` on every
+ * call, through `address`. A new address gets `GET /version` once, then the
+ * screen's one address object takes it in place, so every later call goes to
+ * the new daemon. A restart writes no line (E5), so each room is read again
+ * then for its `paused` and `killed`.
  *
  * `readRoom` and `reconcile` are here too: the piped screen follows its one
  * room with them. `reconcile` says what happened, not a line. Its lines name
@@ -79,37 +79,118 @@ export const codeOf = (e: Ended) =>
 /** How long a screen waits for a daemon that went away (M6-7d). */
 const WAIT_MS = 30_000;
 
+type Pending = { address: DaemonAddress; done: Promise<void> };
+type Refused = { address: DaemonAddress; refused: VersionRefused };
+
+const sameAddress = (a: DaemonAddress, b: DaemonAddress) =>
+  a.port === b.port && a.token === b.token && a.fromClient === b.fromClient;
+
+/** The shared address check and retry state behind one screen's `d`. */
+class DaemonSync {
+  private readonly d: DaemonAddress;
+  private readonly address: ReadAddress;
+  private readonly onNew: (warning?: string) => void;
+  private latest: DaemonAddress;
+  private revision = 0;
+  private checking: Pending | Refused | undefined;
+
+  constructor(
+    d: DaemonAddress,
+    address: ReadAddress,
+    onNew: (warning?: string) => void,
+  ) {
+    this.d = d;
+    this.address = address;
+    this.onNew = onNew;
+    this.latest = { ...d };
+  }
+
+  async run(): Promise<DaemonAddress> {
+    for (;;) {
+      const fresh = await this.address();
+      this.observe(fresh);
+      const refused = this.refusal(fresh);
+      if (refused) throw refused;
+      // A check for an address nobody names any more cannot apply. Its own
+      // caller still awaits it; this call can move on without that wait.
+      if (this.checking && !sameAddress(fresh, this.checking.address)) {
+        this.checking = undefined;
+      }
+      const pending = this.checking;
+      if (pending && "done" in pending) {
+        await this.settle(pending);
+        continue;
+      }
+      if (sameAddress(fresh, this.d)) return this.d;
+      await this.settle(this.start(fresh));
+    }
+  }
+
+  private observe(fresh: DaemonAddress): void {
+    if (sameAddress(fresh, this.latest)) return;
+    this.latest = { ...fresh };
+    this.revision++;
+  }
+
+  private refusal(fresh: DaemonAddress): VersionRefused | undefined {
+    if (!this.checking || !("refused" in this.checking)) return undefined;
+    if (sameAddress(fresh, this.checking.address)) return this.checking.refused;
+    this.checking = undefined;
+    return undefined;
+  }
+
+  private async settle(pending: Pending): Promise<void> {
+    try {
+      await pending.done;
+    } catch (err) {
+      if (this.checking === pending) this.checking = undefined;
+      if (!sameAddress(await this.address(), pending.address)) return;
+      throw err;
+    }
+    if (this.checking === pending) this.checking = undefined;
+  }
+
+  private start(fresh: DaemonAddress): Pending {
+    const checked = this.revision;
+    const pending: Pending = {
+      address: fresh,
+      done: (async () => {
+        try {
+          const warning = await checkVersion(fresh);
+          if (checked !== this.revision) return;
+          Object.assign(this.d, fresh);
+          this.onNew(warning);
+        } catch (err) {
+          // Keep a fatal refusal for this address, so every later call fails
+          // without another request. A different address can still replace it.
+          if (err instanceof VersionRefused && checked === this.revision) {
+            this.checking = { address: fresh, refused: err };
+          }
+          throw err;
+        }
+      })(),
+    };
+    this.checking = pending;
+    return pending;
+  }
+}
+
 /**
  * `address`, over `d`: the one address object a screen passes to every call.
- * A new token in `daemon.json` is checked with `GET /version` once, then `d`
- * takes it in place and `onNew` runs with the `minor` warning, if any. A
- * different `major` throws `VersionRefused` to this call and every later one.
+ * A new address in the client daemon setting or `daemon.json` is checked with
+ * `GET /version` once, then `d` takes it in place and `onNew` runs with the
+ * `minor` warning, if any. A later address read supersedes an older check, so
+ * two edits cannot leave `d` on whichever check finished last. A different
+ * `major` throws `VersionRefused` for that configured address; a later change
+ * clears the stored refusal and checks the new address.
  */
 export function followDaemon(
   d: DaemonAddress,
   address: ReadAddress,
   onNew: (warning?: string) => void,
 ): ReadAddress {
-  let checking: { token: string; done: Promise<void> } | undefined;
-  return async () => {
-    const fresh = await address();
-    if (fresh.token === d.token) return d;
-    if (checking?.token !== fresh.token) {
-      const done = checkVersion(fresh).then((warning) => {
-        Object.assign(d, fresh);
-        onNew(warning);
-      });
-      checking = { token: fresh.token, done };
-      // A daemon that did not answer is asked again on the next call.
-      done.catch((err) => {
-        if (!(err instanceof VersionRefused) && checking?.done === done) {
-          checking = undefined;
-        }
-      });
-    }
-    await checking.done;
-    return d;
-  };
+  const checks = new DaemonSync(d, address, onNew);
+  return () => checks.run();
 }
 
 /**
@@ -276,8 +357,8 @@ export interface RoomSet {
   /** Drops a room without treating its end as a close. The screen calls this
    *  after a successful delete and chooses where to go. */
   drop(id: string): void;
-  /** Reads `daemon.json` now, as the next poll would, so a send right after
-   *  a restart has the new token. Never throws: a call on `d` says why. */
+  /** Reads the daemon address now, as the next poll would, so a send right
+   *  after a restart has the new address. Never throws: a call on `d` says why. */
   fresh(): Promise<void>;
 }
 

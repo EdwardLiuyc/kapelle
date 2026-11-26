@@ -10,11 +10,12 @@
  *
  * `--detach` posts the run to the daemon instead, and `attach`, `ps` and
  * `daemon add` talk to that daemon through `client/daemon.ts`; `findDaemon()`
- * is where each of them starts, and it checks the API version. `attach`
- * rebuilds the `--file` view from the event stream alone, because a restored
- * run has no `report`. The verdict is not the view's: the settled run status
- * on `GET /runs/:id` wins whenever the daemon has one (M5-5), and `--task`
- * answers with its own card (`TASK_STATUSES`).
+ * is where each of them starts, and it checks the API version. A configured
+ * remote daemon also makes local `run --file` refuse: only `--detach` may run
+ * there (M11-4). `attach` rebuilds the `--file` view from the event stream
+ * alone, because a restored run has no `report`. The verdict is not the
+ * view's: the settled run status on `GET /runs/:id` wins whenever the daemon
+ * has one (M5-5), and `--task` answers with its own card (`TASK_STATUSES`).
  *
  * ^C sends `session/cancel`, waits 2 s, then stops the harness, and the
  * process exits only once the harness is gone.
@@ -33,7 +34,9 @@
  * as `kapelle chat new` does.
  *
  * **`kapelle demo`** (#463) is a room with the offline `demo-agent.mjs`, for
- * a person with no agent yet. `runDemoCommand` says where it works and why.
+ * a person with no agent yet. It is local-only: a configured remote client
+ * refuses it rather than sending its local folder and agent path over HTTP
+ * (M11-4). `runDemoCommand` says where it works and why.
  */
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
@@ -60,9 +63,11 @@ import type {
 import {
   call,
   checkVersion,
+  clientConfigPath,
   type DaemonAddress,
-  readDaemonFile,
+  readClientDaemon,
   request,
+  resolveDaemonAddress,
   VersionRefused,
 } from "./client/daemon.ts";
 import { agentDiff } from "./client/diff.ts";
@@ -253,10 +258,11 @@ kapelle — a minimal Agent Client Protocol client
                                      if none runs; a pipe prints chat usage and exits 1
   kapelle --version                  print the version
   kapelle demo                       try the chat with an offline demo agent:
-                                     no agent to install, no account
+                                     no agent to install, no account; local only
   kapelle "<prompt>" [options]
   kapelle run --file <run.json> [--cwd dir] [--verbose] [--quiet]
-  kapelle run --file <run.json> --detach   hands the run to the daemon
+  kapelle run --file <run.json> --detach   hands the run to the daemon;
+                                     required when a remote client daemon is set
   kapelle attach <runId> [--task <taskId>]
                                      streams a detached run, answers its asks;
                                      --task draws that one task in full
@@ -284,7 +290,8 @@ kapelle — a minimal Agent Client Protocol client
 Options:
   --agent <id>     ${Object.keys(AGENTS).join(" | ")}   (default: ${DEFAULT_AGENT})
   --cmd "<cmd>"    custom agent command, e.g. --cmd "opencode acp"
-  --cwd <dir>      workspace root (default: current directory)
+  --cwd <dir>      workspace root (default: current directory); for --detach
+                   with a remote daemon, a folder on that daemon's machine
   --mode <mode>    ask | safe | auto      (default: the agent's own)
                      ask  = reads auto-approved, mutations prompt you
                      safe = reads only, all mutations refused
@@ -415,7 +422,7 @@ if (chatVerb) {
       return 1;
     });
   } else {
-    process.exitCode = await runFromFile(runFilePath);
+    process.exitCode = await runFromFileUnlessRemote(runFilePath);
   }
 } else if (positional[0] === "setup") {
   if (positional.length !== 1) {
@@ -573,6 +580,28 @@ if (chatVerb) {
     closeAsk();
     await agent.stop();
   }
+}
+
+/**
+ * A local `run --file` when no remote daemon is configured. With a client
+ * setting active the harnesses belong on that daemon, so a non-detached run
+ * would execute in the wrong place; the person must choose `--detach`.
+ */
+async function runFromFileUnlessRemote(path: string): Promise<number> {
+  try {
+    if (await readClientDaemon(clientFile())) {
+      console.error(
+        `error: a remote daemon is configured in ${clientFile()}; ` +
+          "non-detached run --file would run on this machine. " +
+          "Use: kapelle run --file <file> --detach",
+      );
+      return 1;
+    }
+  } catch (err) {
+    console.error(`error: ${messageOf(err)}`);
+    return 1;
+  }
+  return runFromFile(path);
 }
 
 /**
@@ -955,8 +984,14 @@ function daemonFile(): string {
   return join(runtimeDir(), "daemon.json");
 }
 
-/** Start the daemon detached when none answers (M9-2). */
-function startDaemon(): Promise<void> {
+function clientFile(): string {
+  return clientConfigPath();
+}
+
+/** Start the daemon detached when none answers (M9-2). A configured client
+ *  daemon is remote: it skips both this start and the runtime folder. */
+async function startDaemon(): Promise<void> {
+  if (await readClientDaemon(clientFile())) return;
   return ensureDaemon({
     file: daemonFile(),
     log: join(stateDir(), "daemon.log"),
@@ -970,16 +1005,18 @@ function startDaemon(): Promise<void> {
 }
 
 /**
- * The daemon named in `daemon.json`, or `undefined` with the reason printed.
- * Every verb that talks to the daemon starts here, so none of them can
- * disagree about what "no daemon is listening" means. It also checks the API
- * version (B5): a different `major` throws, a different `minor` warns.
+ * The configured client daemon, else the one named in `daemon.json`; or
+ * `undefined` with the reason printed. Every verb that talks to the daemon
+ * starts here, so none of them can disagree about what "no daemon is
+ * listening" means. It also checks the API version (B5): a different `major`
+ * throws, a different `minor` warns.
  */
 async function findDaemon(): Promise<DaemonAddress | undefined> {
-  const d = await readDaemonFile(daemonFile());
+  const d = await resolveDaemonAddress(clientFile(), daemonFile);
   if (typeof d === "string") {
     console.error(
-      `no daemon is listening (${daemonFile()} is missing or not ready). ` +
+      `no daemon is listening (${clientFile()} has no setting and ` +
+        `${daemonFile()} is missing or not ready). ` +
         "Start one with: kapelle daemon start",
     );
     return undefined;
@@ -1093,23 +1130,27 @@ async function attachRun(): Promise<number> {
     !only || taskId === only || taskId === "run";
   const first = await findDaemon();
   if (!first) return 1;
-  // The token of the last daemon whose version passed (B5). A restart brings
-  // a new token, and maybe a new version. The check runs when the stream
-  // connects, not on every call: a permission answer sent between a restart
-  // and the next connect is not checked. At worst it lands on a daemon whose
-  // contract has changed; the connect that follows refuses that daemon and
-  // ends the stream.
-  let checked = first.token;
-  // `daemon.json` is read again on every call: a daemon that restarts while
-  // this is attached has a new token, and maybe a new port (M5-6).
+  // The address of the last daemon whose version passed (B5). A restart or a
+  // client-setting edit can bring a new port, token and version. The check
+  // runs when the stream connects, not on every call: a permission answer sent
+  // between a restart and the next connect is not checked. At worst it lands
+  // on a daemon whose contract has changed; the connect that follows refuses
+  // that daemon and ends the stream.
+  let checkedPort = first.port;
+  let checkedToken = first.token;
+  let checkedFromClient = first.fromClient;
+  // Both connection files are read again on every call: a daemon that
+  // restarts while this is attached has a new token, and maybe a new port
+  // (M5-6). A configured client daemon wins over `daemon.json`.
+  const freshDaemon = () => resolveDaemonAddress(clientFile(), daemonFile);
   const daemon = async (): Promise<DaemonAddress> => {
-    const d = await readDaemonFile(daemonFile());
+    const d = await freshDaemon();
     if (typeof d === "string") throw new Error("no daemon is listening");
     return d;
   };
   const path = `/runs/${encodeURIComponent(id)}`;
-  // Stops when `daemon.json` is gone, which is a clean stop (F3). After a
-  // crash the file stays, and the reader waits for the next daemon.
+  // Stops when no connection file names a daemon, which is a clean stop (F3).
+  // After a crash the file stays, and the reader waits for the next daemon.
   // This leans on the daemon's start order (`claim`, then `listen`, then the
   // token is written): while a new daemon starts, the file has no token, so
   // this throws "starting" and tries again, and an old token never reaches
@@ -1122,16 +1163,22 @@ async function attachRun(): Promise<number> {
   // whole restart inside one read-to-fetch gap. Retry on 401 if it is seen.
   // The window covers the version check below too: a 401 there is a
   // `VersionRefused`, and it also ends the stream.
-  // A new token is checked before its stream opens, and a different `major`
+  // A new address is checked before its stream opens, and a different `major`
   // is a `VersionRefused`, which ends the stream rather than retries it.
   const connect: Connect = async (after, signal) => {
-    const d = await readDaemonFile(daemonFile());
+    const d = await freshDaemon();
     if (d === "missing") return undefined;
     if (d === "unready") throw new Error("the daemon is starting");
-    if (d.token !== checked) {
+    if (
+      d.port !== checkedPort ||
+      d.token !== checkedToken ||
+      d.fromClient !== checkedFromClient
+    ) {
       const warning = await checkVersion(d, signal);
       if (warning) console.error(`! ${warning}`);
-      checked = d.token;
+      checkedPort = d.port;
+      checkedToken = d.token;
+      checkedFromClient = d.fromClient;
     }
     return request(d, `${path}/events`, {
       signal,
@@ -1388,12 +1435,12 @@ async function attachRun(): Promise<number> {
 }
 
 /**
- * `kapelle daemon add <path>`: `POST /repos` to the daemon named in
- * `daemon.json`, with the token from the same file (M2-4, #34).
+ * `kapelle daemon add <path>`: `POST /repos` to the configured client daemon,
+ * else the one named in `daemon.json` (M2-4, #34).
  *
- * `kapelle daemon stop` is the other verb (M9-2): SIGTERM to the pid in the
- * same file, then wait. It deliberately skips `findDaemon`, because the very
- * daemon whose version this client refuses is the one that has to stop.
+ * `kapelle daemon stop` is the other verb (M9-2): SIGTERM to the pid in
+ * `daemon.json`, then wait. It deliberately skips `findDaemon`, because the
+ * very daemon whose version this client refuses is the one that has to stop.
  */
 async function runDaemonCommand(): Promise<number> {
   const [, verb, ...rest] = positional;
@@ -1576,6 +1623,19 @@ async function runDemoCommand(): Promise<number> {
   const command = argv.filter((a) => a !== "--quiet" && a !== "--verbose");
   if (command.length !== 1 || command[0] !== "demo") {
     console.error("usage: kapelle demo");
+    return 1;
+  }
+  try {
+    if (await readClientDaemon(clientFile())) {
+      console.error(
+        "error: kapelle demo is local: its folder and demo-agent.mjs are on " +
+          `this machine, but ${clientFile()} names a daemon elsewhere. ` +
+          "Run kapelle demo on the daemon machine, or remove the client setting.",
+      );
+      return 1;
+    }
+  } catch (err) {
+    console.error(`error: ${messageOf(err)}`);
     return 1;
   }
   const agent = join(import.meta.dirname, "demo-agent.mjs");

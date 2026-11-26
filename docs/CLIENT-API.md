@@ -160,7 +160,9 @@ replies; the run file has its own authoring schema at `schema/run.schema.json`.
 
 The daemon publishes a file named `daemon.json` as its lock while it starts, and completes
 it with the port and token once it is ready. Your client reads this file to find the port
-and the token.
+and the token. Kapelle's own CLI and chat can instead use the client-local
+`$XDG_CONFIG_HOME/kapelle/client.json`; that is client configuration, not part of this
+daemon API. See [`docs/CONFIG.md`](CONFIG.md#client-file--xdg_config_homekapelleclientjson).
 
 **Where it is:**
 

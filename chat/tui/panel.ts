@@ -181,8 +181,8 @@ function panelParts({
   left,
 }: {
   d: DaemonAddress;
-  /** `daemon.json` read again, so a request after a restart has the new
-   *  token (M6-7d). */
+  /** The daemon address read again, so a request after a restart has the
+   *  new token (M6-7d). */
   fresh: () => Promise<void>;
   tui: TuiAltScreen;
   editor: Component;

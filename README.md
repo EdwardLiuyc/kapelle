@@ -80,7 +80,7 @@ Try the chat before you install an agent:
 kapelle demo
 ```
 
-It opens a room with an offline demo agent. It needs no account, no tokens and no network. The agent answers, asks one permission question, and writes a file you can see with `@demo /diff`. The room works in its own folder, never in your checkout. Each `kapelle demo` deletes the last demo room and starts again.
+It opens a room with an offline demo agent. It needs no account, no tokens and no network. The agent answers, asks one permission question, and writes a file you can see with `@demo /diff`. The room works in its own folder, never in your checkout. Each `kapelle demo` deletes the last demo room and starts again. It is local-only: with a remote `client.json` setting it refuses, so run it on the daemon machine.
 
 For developers: in a source checkout, check that kapelle works with no agent and no account. This uses a test agent that ships with the repository, not with the package:
 
@@ -193,6 +193,11 @@ kapelle attach <runId> --task <taskId>   # watch one task in full
 
 kapelle rings the bell and sends a desktop notification when a run needs you.
 
+When [`client.json`](docs/CONFIG.md#client-file--xdg_config_homekapelleclientjson)
+reaches a daemon on another machine through an SSH tunnel at a local
+`127.0.0.1` port, run files must use `--detach`; until M11-5, `--cwd` must name
+an existing repository folder on that daemon's machine.
+
 ### Take the results
 
 ```bash
@@ -255,9 +260,10 @@ What each agent was measured to do is in [`docs/FINDINGS.md`](docs/FINDINGS.md).
 
 ## Configuration
 
-Two optional JSON files and `KAPELLE_*` environment variables:
+Three optional JSON files and `KAPELLE_*` environment variables:
 
 - `~/.config/kapelle/config.json`: the daemon's `port` and permission timeout.
+- `~/.config/kapelle/client.json`: a remote daemon's address and access key, for the client only.
 - `.kapelle/config.json` in your repository: stall limits, time limits, how many tasks run at once, and how long records are kept. This is the only file kapelle reads from your repository. Type `/config` in the chat to see every value and change it, or write the file by hand.
 
 Every key, its range and its order of precedence: [`docs/CONFIG.md`](docs/CONFIG.md).

@@ -146,7 +146,11 @@ test("no daemon: starts one in its own session, logs it and answers", {
   const record = await readRecord(opts.file);
   assert.equal(alive(record.pid), true);
   assert.equal(
-    await checkVersion({ port: record.port, token: record.token }),
+    await checkVersion({
+      port: record.port,
+      token: record.token,
+      fromClient: false,
+    }),
     undefined,
   );
   const identity = JSON.parse(

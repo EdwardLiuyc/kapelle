@@ -8,7 +8,15 @@
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import {
   createServer,
   type IncomingHttpHeaders,
@@ -16,14 +24,17 @@ import {
 } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
+import { userConfigPath } from "../../core/config.ts";
 import { API_VERSION } from "../contract.ts";
 import {
   call,
   checkVersion,
+  clientConfigPath,
   type DaemonAddress,
+  readClientDaemon,
   readDaemonFile,
   request,
   VersionRefused,
@@ -43,7 +54,12 @@ async function fake(
   });
   await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
   t.after(() => server.close());
-  return { port: (server.address() as AddressInfo).port, token: "tok", seen };
+  return {
+    port: (server.address() as AddressInfo).port,
+    token: "tok",
+    fromClient: false,
+    seen,
+  };
 }
 
 const json = (res: ServerResponse, status: number, body: unknown) =>
@@ -53,6 +69,236 @@ const json = (res: ServerResponse, status: number, body: unknown) =>
 
 const version = (major: number, minor: number) => (res: ServerResponse) =>
   json(res, 200, { apiVersion: { major, minor }, capabilities: [] });
+
+test("client.json follows core/config.ts's XDG_CONFIG_HOME rule", () => {
+  for (const env of [
+    { XDG_CONFIG_HOME: "/x/config" },
+    { XDG_CONFIG_HOME: "" },
+    { XDG_CONFIG_HOME: "relative" },
+    {},
+  ]) {
+    assert.equal(
+      dirname(clientConfigPath(env)),
+      dirname(userConfigPath(env)),
+      env.XDG_CONFIG_HOME,
+    );
+  }
+});
+
+test("client.json is strict, private and a full loopback origin", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "kapelle-client-config-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const file = join(dir, "kapelle", "client.json");
+  await mkdir(dirname(file), { recursive: true, mode: 0o700 });
+  await writeFile(file, "{}", { mode: 0o600 });
+
+  assert.equal(await readClientDaemon(file), undefined);
+  for (const [daemonAddress, port] of [
+    ["http://127.0.0.1:4719", 4719],
+    ["http://127.0.0.1:80", 80],
+    ["http://127.0.0.1:65535", 65535],
+  ] as const) {
+    await writeFile(file, JSON.stringify({ daemonAddress, accessKey: "key" }), {
+      mode: 0o600,
+    });
+    assert.deepEqual(await readClientDaemon(file), {
+      port,
+      token: "key",
+      fromClient: true,
+    });
+  }
+
+  const bad: [unknown, RegExp][] = [
+    [{ daemonAddress: "http://127.0.0.1:4719" }, /must be set together/],
+    [{ accessKey: "key" }, /must be set together/],
+    [
+      {
+        daemonAddress: "http://127.0.0.1:4719",
+        accessKey: "key",
+        extra: true,
+      },
+      /unknown key "extra"/,
+    ],
+    [
+      {
+        daemonAddress: "https://127.0.0.1:4719",
+        accessKey: "key",
+      },
+      /must be exactly/,
+    ],
+    [
+      { daemonAddress: "http://localhost:4719", accessKey: "key" },
+      /must be exactly/,
+    ],
+    [
+      { daemonAddress: "http://127.0.0.1:0", accessKey: "key" },
+      /must be exactly/,
+    ],
+    [
+      { daemonAddress: "http://127.0.0.1:65536", accessKey: "key" },
+      /must be exactly/,
+    ],
+    [
+      { daemonAddress: "http://127.1:4719", accessKey: "key" },
+      /must be exactly/,
+    ],
+    [
+      { daemonAddress: "http://127.0.0.1:4719/", accessKey: "key" },
+      /must be exactly/,
+    ],
+    [
+      { daemonAddress: "http://127.0.0.1:4719/path", accessKey: "key" },
+      /must be exactly/,
+    ],
+    [
+      {
+        daemonAddress: "http://SECRET@127.0.0.1:4719",
+        accessKey: "key",
+      },
+      /must be exactly/,
+    ],
+    [{ daemonAddress: "http://127.0.0.1:4719", accessKey: "" }, /accessKey/],
+    [
+      {
+        daemonAddress: "http://127.0.0.1:4719",
+        accessKey: "SECRET\nTOKEN",
+      },
+      /accessKey/,
+    ],
+  ];
+  for (const [body, expected] of bad) {
+    await writeFile(file, JSON.stringify(body), { mode: 0o600 });
+    await assert.rejects(readClientDaemon(file), (err) => {
+      assert.ok(err instanceof Error);
+      assert.match(err.message, expected);
+      assert.doesNotMatch(err.message, /SECRET/);
+      return true;
+    });
+  }
+
+  await writeFile(
+    file,
+    '{"daemonAddress":"http://127.0.0.1:4719","accessKey": SECRET-TOKEN}',
+    { mode: 0o600 },
+  );
+  await assert.rejects(readClientDaemon(file), (err) => {
+    assert.ok(err instanceof Error);
+    assert.match(err.message, /not valid JSON/);
+    assert.doesNotMatch(err.message, /SECRET/);
+    return true;
+  });
+  await writeFile(
+    file,
+    JSON.stringify({
+      daemonAddress: "http://127.0.0.1:4719",
+      accessKey: "key",
+    }),
+  );
+  await chmod(file, 0o400);
+  await assert.rejects(readClientDaemon(file), /mode 0600/);
+  await chmod(file, 0o644);
+  await assert.rejects(readClientDaemon(file), /mode 0600/);
+});
+
+test("client.json refuses a symlink even when its target is private", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "kapelle-client-symlink-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const target = join(dir, "real.json");
+  const file = join(dir, "client.json");
+  await writeFile(
+    target,
+    JSON.stringify({
+      daemonAddress: "http://127.0.0.1:4719",
+      accessKey: "key",
+    }),
+    { mode: 0o600 },
+  );
+  await symlink(target, file);
+
+  await assert.rejects(readClientDaemon(file), /plain file owned by you/);
+});
+
+test("an unreachable daemon error names its origin, never the access key", async () => {
+  const server = createServer();
+  await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
+  const { port } = server.address() as AddressInfo;
+  await new Promise<void>((ok, fail) =>
+    server.close((err) => (err ? fail(err) : ok())),
+  );
+  await assert.rejects(
+    checkVersion({ port, token: "SECRET-TOKEN", fromClient: false }),
+    (err) => {
+      assert.ok(err instanceof Error);
+      assert.ok(
+        err.message.includes(
+          `the daemon at http://127.0.0.1:${port} did not answer`,
+        ),
+      );
+      assert.doesNotMatch(err.message, /SECRET-TOKEN/);
+      assert.ok(err.cause instanceof Error);
+      return true;
+    },
+  );
+});
+
+test("an invalid access key is refused by version check without echoing it", async () => {
+  await assert.rejects(
+    checkVersion({ port: 1, token: "SECRET\nTOKEN", fromClient: false }),
+    (err) => {
+      assert.ok(err instanceof Error);
+      assert.match(err.message, /access key from daemon\.json/);
+      assert.match(err.message, /http:\/\/127\.0\.0\.1:1/);
+      assert.match(err.message, /not a valid bearer token/);
+      assert.doesNotMatch(err.message, /SECRET/);
+      assert.doesNotMatch(err.message, /did not answer/);
+      return true;
+    },
+  );
+});
+
+test("remote version refusals name the remote stop location on every path", async (t) => {
+  const cases: [string, (res: ServerResponse) => void][] = [
+    [
+      "unreadable reply",
+      (res) => res.writeHead(200, { "content-type": "text/plain" }).end("no"),
+    ],
+    [
+      "no version route",
+      (res) =>
+        json(res, 404, {
+          error: { code: "no_route", message: "no such route" },
+        }),
+    ],
+    [
+      "refused request",
+      (res) =>
+        json(res, 401, {
+          error: { code: "unauthorized", message: "wrong token" },
+        }),
+    ],
+    [
+      "unreadable api version",
+      (res) => json(res, 200, { apiVersion: { major: 1 } }),
+    ],
+    [
+      "major mismatch",
+      (res) =>
+        json(res, 200, {
+          apiVersion: { major: API_VERSION.major + 1, minor: 0 },
+        }),
+    ],
+  ];
+  for (const [name, reply] of cases) {
+    const d = await fake(t, reply);
+    await assert.rejects(checkVersion({ ...d, fromClient: true }), (err) => {
+      assert.ok(err instanceof Error, name);
+      assert.match(err.message, /machine that runs it/, name);
+      assert.ok(err.message.includes(`http://127.0.0.1:${d.port}`), name);
+      assert.doesNotMatch(err.message, /kapelle daemon stop/, name);
+      return true;
+    });
+  }
+});
 
 test("the same version passes silently, with the token sent", async (t) => {
   const d = await fake(t, version(API_VERSION.major, API_VERSION.minor));
@@ -79,14 +325,16 @@ test("request keeps the caller's headers in every form fetch takes", async (t) =
   assert.equal(d.seen.length, 3);
 });
 
-test("a different minor is a warning that names both versions", async (t) => {
+test("a different minor is a warning that names both versions and the address", async (t) => {
   const d = await fake(t, version(API_VERSION.major, API_VERSION.minor + 1));
   const warning = await checkVersion(d);
-  assert.match(
-    warning ?? "",
-    new RegExp(
-      `speaks API ${API_VERSION.major}\\.${API_VERSION.minor + 1} and this client ${API_VERSION.major}\\.${API_VERSION.minor}`,
+  assert.ok(
+    (warning ?? "").includes(
+      `speaks API ${API_VERSION.major}.${API_VERSION.minor + 1} and this client ${API_VERSION.major}.${API_VERSION.minor}`,
     ),
+  );
+  assert.ok(
+    (warning ?? "").includes(`the daemon at http://127.0.0.1:${d.port}`),
   );
 });
 
@@ -154,8 +402,8 @@ test("a non-404 /version refusal keeps the daemon's message", async (t) => {
     assert.ok(err instanceof StreamClosed);
     assert.equal(
       err.message,
-      "the daemon refused GET /version: missing or wrong token; " +
-        "stop it with: kapelle daemon stop",
+      `the daemon at http://127.0.0.1:${d.port} refused GET /version: ` +
+        "missing or wrong token; stop it with: kapelle daemon stop",
     );
     return true;
   });
@@ -245,7 +493,11 @@ test("daemon.json: missing, unready or an address", async (t) => {
     assert.equal(await readDaemonFile(file), "unready", text);
   }
   await writeFile(file, '{"port":1,"token":"x","pid":2}');
-  assert.deepEqual(await readDaemonFile(file), { port: 1, token: "x" });
+  assert.deepEqual(await readDaemonFile(file), {
+    port: 1,
+    token: "x",
+    fromClient: false,
+  });
 });
 
 test("client/ loads nothing under core/ or protocol/ at runtime", async () => {

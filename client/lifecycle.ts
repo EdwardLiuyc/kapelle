@@ -1,6 +1,7 @@
 /**
  * The daemon's life, from a client (M9-2): start it when none answers, and
- * stop it on request.
+ * stop it on request. A configured remote client never calls `ensureDaemon`;
+ * `cli.ts` checks `client.json` first (M11-4).
  *
  * **Starting is a detached spawn, not `daemon start`.** `kapelle daemon
  * start` imports `daemon.ts` into this process and stays in the foreground;
