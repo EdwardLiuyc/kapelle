@@ -22,13 +22,14 @@
  * reads into its own queue.
  *
  * **When to stop is the caller's `connect`.** It returns `undefined` when the
- * daemon stopped on purpose (the CLI: `daemon.json` is gone), and the reader
- * throws `StreamClosed`. Any refusal (a status that is not 2xx) and a
+ * daemon stopped on purpose (the CLI: no connection file names one), and the
+ * reader throws `StreamClosed`. Any refusal (a status that is not 2xx) and a
  * malformed event also throw: trying again gets the same answer. Only a clean
  * end of the body is the end of the stream.
  *
  * The SSE parser lives here too. `daemon.ts` beside it is the rest of the
- * transport (M5-10a): `daemon.json`, the HTTP calls and the version check.
+ * transport (M5-10a): the client and daemon connection files, the HTTP calls
+ * and the version check.
  */
 
 import type { ErrorReply, EventLine } from "./contract.ts";

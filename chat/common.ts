@@ -9,7 +9,11 @@
 import { join } from "node:path";
 
 import { CHAT_GONE, NO_HALL } from "../client/command.ts";
-import { type DaemonAddress, readDaemonFile } from "../client/daemon.ts";
+import {
+  clientConfigPath,
+  type DaemonAddress,
+  resolveDaemonAddress,
+} from "../client/daemon.ts";
 import type { Named } from "../client/mention.ts";
 import { type Entry, type RoomState, roster } from "../client/room.ts";
 import type { Ended } from "../client/roomset.ts";
@@ -17,13 +21,15 @@ import { runtimeDir } from "../core/runtime.ts";
 
 const daemonFile = () => join(runtimeDir(), "daemon.json");
 
-/** The daemon named in `daemon.json`, or a throw that says how to start one.
- *  Read again on every call: a daemon that restarts has a new token. */
+/** The configured client daemon, else the one in `daemon.json`; or a throw
+ *  that says how to start one. Read again on every call: a daemon that
+ *  restarts has a new token, and a client setting wins over the local file. */
 async function address(): Promise<DaemonAddress> {
-  const d = await readDaemonFile(daemonFile());
+  const d = await resolveDaemonAddress(clientConfigPath(), daemonFile);
   if (typeof d === "string") {
     throw new Error(
-      `no daemon is listening (${daemonFile()} is missing or not ready). ` +
+      `no daemon is listening (${clientConfigPath()} has no setting and ` +
+        `${daemonFile()} is missing or not ready). ` +
         "Start one with: kapelle daemon start",
     );
   }

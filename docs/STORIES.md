@@ -4611,6 +4611,12 @@ is not loopback (`403` `host_not_allowed`), so the address must reach it as
 says the user config file holds daemon-wide knobs only, and that the CLI in its own
 process does not read it. `client/` cannot import `core/config.ts`, so it copies the
 XDG rule, as `client/loop.ts` does, with a test that the two agree.
+**Decided at pickup 2026-11-26 (#478):** the setting is the client-local
+`$XDG_CONFIG_HOME/kapelle/client.json`, mode `0600`, with `daemonAddress` and
+`accessKey`. It is read only by the client and wins over `daemon.json`; the daemon file
+is never needed or started. A configured client refuses a non-detached `run --file`
+and points to `--detach`. The address is exactly `http://127.0.0.1:<port>` until D6's
+host setting, and the key is never put in a URL or log.
 *Done when* tests cover the setting used over `daemon.json`, no daemon started, and the
 message when nothing answers; and `docs/CONFIG.md` names the setting, its file, and who
 reads it.
@@ -4631,10 +4637,14 @@ version.
 no `--cwd` is typed. The client's own folder may not exist on the daemon's machine, and
 the daemon's own current folder means nothing to the person; the pickup decides between
 the daemon user's home and a required absolute `--cwd`.
+**Amended 2026-11-26 (#478):** with an address set, `run --file --detach` is the
+supported remote run path. This story must cover `detachRun` and resolve its `--cwd` on
+the daemon machine, not the client's disk.
 *Done when* tests cover a local `kapelle` that still picks the folder it was typed in;
 and, with an address set, completion and the folder check against a daemon whose folders
-the client's disk does not have, a `~` path resolved on the daemon's machine, and a
-relative path and no `--cwd` handled as the pickup decided.
+the client's disk does not have, a `~` path resolved on the daemon's machine, a
+relative path and no `--cwd` handled as the pickup decided, and a remote
+`run --file --detach` with its `--cwd` resolved on the daemon machine.
 
 **M11-6 · Recipes and the loop's first message come from the daemon · M · needs M11-4**
 `client/loop.ts` reads the recipe folders and `assets/orchestrator.md` from the

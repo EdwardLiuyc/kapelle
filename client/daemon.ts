@@ -2,15 +2,15 @@
  * How a client finds the daemon and talks to it — story M5-10a (#142).
  *
  * **No client in `client/` or `chat/` speaks HTTP to the daemon except through
- * this file.** It is the one transport, version check and `daemon.json`
+ * this file.** It is the one transport, version check and connection-file
  * reader for every `cli.ts` verb that talks to the daemon, and for `chat.ts`;
  * `kapelle daemon start` imports `daemon.ts` directly.
  *
- * **The caller passes the `daemon.json` path.** The folder it sits in is
- * `core/runtime.ts`'s to pick and to guard (`ours()`), and this folder imports
- * nothing from `core/`, so the rule keeps one copy. The file is read again on
- * every call that needs it: a daemon that restarts has a new token, and maybe
- * a new port.
+ * **The caller passes both paths.** `client.json` is a client-local setting
+ * (M11-4): when it names a daemon, it wins over `daemon.json` and the runtime
+ * folder is never touched. Without it, the caller passes `core/runtime.ts`'s
+ * `daemon.json` path. These files are read again on every call that needs
+ * them: a daemon that restarts has a new token, and maybe a new port.
  *
  * `call` answers the typed reply, or the `{code, message}` of the daemon's
  * refusal. `request` is the bare `Response`, for the event stream
@@ -24,7 +24,9 @@
  * cannot use has to go, and that is the command that does it.
  */
 
-import { readFile } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
+import { homedir, userInfo } from "node:os";
+import { isAbsolute, join } from "node:path";
 import { API_VERSION, type ErrorReply, type VersionReply } from "./contract.ts";
 import { StreamClosed } from "./stream.ts";
 
@@ -32,6 +34,123 @@ import { StreamClosed } from "./stream.ts";
 export interface DaemonAddress {
   port: number;
   token: string;
+}
+
+/** The client connection file: `$XDG_CONFIG_HOME/kapelle/client.json`. */
+export function clientConfigPath(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.XDG_CONFIG_HOME;
+  const base =
+    configured && isAbsolute(configured)
+      ? configured
+      : join(homedir(), ".config");
+  return join(base, "kapelle", "client.json");
+}
+
+const messageOf = (err: unknown) =>
+  err instanceof Error ? err.message : String(err);
+
+/** A configured address as a daemon address, or a strict refusal. */
+function configuredAddress(
+  value: unknown,
+  key: unknown,
+  where: string,
+): DaemonAddress {
+  if (typeof value !== "string" || value === "") {
+    throw new Error(
+      `${where}: "daemonAddress" must be an absolute http://127.0.0.1:<port> address.`,
+    );
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(
+      `${where}: "daemonAddress" must be an absolute http://127.0.0.1:<port> address.`,
+    );
+  }
+  if (
+    url.protocol !== "http:" ||
+    url.hostname !== "127.0.0.1" ||
+    url.port === "" ||
+    Number(url.port) < 1 ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.pathname !== "/" ||
+    url.search !== "" ||
+    url.hash !== ""
+  ) {
+    throw new Error(
+      `${where}: "daemonAddress" must be exactly ` +
+        `http://127.0.0.1:<port>, with no path, query, fragment or credentials.`,
+    );
+  }
+  if (typeof key !== "string" || key === "" || key.trim() !== key) {
+    throw new Error(
+      `${where}: "accessKey" must be a non-empty string with no surrounding whitespace.`,
+    );
+  }
+  return { port: Number(url.port), token: key };
+}
+
+/**
+ * The client-local daemon setting. A missing file or `{}` is no opinion.
+ * Everything else is strict: keys, types, mode and address shape are checked
+ * here so a typo cannot silently fall back to a local daemon.
+ */
+export async function readClientDaemon(
+  file: string,
+): Promise<DaemonAddress | undefined> {
+  let st: Awaited<ReturnType<typeof lstat>>;
+  try {
+    st = await lstat(file);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw new Error(`cannot read ${file}: ${messageOf(err)}`);
+  }
+  if (
+    !st.isFile() ||
+    st.uid !== userInfo().uid ||
+    (st.mode & 0o777) !== 0o600
+  ) {
+    throw new Error(
+      `${file} must be a plain file owned by you with mode 0600. ` +
+        `Fix or remove it, then try again.`,
+    );
+  }
+
+  let text: string;
+  try {
+    text = await readFile(file, "utf8");
+  } catch (err) {
+    throw new Error(`cannot read ${file}: ${messageOf(err)}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (err) {
+    throw new Error(`${file} is not valid JSON: ${messageOf(err)}`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`${file} must be a JSON object.`);
+  }
+  const object = parsed as Record<string, unknown>;
+  for (const name of Object.keys(object)) {
+    if (name !== "daemonAddress" && name !== "accessKey") {
+      throw new Error(
+        `${file}: unknown key ${JSON.stringify(name)}. ` +
+          `Known: daemonAddress, accessKey.`,
+      );
+    }
+  }
+  if (object.daemonAddress === undefined && object.accessKey === undefined) {
+    return undefined;
+  }
+  if (object.daemonAddress === undefined || object.accessKey === undefined) {
+    throw new Error(
+      `${file}: "daemonAddress" and "accessKey" must be set together.`,
+    );
+  }
+  return configuredAddress(object.daemonAddress, object.accessKey, `${file}`);
 }
 
 /**
@@ -113,6 +232,18 @@ export async function readDaemonFile(
   return record.address ?? "unready";
 }
 
+/**
+ * The configured client daemon, or else `daemon.json`. The daemon-file path is
+ * lazy so a configured client never touches the runtime folder it names.
+ */
+export async function resolveDaemonAddress(
+  clientFile: string,
+  daemonFile: () => string,
+): Promise<DaemonAddress | "missing" | "unready"> {
+  const configured = await readClientDaemon(clientFile);
+  return configured ?? (await readDaemonFile(daemonFile()));
+}
+
 /** One request, with the token on it. A body is JSON: the daemon refuses any
  *  other type with a 415 (M5-3). `init.headers` may take any form `fetch`
  *  takes: an object, a `Headers` or a list of pairs. */
@@ -179,25 +310,27 @@ export class VersionRefused extends StreamClosed {}
  * Asks `GET /version` and compares it with `API_VERSION`. Throws
  * `VersionRefused` for a different `major`, an unreadable `apiVersion`, or a
  * non-404 refusal (with the daemon's own message), and answers a warning for
- * a different `minor`. A daemon it cannot reach throws as `fetch` does.
+ * a different `minor`. A daemon it cannot reach throws with the address it
+ * tried; the token is never part of that address or message.
  */
 export async function checkVersion(
   d: DaemonAddress,
   signal?: AbortSignal,
 ): Promise<string | undefined> {
   const ours = `${API_VERSION.major}.${API_VERSION.minor}`;
+  const tried = `http://127.0.0.1:${d.port}`;
   let r: Reply<Partial<VersionReply>>;
   try {
     r = await call<Partial<VersionReply>>(d, "/version", { signal });
   } catch (err) {
     if (err instanceof UnreadableReply) {
       throw new VersionRefused(
-        `the daemon has no readable API version (GET /version answered ` +
-          `HTTP ${err.status} with a non-JSON body); this client speaks ` +
-          `${ours}; stop it with: kapelle daemon stop`,
+        `the daemon at ${tried} has no readable API version ` +
+          `(GET /version answered HTTP ${err.status} with a non-JSON body); ` +
+          `this client speaks ${ours}; stop it with: kapelle daemon stop`,
       );
     }
-    throw err;
+    throw new Error(`the daemon at ${tried} did not answer: ${messageOf(err)}`);
   }
   if (!r.ok) {
     // A 404 is a daemon older than M5-1, which has no `/version` route.

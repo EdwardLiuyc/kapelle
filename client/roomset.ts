@@ -16,9 +16,9 @@
  * clean stop closes the listener first, then pauses each room, which ends
  * its stream normally (`daemon/main.ts`, `shutdown`). So a stream that ends
  * when no daemon answers is a stop, and it waits too.
- * `followDaemon` reads `daemon.json` on every call, through `address`,
- * because `client/` may not import `core/runtime.ts` (S8). A new token gets
- * `GET /version` once, then the screen's one address object takes it in
+ * `followDaemon` reads the client daemon setting or `daemon.json` on every
+ * call, through `address`. A new token gets `GET /version` once, then the
+ * screen's one address object takes it in
  * place, so every later call goes to the new daemon. A restart writes no line
  * (E5), so each room is read again then for its `paused` and `killed`.
  *
@@ -81,9 +81,10 @@ const WAIT_MS = 30_000;
 
 /**
  * `address`, over `d`: the one address object a screen passes to every call.
- * A new token in `daemon.json` is checked with `GET /version` once, then `d`
- * takes it in place and `onNew` runs with the `minor` warning, if any. A
- * different `major` throws `VersionRefused` to this call and every later one.
+ * A new token in the client daemon setting or `daemon.json` is checked with
+ * `GET /version` once, then `d` takes it in place and `onNew` runs with the
+ * `minor` warning, if any. A different `major` throws `VersionRefused` to this
+ * call and every later one.
  */
 export function followDaemon(
   d: DaemonAddress,
@@ -95,10 +96,11 @@ export function followDaemon(
     const fresh = await address();
     if (fresh.token === d.token) return d;
     if (checking?.token !== fresh.token) {
-      const done = checkVersion(fresh).then((warning) => {
+      const done = (async () => {
+        const warning = await checkVersion(fresh);
         Object.assign(d, fresh);
         onNew(warning);
-      });
+      })();
       checking = { token: fresh.token, done };
       // A daemon that did not answer is asked again on the next call.
       done.catch((err) => {
@@ -276,8 +278,8 @@ export interface RoomSet {
   /** Drops a room without treating its end as a close. The screen calls this
    *  after a successful delete and chooses where to go. */
   drop(id: string): void;
-  /** Reads `daemon.json` now, as the next poll would, so a send right after
-   *  a restart has the new token. Never throws: a call on `d` says why. */
+  /** Reads the daemon address now, as the next poll would, so a send right
+   *  after a restart has the new token. Never throws: a call on `d` says why. */
   fresh(): Promise<void>;
 }
 

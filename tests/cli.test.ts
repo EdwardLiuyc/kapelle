@@ -348,6 +348,56 @@ const mockRun = (
   tasks,
 });
 
+test("a configured remote daemon refuses local run --file and points to --detach", async (t) => {
+  const cwd = await tempDir(t);
+  const configHome = await tempDir(t);
+  const file = await runFile(
+    t,
+    mockRun([{ id: "one", prompt: "must not run here" }]),
+  );
+  await writeClientDaemon(configHome, "http://127.0.0.1:4719");
+
+  const r = await spawnCli(t, ["run", "--file", file, "--cwd", cwd], "cli.ts", {
+    XDG_CONFIG_HOME: configHome,
+  }).done;
+  assert.equal(r.code, 1);
+  assert.equal(r.stdout, "");
+  assert.match(r.stderr, /remote daemon is configured/);
+  assert.match(r.stderr, /--detach/);
+  assert.deepEqual(await readdir(cwd), [], "no local harness ran");
+});
+
+test("a configured remote daemon accepts run --file --detach", async (t) => {
+  const cwd = await tempDir(t);
+  const configHome = await tempDir(t);
+  const file = await runFile(
+    t,
+    mockRun([{ id: "one", prompt: "run over there" }]),
+  );
+  const remote = await fakeRemoteDaemon(t, (path, res) => {
+    if (path !== "/runs") {
+      res.end("[]");
+      return;
+    }
+    res.writeHead(202);
+    res.end(JSON.stringify({ id: "remote-run" }));
+  });
+  await writeClientDaemon(configHome, remote.origin);
+
+  const r = await spawnCli(
+    t,
+    ["run", "--file", file, "--detach", "--cwd", cwd, "--quiet"],
+    "cli.ts",
+    { XDG_CONFIG_HOME: configHome },
+  ).done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(r.stdout, "remote-run\n");
+  assert.ok(remote.seen.some((entry) => entry.path === "/runs"));
+  assert.ok(
+    remote.seen.every((entry) => entry.authorization === "Bearer remote-key"),
+  );
+});
+
 test("--file runs every task and reports each one", async (t) => {
   const cwd = await tempDir(t);
   const file = await runFile(
@@ -587,6 +637,117 @@ async function fakeDaemon(
   await write();
   return { write };
 }
+
+/** A fake daemon with no `daemon.json`, for the M11-4 client setting. */
+async function fakeRemoteDaemon(
+  t: TestContext,
+  routes: (path: string, res: ServerResponse) => void,
+) {
+  const seen: { path: string; authorization: string | undefined }[] = [];
+  const server = createServer((req, res) => {
+    seen.push({
+      path: req.url ?? "/",
+      authorization: req.headers.authorization,
+    });
+    res.setHeader("content-type", "application/json");
+    if (req.url === "/version") {
+      res.end(
+        JSON.stringify({
+          apiVersion: API_VERSION,
+          capabilities: [],
+        }),
+      );
+      return;
+    }
+    routes(req.url ?? "/", res);
+  });
+  await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const port = (server.address() as AddressInfo).port;
+  return { origin: `http://127.0.0.1:${port}`, port, seen };
+}
+
+/** `$XDG_CONFIG_HOME/kapelle/client.json`, private as M11-4 requires. */
+async function writeClientDaemon(
+  configHome: string,
+  origin: string,
+  accessKey = "remote-key",
+) {
+  const dir = join(configHome, "kapelle");
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await writeFile(
+    join(dir, "client.json"),
+    JSON.stringify({ daemonAddress: origin, accessKey }),
+    { mode: 0o600 },
+  );
+}
+
+test("client.json wins over daemon.json for ps and chat list", async (t) => {
+  const runtime = await tempDir(t);
+  const configHome = await tempDir(t);
+  const remote = await fakeRemoteDaemon(t, (path, res) => {
+    if (path === "/runs") {
+      res.end(
+        JSON.stringify([
+          { id: "remote-run", status: "done", cwd: "/remote", tasks: [] },
+        ]),
+      );
+    } else {
+      res.end("[]");
+    }
+  });
+  const local = await fakeRemoteDaemon(t, (_, res) => res.end("[]"));
+  await writeClientDaemon(configHome, remote.origin);
+  await mkdir(join(runtime, "kapelle"), { recursive: true, mode: 0o700 });
+  await writeFile(
+    join(runtime, "kapelle", "daemon.json"),
+    JSON.stringify({ pid: process.pid, port: local.port, token: "local-key" }),
+    { mode: 0o600 },
+  );
+
+  const env = { XDG_RUNTIME_DIR: runtime, XDG_CONFIG_HOME: configHome };
+  const ps = await spawnCli(t, ["ps"], "cli.ts", env).done;
+  assert.equal(ps.code, 0, ps.stderr);
+  assert.match(ps.stdout, /remote-run/);
+  assert.doesNotMatch(ps.stdout, /local-run/);
+
+  const chat = await spawnCli(t, ["chat", "list"], "cli.ts", env).done;
+  assert.equal(chat.code, 0, chat.stderr);
+  assert.equal(chat.stdout, "");
+
+  assert.deepEqual(local.seen, [], "the client setting must skip daemon.json");
+  assert.ok(remote.seen.some((r) => r.path === "/runs"));
+  assert.ok(remote.seen.some((r) => r.path === "/rooms"));
+  assert.ok(remote.seen.every((r) => r.authorization === "Bearer remote-key"));
+});
+
+test("a configured client never starts a local daemon", async (t) => {
+  const runtime = await tempDir(t);
+  const configHome = await tempDir(t);
+  const probe = createServer();
+  await new Promise<void>((ok) => probe.listen(0, "127.0.0.1", ok));
+  const { port } = probe.address() as AddressInfo;
+  await new Promise<void>((ok, fail) =>
+    probe.close((err) => (err ? fail(err) : ok())),
+  );
+  const origin = `http://127.0.0.1:${port}`;
+  await writeClientDaemon(configHome, origin);
+  // If startDaemon runs, runtimeDir() refuses this file before any spawn.
+  await writeFile(join(runtime, "kapelle"), "blocked", { mode: 0o600 });
+
+  const r = await spawnCli(t, ["demo"], "cli.ts", {
+    XDG_RUNTIME_DIR: runtime,
+    XDG_CONFIG_HOME: configHome,
+  }).done;
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /did not answer/);
+  assert.ok(r.stderr.includes(origin), r.stderr);
+  assert.doesNotMatch(r.stderr, /remote-key/);
+  assert.equal(await readFile(join(runtime, "kapelle"), "utf8"), "blocked");
+});
 
 test("a daemon with a different API major is refused, one with a different minor warns", async (t) => {
   const { major, minor } = API_VERSION;

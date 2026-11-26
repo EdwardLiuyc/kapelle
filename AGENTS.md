@@ -174,7 +174,7 @@ and the person's shell (`chat/tui/term.ts`).
 | `daemon/app.ts` | `createDaemonApp`: the state, the `Host` and token checks, and the route table. Importing it starts nothing. |
 | `daemon/` | The app's other parts, each importable by a test. `daemon/routes/` holds the table's rows and their handlers. |
 | `client/contract.ts` | The client API as types, plus `API_VERSION`. |
-| `client/daemon.ts` | `daemon.json`, the HTTP calls and the version check. |
+| `client/daemon.ts` | `client.json`, `daemon.json`, the HTTP calls and the version check. |
 | `client/lifecycle.ts` | The daemon's life from a client (M9-2): start it when none answers, and stop it. |
 | `client/stream.ts` | The SSE reader with reconnect. `attach` uses it. |
 | `client/room.ts` | The room reducer: room lines in, screen state out. No I/O. |

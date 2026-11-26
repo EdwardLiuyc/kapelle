@@ -65,8 +65,8 @@ function questionParts({
   prefill,
 }: {
   d: DaemonAddress;
-  /** `daemon.json` read again, so an answer after a restart has the new
-   *  token (M6-7d). */
+  /** The daemon address read again, so an answer after a restart has the
+   *  new token (M6-7d). */
   fresh: () => Promise<void>;
   queue: Queue;
   editor: { getText(): string };

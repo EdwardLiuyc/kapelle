@@ -8,7 +8,14 @@
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import {
   createServer,
   type IncomingHttpHeaders,
@@ -16,14 +23,17 @@ import {
 } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
+import { userConfigPath } from "../../core/config.ts";
 import { API_VERSION } from "../contract.ts";
 import {
   call,
   checkVersion,
+  clientConfigPath,
   type DaemonAddress,
+  readClientDaemon,
   readDaemonFile,
   request,
   VersionRefused,
@@ -54,6 +64,123 @@ const json = (res: ServerResponse, status: number, body: unknown) =>
 const version = (major: number, minor: number) => (res: ServerResponse) =>
   json(res, 200, { apiVersion: { major, minor }, capabilities: [] });
 
+test("client.json follows core/config.ts's XDG_CONFIG_HOME rule", () => {
+  for (const env of [
+    { XDG_CONFIG_HOME: "/x/config" },
+    { XDG_CONFIG_HOME: "" },
+    { XDG_CONFIG_HOME: "relative" },
+    {},
+  ]) {
+    assert.equal(
+      dirname(clientConfigPath(env)),
+      dirname(userConfigPath(env)),
+      env.XDG_CONFIG_HOME,
+    );
+  }
+});
+
+test("client.json is strict, private and a full loopback origin", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "kapelle-client-config-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const file = join(dir, "kapelle", "client.json");
+  await mkdir(dirname(file), { recursive: true, mode: 0o700 });
+  await writeFile(file, "{}", { mode: 0o600 });
+
+  assert.equal(await readClientDaemon(file), undefined);
+  await writeFile(
+    file,
+    JSON.stringify({
+      daemonAddress: "http://127.0.0.1:4719",
+      accessKey: "key",
+    }),
+    { mode: 0o600 },
+  );
+  assert.deepEqual(await readClientDaemon(file), {
+    port: 4719,
+    token: "key",
+  });
+
+  const bad: [unknown, RegExp][] = [
+    [{ daemonAddress: "http://127.0.0.1:4719" }, /must be set together/],
+    [{ accessKey: "key" }, /must be set together/],
+    [
+      {
+        daemonAddress: "http://127.0.0.1:4719",
+        accessKey: "key",
+        extra: true,
+      },
+      /unknown key "extra"/,
+    ],
+    [
+      {
+        daemonAddress: "https://127.0.0.1:4719",
+        accessKey: "key",
+      },
+      /must be exactly/,
+    ],
+    [
+      { daemonAddress: "http://localhost:4719", accessKey: "key" },
+      /must be exactly/,
+    ],
+    [
+      { daemonAddress: "http://127.0.0.1:0", accessKey: "key" },
+      /must be exactly/,
+    ],
+    [
+      { daemonAddress: "http://127.0.0.1:4719/path", accessKey: "key" },
+      /must be exactly/,
+    ],
+    [
+      {
+        daemonAddress: "http://SECRET@127.0.0.1:4719",
+        accessKey: "key",
+      },
+      /must be exactly/,
+    ],
+    [{ daemonAddress: "http://127.0.0.1:4719", accessKey: "" }, /accessKey/],
+  ];
+  for (const [body, expected] of bad) {
+    await writeFile(file, JSON.stringify(body), { mode: 0o600 });
+    await assert.rejects(readClientDaemon(file), (err) => {
+      assert.ok(err instanceof Error);
+      assert.match(err.message, expected);
+      assert.doesNotMatch(err.message, /SECRET/);
+      return true;
+    });
+  }
+
+  await writeFile(file, "not json", { mode: 0o600 });
+  await assert.rejects(readClientDaemon(file), /not valid JSON/);
+  await writeFile(
+    file,
+    JSON.stringify({
+      daemonAddress: "http://127.0.0.1:4719",
+      accessKey: "key",
+    }),
+  );
+  await chmod(file, 0o644);
+  await assert.rejects(readClientDaemon(file), /mode 0600/);
+});
+
+test("an unreachable daemon error names its origin, never the access key", async () => {
+  const server = createServer();
+  await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
+  const { port } = server.address() as AddressInfo;
+  await new Promise<void>((ok, fail) =>
+    server.close((err) => (err ? fail(err) : ok())),
+  );
+  await assert.rejects(checkVersion({ port, token: "SECRET-TOKEN" }), (err) => {
+    assert.ok(err instanceof Error);
+    assert.ok(
+      err.message.includes(
+        `the daemon at http://127.0.0.1:${port} did not answer`,
+      ),
+    );
+    assert.doesNotMatch(err.message, /SECRET-TOKEN/);
+    return true;
+  });
+});
+
 test("the same version passes silently, with the token sent", async (t) => {
   const d = await fake(t, version(API_VERSION.major, API_VERSION.minor));
   assert.equal(await checkVersion(d), undefined);
@@ -82,10 +209,9 @@ test("request keeps the caller's headers in every form fetch takes", async (t) =
 test("a different minor is a warning that names both versions", async (t) => {
   const d = await fake(t, version(API_VERSION.major, API_VERSION.minor + 1));
   const warning = await checkVersion(d);
-  assert.match(
-    warning ?? "",
-    new RegExp(
-      `speaks API ${API_VERSION.major}\\.${API_VERSION.minor + 1} and this client ${API_VERSION.major}\\.${API_VERSION.minor}`,
+  assert.ok(
+    (warning ?? "").includes(
+      `speaks API ${API_VERSION.major}.${API_VERSION.minor + 1} and this client ${API_VERSION.major}.${API_VERSION.minor}`,
     ),
   );
 });
