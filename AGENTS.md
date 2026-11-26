@@ -251,10 +251,11 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
   and it ships in the package. It is not a test fixture, so add no scenario to it.
 - `hostile-agent.mjs` has one attack per `--scenario` and no default. Each attack must
   end its turn normally, so a test proves "refused, and the run continues".
-- `tests/cli.test.ts` and the daemon suites (`tests/daemon*.test.ts`,
-  `tests/attach.test.ts`, `tests/chat-*.test.ts`) drive the real entry points as
-  subprocesses. They are split by subject so they run at the same time (#340): put a
-  new test in the file whose header names its subject. Each daemon under test gets its
+- `tests/cli.test.ts`, `tests/cli-flags.test.ts` and the daemon suites
+  (`tests/daemon*.test.ts`, `tests/attach.test.ts`, `tests/chat-*.test.ts`) drive the
+  real entry points as subprocesses. They are split by subject so they run at the same
+  time (#340): put a new test in the file whose header names its subject. Each daemon
+  under test gets its
   own temp `XDG_RUNTIME_DIR` and `XDG_STATE_HOME`. Share the helpers in
   `integration/helpers.ts`; do not copy them.
 - `integration/*.itest.ts` drives the real harnesses. `node --test` does not discover the

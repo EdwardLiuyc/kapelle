@@ -26,6 +26,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import {
+  access,
   mkdir,
   mkdtemp,
   readFile,
@@ -35,7 +36,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { afterEach, beforeEach, type TestContext } from "node:test";
 import { promisify } from "node:util";
 
@@ -65,6 +66,14 @@ export const REPO = join(import.meta.dirname, "..");
 export function needs(bin: string): false | string {
   const found = spawnSync("sh", ["-c", `command -v ${bin}`]).status === 0;
   return found ? false : `${bin} is not installed`;
+}
+
+/** The path is absent: assert a spawn or command left no marker behind. */
+export async function assertAbsent(
+  path: string,
+  message: string,
+): Promise<void> {
+  await assert.rejects(access(path), { code: "ENOENT" }, message);
 }
 
 /** A throwaway workspace the harness may write into. Removed with the test. */
@@ -323,9 +332,12 @@ export function spawnCli(
   script = "cli.ts",
   /** Merged over this process's environment, never replacing it. */
   env?: Record<string, string>,
+  /** Child cwd. Defaults to the repository root. */
+  cwd = REPO,
 ) {
-  const child = spawn(process.execPath, [script, ...args], {
-    cwd: REPO,
+  const entry = isAbsolute(script) ? script : join(REPO, script);
+  const child = spawn(process.execPath, [entry, ...args], {
+    cwd,
     env: childEnv(env),
   });
 

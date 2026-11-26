@@ -17,7 +17,8 @@
  *
  * `chat` subverbs are delegated to `chat.ts`; this file pins the handoff, not
  * that parser. `bare kapelle` has no flags by definition, so it is covered in
- * the handoff section only.
+ * the handoff section only. Some cases overlap `tests/cli.test.ts` on purpose:
+ * this file is the M12-10b characterisation baseline.
  *
  * Current hand-parser quirks pinned here, and the cases M12-10b may change:
  * the first repeated value flag wins, a missing value is reported by `flag()`,
@@ -29,11 +30,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { stateDirFor } from "../core/runtime.ts";
 import {
+  assertAbsent,
   type CliResult,
   childEnv,
   gitRepo,
@@ -66,6 +68,8 @@ type Expectation = {
   stdout?: string | RegExp;
   stderr?: string | RegExp;
 };
+
+type Expected = Omit<Expectation, "args">;
 
 type Fixture = {
   root: string;
@@ -121,10 +125,6 @@ async function fixture(t: TestContext): Promise<Fixture> {
   };
 }
 
-async function absent(path: string, message: string): Promise<void> {
-  await assert.rejects(access(path), { code: "ENOENT" }, message);
-}
-
 /** Run one case and prove it started neither a harness nor a daemon. */
 async function invoke(
   t: TestContext,
@@ -132,16 +132,20 @@ async function invoke(
   args: string[],
 ): Promise<CliResult> {
   const marker = join(f.markers, randomUUID());
-  const result = await spawnCli(t, args, "cli.ts", {
-    ...f.env,
-    PI_MARKER: marker,
-  }).done;
-  await absent(marker, "the harness started");
-  await absent(f.daemonRecord, "a daemon record was written");
+  const result = await spawnCli(
+    t,
+    args,
+    "cli.ts",
+    { ...f.env, PI_MARKER: marker },
+    f.root,
+  ).done;
+  await assertAbsent(marker, "the harness started");
+  await assertAbsent(f.daemonRecord, "a daemon record was written");
   return result;
 }
 
-function check(name: string, result: CliResult, expected: Expectation): void {
+function check(result: CliResult, expected: Expected): void {
+  const { name } = expected;
   const stdout = result.stdout.trim();
   const stderr = result.stderr.trim();
   assert.equal(result.code, expected.code, `${name}: ${result.stderr}`);
@@ -169,7 +173,7 @@ async function runCases(
   await Promise.all(
     cases.map((c) =>
       t.test(c.name, async (st) => {
-        check(c.name, await invoke(st, f, c.args), c);
+        check(await invoke(st, f, c.args), c);
       }),
     ),
   );
@@ -201,7 +205,7 @@ test("a flag before the verb still selects the verb", {
     },
     {
       name: "demo",
-      args: ["--quiet", "demo", "--bogus"],
+      args: ["--quiet", "demo", "extra"],
       code: 1,
       stderr: DEMO_USAGE,
     },
@@ -495,7 +499,7 @@ test("a repeated value flag records today's outcome", {
     },
     {
       name: "demo",
-      args: ["demo", "--quiet", "--quiet", "--bogus"],
+      args: ["demo", "--quiet", "--quiet", "extra"],
       code: 1,
       stderr: DEMO_USAGE,
     },
@@ -837,7 +841,7 @@ test("`--` records today's outcome", {
       name: "workspace",
       args: ["workspace", "--", "extra"],
       code: 0,
-      stdout: stateDirFor(REPO),
+      stdout: stateDirFor(f.root),
     },
     {
       name: "workspace move",
@@ -985,7 +989,7 @@ test("an unknown flag records today's policy", {
       name: "workspace",
       args: ["workspace", "--bogus"],
       code: 0,
-      stdout: stateDirFor(REPO),
+      stdout: stateDirFor(f.root),
     },
     {
       name: "workspace move",
@@ -1327,10 +1331,10 @@ test("room send on a TTY refuses a name with no text", {
     "script",
     [
       "-qfec",
-      `${JSON.stringify(process.execPath)} cli.ts room send ann`,
+      `${JSON.stringify(process.execPath)} ${JSON.stringify(join(REPO, "cli.ts"))} room send ann`,
       "/dev/null",
     ],
-    { cwd: REPO, env: childEnv({ ...f.env, PI_MARKER: marker }) },
+    { cwd: f.root, env: childEnv({ ...f.env, PI_MARKER: marker }) },
   );
   let stdout = "";
   let stderr = "";
@@ -1345,15 +1349,13 @@ test("room send on a TTY refuses a name with no text", {
     child.once("error", reject);
     child.once("close", resolve);
   });
-  await absent(marker, "the harness started");
-  await absent(f.daemonRecord, "a daemon record was written");
+  await assertAbsent(marker, "the harness started");
+  await assertAbsent(f.daemonRecord, "a daemon record was written");
   const name = "room send on a TTY";
   check(
-    name,
     { code, stdout, stderr },
     {
       name,
-      args: [],
       code: 1,
       stdout: /room send needs the text: after the name, or piped on stdin/,
     },
