@@ -48,9 +48,10 @@
  * update}`, with `seq` from 1 in each chat. A chat has one agent, so the line
  * needs no participant id.
  *
- * **A room's log is reopened after a restart** (M6-7a, #151):
- * `reopenEventLog` restores saved offsets or scans the old file, cuts a
- * partial last line, and goes on appending with `seq` carried on.
+ * **A room's or a chat's log is reopened after a restart** (M6-7a, #151;
+ * chats M11-12): `reopenEventLog` restores saved offsets or scans the old
+ * file, cuts a partial last line, and goes on appending with `seq` carried
+ * on.
  */
 
 import { createWriteStream, existsSync, rmSync } from "node:fs";
@@ -715,8 +716,9 @@ async function indexOf(path: string): Promise<Index> {
 }
 
 /**
- * A room's log after a restart (M6-7a): the lines on disk stay, and new ones
- * are appended with the next `seq`. Its sidecar avoids a full scan when valid.
+ * A room's or a chat's log after a restart (M6-7a; chats M11-12): the lines
+ * on disk stay, and new ones are appended with the next `seq`. Its sidecar
+ * avoids a full scan when valid.
  * A partial last line, which a `kill -9`
  * mid-write leaves, is cut first: an append after it would join the two into
  * one bad line. A log that is not there starts empty.

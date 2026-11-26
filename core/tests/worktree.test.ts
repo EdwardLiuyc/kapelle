@@ -495,6 +495,28 @@ test("a task that changed nothing rolls back worktree and branch", async (t) => 
   assert.equal(await hasBranch(root, "plan"), false);
 });
 
+test("a crash between checkout and branch removal finishes only an untouched branch", async (t) => {
+  const root = await repo(t);
+  const { worktrees } = await openWorktrees(root, RUN_ID);
+  assert.ok(worktrees);
+  const clean = await worktrees.acquire("clean");
+  const worked = await worktrees.acquire("worked");
+  await writeFile(join(worked, "made.txt"), "work\n");
+  await git(worked, "add", "made.txt");
+  await git(worked, "commit", "-m", "work");
+
+  // `release` removes the checkout before its branch. These are the two
+  // records a crash in that gap leaves: one branch at its base, one ahead.
+  await git(root, "worktree", "remove", "--force", clean);
+  await git(root, "worktree", "remove", "--force", worked);
+
+  assert.equal(await worktrees.release("clean", "keep"), null);
+  assert.equal(await hasBranch(root, "clean"), false);
+  const warning = await worktrees.release("worked", "keep");
+  assert.match(String(warning), /past its base/);
+  assert.equal(await hasBranch(root, "worked"), true, "committed work stays");
+});
+
 for (const status of ["done", "warned"] as const) {
   test(`a ${status} task with an empty diff leaves the branch at its base`, async (t) => {
     const root = await repo(t);

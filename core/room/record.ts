@@ -20,7 +20,7 @@
  * is the supported way to remove it.
  */
 
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { type ClientMode, resolveAgent } from "../../protocol/registry.ts";
@@ -269,21 +269,14 @@ function rememberTombstone(
   return true;
 }
 
-/** Hold a saved participant's checkout with no harness, so a release can
- *  remove it as a member's: a room's tombstone, or a chat whose remove a
- *  crash cut short. */
+/** Hold a saved participant's checkout, or the branch a crash left after
+ *  removing its checkout, so a release can finish it as a member's: a room's
+ *  tombstone, or a chat whose remove a crash cut short. */
 export function adoptCheckout(
   worktrees: Worktrees | null,
   saved: ParticipantRecord,
 ): void {
-  if (
-    !worktrees ||
-    !saved.branch ||
-    !saved.baseSha ||
-    !existsSync(saved.worktree)
-  ) {
-    return;
-  }
+  if (!worktrees || !saved.branch || !saved.baseSha) return;
   worktrees.adopt(saved.id, {
     branch: saved.branch,
     baseSha: saved.baseSha,

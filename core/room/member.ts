@@ -59,6 +59,7 @@ import {
   type Answer,
   type Participant,
   type ParticipantRecord,
+  type ParticipantStatus,
   type RoomNotice,
   RoomRefusal,
 } from "./types.ts";
@@ -197,6 +198,10 @@ export interface Owner {
   stderrLog: (participantId: string) => string | undefined;
   /** True once the owner stops for good: no revive, no send. */
   stopped: () => boolean;
+  /** What `status()` reports while the owner is stopped. A room dismisses a
+   *  participant; a chat keeps a participant status and archives its
+   *  lifecycle instead. */
+  stoppedStatus?: ParticipantStatus;
   watchdog: Watchdog;
   limits: WatchdogLimits;
   /** Gets what each real session said (M9-4, `core/check.ts`). */
@@ -248,6 +253,7 @@ function makeMember(
     notices: () => [...owner.notices(), ...own],
     stderrLog: () => owner.stderrLog(id),
     stopped: owner.stopped,
+    ...(owner.stoppedStatus && { stoppedStatus: owner.stoppedStatus }),
     watchdog: owner.watchdog,
     limits: owner.limits,
     ...(saved && { saved }),

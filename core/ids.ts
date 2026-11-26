@@ -82,8 +82,8 @@ export const HALL_ID = "hall";
 
 /** A participant id: `p-` and 8 base36 characters. Opaque, so a rename
  *  never moves it (R10), and a legal task id, so M6-6a can name the
- *  participant's branch `kapelle/<roomId>/<participantId>` with
- *  `branchName`. Unique within one room is all it needs to be. */
+ *  participant's branch `kapelle/<ownerId>/<participantId>` with
+ *  `branchName`. Unique within one room or chat is all it needs to be. */
 export function newParticipantId(): string {
   const suffix = Math.floor(Math.random() * 36 ** 8)
     .toString(36)
@@ -140,8 +140,8 @@ export function assertTaskId(id: string): string {
  *  and a run whose directory and branches disagree reads as two tools. */
 const BRANCH_PREFIX = "kapelle";
 
-/** The folder of refs every branch of one run or room hangs under, with
- *  its trailing `/`. A room delete lists its branches by it (#235). */
+/** The folder of refs every branch of one run, room or chat hangs under,
+ *  with its trailing `/`. A room delete lists its branches by it (#235). */
 export function branchPrefix(ownerId: string): string {
   return `${BRANCH_PREFIX}/${assertOwnerId(ownerId)}/`;
 }

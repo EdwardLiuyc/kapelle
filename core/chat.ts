@@ -392,6 +392,9 @@ async function buildChat(
     onNotice,
     stderrLog: (pid) => (eventLog ? nextStderr(pid) : undefined),
     stopped: () => removing !== undefined,
+    // A chat's lifecycle says it was archived. Its participant keeps one of
+    // the chat statuses rather than reading a room's `dismissed`.
+    stoppedStatus: "idle",
     watchdog: watch.watchdog,
     limits: watch.limits,
     ...(noteSession && { noteSession }),

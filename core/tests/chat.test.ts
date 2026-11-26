@@ -108,22 +108,39 @@ test("a chat keeps its memory across two turns and a restart, on its own log (M1
     assert.equal(line.chatId, chat.id);
   }
 
-  const back = await restoreChat({ ...deps(), id: chat.id });
+  const restoredBus = createEventBus();
+  const restored: string[] = [];
+  restoredBus.addListener(({ update }) => {
+    restored.push(update.sessionUpdate);
+  });
+  const back = await restoreChat({
+    bus: restoredBus,
+    permissions: createPermissionQueue(60_000),
+    id: chat.id,
+  });
   t.after(() => back.pause());
   const q = back.participant;
   assert.equal(q.status(), "paused", "no harness started");
+  assert.ok(
+    !restored.includes("_client_harness_spawned"),
+    "restore started no harness",
+  );
   assert.equal(q.worktree, p.worktree, "the same checkout");
   await q.send("three");
   assert.equal(q.resumed, "loaded", "the revive loaded the session");
   assert.equal(q.sessionId, p.sessionId);
   await back.pause();
   assert.equal(answers(dir).at(-1), "previous: two", "it remembers");
-  assert.equal(logOf(dir).at(0)?.seq, 1);
-  assert.equal(
-    new Set(logOf(dir).map((l) => l.seq)).size,
-    logOf(dir).length,
-    "the restored log carries seq on",
+  const after = logOf(dir);
+  assert.deepEqual(
+    after.map((l) => l.seq),
+    after.map((_, i) => i + 1),
+    "the restored log carries seq on without a gap",
   );
+  for (const line of after) {
+    assert.deepEqual(Object.keys(line), ["seq", "at", "chatId", "update"]);
+    assert.equal(line.chatId, chat.id);
+  }
 });
 
 test("a chat's mode, model and level change, and chat.json keeps them (M11-12)", async (t) => {
@@ -151,6 +168,15 @@ test("a chat's mode, model and level change, and chat.json keeps them (M11-12)",
     { model: "mock/smart" },
     { thoughtLevel: "max" },
   ]);
+
+  const back = await restoreChat({ ...deps(), id: chat.id });
+  t.after(() => back.pause());
+  const q = back.participant;
+  assert.equal(q.mode, "safe", "the mode survives the restart");
+  await q.send("again");
+  assert.equal(q.model, "mock/smart", "the revive asks for the model");
+  assert.equal(q.thoughtLevel, "max", "and the level");
+  await back.pause();
 });
 
 test("a remove releases the checkout and moves the folder to the archive (M11-12)", async (t) => {
@@ -158,13 +184,23 @@ test("a remove releases the checkout and moves the folder to the archive (M11-12
   const chat = await chatIn(t, repo);
   const p = chat.participant;
   await p.send("one");
-  assert.deepEqual(await chat.remove(), [], "nothing was kept");
+  const removing = chat.remove();
+  const during = readJson(join(chatDir(chat.id), "chat.json"));
+  assert.equal(during.lifecycle, "removing");
+  assert.match(during.removedAt, /^\d{4}-\d\d-\d\dT/);
+  assert.deepEqual(await removing, [], "nothing was kept");
   assert.equal(chat.lifecycle(), "archived");
   assert.ok(!existsSync(chatDir(chat.id)), "the live folder is gone");
   const archived = archivedChatDir(chat.id);
   const record = readJson(join(archived, "chat.json"));
   assert.equal(record.lifecycle, "archived");
-  assert.match(record.removedAt, /^\d{4}-\d\d-\d\dT/);
+  assert.equal(record.removedAt, during.removedAt, "removedAt is kept");
+  assert.equal(
+    record.participant.status,
+    "idle",
+    "an archived chat keeps a chat status, not a room's dismissed",
+  );
+  assert.equal(p.status(), "idle");
   assert.equal(
     logOf(archived).at(-1)?.update.sessionUpdate,
     "_client_participant_removed",
@@ -174,6 +210,54 @@ test("a remove releases the checkout and moves the folder to the archive (M11-12
   assert.equal(await git(repo, "branch", "--list", branchOf(chat)), "");
   assert.throws(() => p.send("two"), { code: "room_dismissed" });
   assert.throws(() => chat.setMode("safe"), { code: "room_dismissed" });
+});
+
+test("a remove cancels the turn, drops its queue and denies its open question (M11-12)", async (t) => {
+  const repo = await gitRepo(t);
+  const bus = createEventBus();
+  const permissions = createPermissionQueue(60_000);
+  const updates: string[] = [];
+  bus.addListener(({ update }) => {
+    updates.push(update.sessionUpdate);
+  });
+  const agent = await loadingMock(t, "diff-first");
+  const chat = await openChat({
+    bus,
+    permissions,
+    agent: roomAgent({ agent, name: "solo", cwd: repo, mode: "ask" }),
+  });
+  t.after(() => chat.pause());
+
+  const live = chat.participant.send("live");
+  const waiting = chat.participant.send("waiting");
+  let pending: ReturnType<typeof permissions.list>[number] | undefined;
+  for (const until = Date.now() + 10_000; Date.now() < until; ) {
+    pending = permissions.list()[0];
+    if (pending) break;
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+  assert.ok(pending, "the ask turn queued a question");
+  assert.equal(chat.participant.queued, 1);
+
+  await chat.remove();
+  await Promise.all([live, waiting]);
+
+  assert.deepEqual(permissions.list(), [], "the open question was denied");
+  assert.deepEqual(permissions.get(pending.id), {
+    ...pending,
+    allow: false,
+    reason: "cancel",
+  });
+  assert.ok(
+    updates.includes("_client_queue_cleared"),
+    "the waiting message was dropped and announced",
+  );
+  assert.equal(chat.participant.status(), "idle");
+  assert.equal(
+    logOf(archivedChatDir(chat.id)).at(-1)?.update.sessionUpdate,
+    "_client_participant_removed",
+    "the remove's last line survives the close and move",
+  );
 });
 
 test("a remove keeps a checkout with work in it, and a notice names it (M11-12)", async (t) => {
@@ -201,7 +285,11 @@ async function crashedBeforeMove(t: TestContext, repo: string) {
   const file = join(chatDir(chat.id), "chat.json");
   writeFileSync(
     file,
-    JSON.stringify({ ...readJson(file), lifecycle: "removing" }),
+    JSON.stringify({
+      ...readJson(file),
+      lifecycle: "removing",
+      removedAt: new Date().toISOString(),
+    }),
   );
   return chat;
 }
@@ -209,6 +297,7 @@ async function crashedBeforeMove(t: TestContext, repo: string) {
 test("a boot finishes a remove a crash cut short before the move (M11-12)", async (t) => {
   const repo = await gitRepo(t);
   const chat = await crashedBeforeMove(t, repo);
+  const removing = readJson(join(chatDir(chat.id), "chat.json"));
   await assert.rejects(restoreChat({ ...deps(), id: chat.id }), /removing/);
   assert.deepEqual(await finishChatRemove(chat.id), []);
   assert.ok(!existsSync(chat.participant.worktree), "the checkout is released");
@@ -216,6 +305,24 @@ test("a boot finishes a remove a crash cut short before the move (M11-12)", asyn
   assert.ok(!existsSync(chatDir(chat.id)));
   const record = readJson(join(archivedChatDir(chat.id), "chat.json"));
   assert.equal(record.lifecycle, "archived");
+  assert.equal(record.removedAt, removing.removedAt);
+});
+
+test("a boot finish removes a branch whose checkout a crash already removed (M11-12)", async (t) => {
+  const repo = await gitRepo(t);
+  const chat = await crashedBeforeMove(t, repo);
+  const branch = branchOf(chat);
+  // `release` removes the checkout before its branch. A crash in that gap
+  // leaves exactly this record and branch, with no checkout.
+  await git(repo, "worktree", "remove", "--force", chat.participant.worktree);
+  assert.equal(await git(repo, "branch", "--list", branch), branch);
+
+  await finishChatRemove(chat.id);
+  assert.equal(
+    await git(repo, "branch", "--list", branch),
+    "",
+    "finishing the remove leaves no branch behind",
+  );
 });
 
 test("a crash before the move keeps and names a checkout with work (M11-12)", async (t) => {
@@ -234,12 +341,12 @@ test("a boot finishes a remove a crash cut short after the move (M11-12)", async
   const chat = await chatIn(t, repo);
   await chat.remove();
   const file = join(archivedChatDir(chat.id), "chat.json");
-  writeFileSync(
-    file,
-    JSON.stringify({ ...readJson(file), lifecycle: "removing" }),
-  );
+  const removing = readJson(file);
+  writeFileSync(file, JSON.stringify({ ...removing, lifecycle: "removing" }));
   assert.deepEqual(await finishChatRemove(chat.id), []);
-  assert.equal(readJson(file).lifecycle, "archived");
+  const archived = readJson(file);
+  assert.equal(archived.lifecycle, "archived");
+  assert.equal(archived.removedAt, removing.removedAt);
   await assert.rejects(finishChatRemove(chat.id), /archived, not removing/);
 });
 
