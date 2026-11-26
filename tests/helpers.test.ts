@@ -2,7 +2,7 @@
  * Shared subprocess cleanup (#428): graceful exits flush V8 coverage, and a
  * stuck process still meets the bounded SIGKILL fallback. Also the wait
  * helpers' budgets (#442): a spent budget still checks once. `roomLog` ignores
- * a partial last line (#572), and `countedGit`'s log (#322) keeps every new
+ * an unterminated last line (#572), and `countedGit`'s log (#322) keeps every new
  * call after a snapshot.
  */
 
@@ -165,7 +165,7 @@ test("until checks once even when its budget is already spent (#442)", async () 
   assert.equal(checks, 2);
 });
 
-test("roomLog ignores a partial last line (#572)", async (t) => {
+test("roomLog ignores an unterminated last line (#572)", async (t) => {
   const root = await tempDir(t);
   const state = stateDirFor(root);
   const id = "room-partial";
@@ -182,13 +182,20 @@ test("roomLog ignores a partial last line (#572)", async (t) => {
     update: { sessionUpdate: "_client_user_message", text: "one" },
   };
   const second = { ...first, seq: 2, update: { ...first.update, text: "two" } };
+  const firstLine = JSON.stringify(first);
   const secondLine = JSON.stringify(second);
-  await writeFile(file, `${JSON.stringify(first)}\n${secondLine.slice(0, -1)}`);
+  await writeFile(file, firstLine);
+  assert.deepEqual(
+    await roomLog(root, id),
+    [],
+    "a JSON object is not an event until its newline is on disk",
+  );
 
+  await writeFile(file, `\n${secondLine.slice(0, -1)}`, { flag: "a" });
   assert.deepEqual(
     await roomLog(root, id),
     [first],
-    "the partial second line is not an event",
+    "the complete first line is an event, and the partial second line is not",
   );
 
   await writeFile(file, `${secondLine.slice(-1)}\n`, { flag: "a" });
