@@ -79,88 +79,118 @@ export const codeOf = (e: Ended) =>
 /** How long a screen waits for a daemon that went away (M6-7d). */
 const WAIT_MS = 30_000;
 
+type Pending = { address: DaemonAddress; done: Promise<void> };
+type Refused = { address: DaemonAddress; refused: VersionRefused };
+
+const sameAddress = (a: DaemonAddress, b: DaemonAddress) =>
+  a.port === b.port && a.token === b.token && a.fromClient === b.fromClient;
+
+/** The shared address check and retry state behind one screen's `d`. */
+class DaemonSync {
+  private readonly d: DaemonAddress;
+  private readonly address: ReadAddress;
+  private readonly onNew: (warning?: string) => void;
+  private latest: DaemonAddress;
+  private revision = 0;
+  private checking: Pending | Refused | undefined;
+
+  constructor(
+    d: DaemonAddress,
+    address: ReadAddress,
+    onNew: (warning?: string) => void,
+  ) {
+    this.d = d;
+    this.address = address;
+    this.onNew = onNew;
+    this.latest = { ...d };
+  }
+
+  async run(): Promise<DaemonAddress> {
+    for (;;) {
+      const fresh = await this.address();
+      this.observe(fresh);
+      const refused = this.refusal(fresh);
+      if (refused) throw refused;
+      // A check for an address nobody names any more cannot apply. Its own
+      // caller still awaits it; this call can move on without that wait.
+      if (this.checking && !sameAddress(fresh, this.checking.address)) {
+        this.checking = undefined;
+      }
+      const pending = this.checking;
+      if (pending && "done" in pending) {
+        await this.settle(pending);
+        continue;
+      }
+      if (sameAddress(fresh, this.d)) return this.d;
+      await this.settle(this.start(fresh));
+    }
+  }
+
+  private observe(fresh: DaemonAddress): void {
+    if (sameAddress(fresh, this.latest)) return;
+    this.latest = { ...fresh };
+    this.revision++;
+  }
+
+  private refusal(fresh: DaemonAddress): VersionRefused | undefined {
+    if (!this.checking || !("refused" in this.checking)) return undefined;
+    if (sameAddress(fresh, this.checking.address)) return this.checking.refused;
+    this.checking = undefined;
+    return undefined;
+  }
+
+  private async settle(pending: Pending): Promise<void> {
+    try {
+      await pending.done;
+    } catch (err) {
+      if (this.checking === pending) this.checking = undefined;
+      if (!sameAddress(await this.address(), pending.address)) return;
+      throw err;
+    }
+    if (this.checking === pending) this.checking = undefined;
+  }
+
+  private start(fresh: DaemonAddress): Pending {
+    const checked = this.revision;
+    const pending: Pending = {
+      address: fresh,
+      done: (async () => {
+        try {
+          const warning = await checkVersion(fresh);
+          if (checked !== this.revision) return;
+          Object.assign(this.d, fresh);
+          this.onNew(warning);
+        } catch (err) {
+          // Keep a fatal refusal for this address, so every later call fails
+          // without another request. A different address can still replace it.
+          if (err instanceof VersionRefused && checked === this.revision) {
+            this.checking = { address: fresh, refused: err };
+          }
+          throw err;
+        }
+      })(),
+    };
+    this.checking = pending;
+    return pending;
+  }
+}
+
 /**
  * `address`, over `d`: the one address object a screen passes to every call.
  * A new address in the client daemon setting or `daemon.json` is checked with
  * `GET /version` once, then `d` takes it in place and `onNew` runs with the
  * `minor` warning, if any. A later address read supersedes an older check, so
  * two edits cannot leave `d` on whichever check finished last. A different
- * `major` throws `VersionRefused` to this call and every later one for that
- * address.
+ * `major` throws `VersionRefused` for that configured address; a later change
+ * clears the stored refusal and checks the new address.
  */
-// The revision and retry loop are one state machine: a stale check must not win.
-// pi-lens-ignore: high-complexity
 export function followDaemon(
   d: DaemonAddress,
   address: ReadAddress,
   onNew: (warning?: string) => void,
 ): ReadAddress {
-  type Pending = { address: DaemonAddress; done: Promise<void> };
-  type Refused = { address: DaemonAddress; refused: VersionRefused };
-  const same = (a: DaemonAddress, b: DaemonAddress) =>
-    a.port === b.port && a.token === b.token;
-  /** The last address a caller read, and how many changes it has seen. */
-  let latest: DaemonAddress = { ...d };
-  let revision = 0;
-  let checking: Pending | Refused | undefined;
-  // This loop owns the shared check, refusal and retry state.
-  // pi-lens-ignore: high-complexity
-  return async () => {
-    for (;;) {
-      const fresh = await address();
-      if (!same(fresh, latest)) {
-        latest = { ...fresh };
-        revision++;
-      }
-      if (checking && "refused" in checking) {
-        if (same(fresh, checking.address)) throw checking.refused;
-        checking = undefined;
-      }
-      // A check for an address nobody names any more cannot apply. Its own
-      // caller still awaits it; this call can move on without that wait.
-      if (checking && !same(fresh, checking.address)) checking = undefined;
-      if (checking) {
-        const pending = checking;
-        try {
-          await pending.done;
-        } catch (err) {
-          if (checking === pending) checking = undefined;
-          if (!same(await address(), pending.address)) continue;
-          throw err;
-        }
-        if (checking === pending) checking = undefined;
-        continue;
-      }
-      if (same(fresh, d)) return d;
-      const checked = revision;
-      let pending!: Pending;
-      const done = (async () => {
-        try {
-          const warning = await checkVersion(fresh);
-          if (checked !== revision) return;
-          Object.assign(d, fresh);
-          onNew(warning);
-        } catch (err) {
-          // Keep a fatal refusal for this address, so every later call fails
-          // without another request. A different address can still replace it.
-          if (err instanceof VersionRefused && checked === revision) {
-            checking = { address: fresh, refused: err };
-          }
-          throw err;
-        }
-      })();
-      pending = { address: fresh, done };
-      checking = pending;
-      try {
-        await done;
-      } catch (err) {
-        if (checking === pending) checking = undefined;
-        if (!same(await address(), fresh)) continue;
-        throw err;
-      }
-      if (checking === pending) checking = undefined;
-    }
-  };
+  const checks = new DaemonSync(d, address, onNew);
+  return () => checks.run();
 }
 
 /**

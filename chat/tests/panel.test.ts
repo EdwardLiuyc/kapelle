@@ -220,6 +220,7 @@ async function fakeDaemon(
   const d: DaemonAddress = {
     port: (server.address() as AddressInfo).port,
     token: "test",
+    fromClient: false,
   };
   return {
     d,
@@ -449,7 +450,11 @@ const followed = (id: string, title: string, names: string[]): Followed => {
   }
   return { entry: { id, title }, state } as unknown as Followed;
 };
-const NO_DAEMON_YET: DaemonAddress = { port: 0, token: "test" };
+const NO_DAEMON_YET: DaemonAddress = {
+  port: 0,
+  token: "test",
+  fromClient: false,
+};
 const twoRooms = () =>
   new Map([
     ["r1", followed("r1", "app", ["ann", "bob"])],

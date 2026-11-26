@@ -34,7 +34,9 @@
  * as `kapelle chat new` does.
  *
  * **`kapelle demo`** (#463) is a room with the offline `demo-agent.mjs`, for
- * a person with no agent yet. `runDemoCommand` says where it works and why.
+ * a person with no agent yet. It is local-only: a configured remote client
+ * refuses it rather than sending its local folder and agent path over HTTP
+ * (M11-4). `runDemoCommand` says where it works and why.
  */
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
@@ -256,7 +258,7 @@ kapelle — a minimal Agent Client Protocol client
                                      if none runs; a pipe prints chat usage and exits 1
   kapelle --version                  print the version
   kapelle demo                       try the chat with an offline demo agent:
-                                     no agent to install, no account
+                                     no agent to install, no account; local only
   kapelle "<prompt>" [options]
   kapelle run --file <run.json> [--cwd dir] [--verbose] [--quiet]
   kapelle run --file <run.json> --detach   hands the run to the daemon;
@@ -1136,6 +1138,7 @@ async function attachRun(): Promise<number> {
   // that daemon and ends the stream.
   let checkedPort = first.port;
   let checkedToken = first.token;
+  let checkedFromClient = first.fromClient;
   // Both connection files are read again on every call: a daemon that
   // restarts while this is attached has a new token, and maybe a new port
   // (M5-6). A configured client daemon wins over `daemon.json`.
@@ -1166,11 +1169,16 @@ async function attachRun(): Promise<number> {
     const d = await freshDaemon();
     if (d === "missing") return undefined;
     if (d === "unready") throw new Error("the daemon is starting");
-    if (d.port !== checkedPort || d.token !== checkedToken) {
+    if (
+      d.port !== checkedPort ||
+      d.token !== checkedToken ||
+      d.fromClient !== checkedFromClient
+    ) {
       const warning = await checkVersion(d, signal);
       if (warning) console.error(`! ${warning}`);
       checkedPort = d.port;
       checkedToken = d.token;
+      checkedFromClient = d.fromClient;
     }
     return request(d, `${path}/events`, {
       signal,
@@ -1615,6 +1623,19 @@ async function runDemoCommand(): Promise<number> {
   const command = argv.filter((a) => a !== "--quiet" && a !== "--verbose");
   if (command.length !== 1 || command[0] !== "demo") {
     console.error("usage: kapelle demo");
+    return 1;
+  }
+  try {
+    if (await readClientDaemon(clientFile())) {
+      console.error(
+        "error: kapelle demo is local: its folder and demo-agent.mjs are on " +
+          `this machine, but ${clientFile()} names a daemon elsewhere. ` +
+          "Run kapelle demo on the daemon machine, or remove the client setting.",
+      );
+      return 1;
+    }
+  } catch (err) {
+    console.error(`error: ${messageOf(err)}`);
     return 1;
   }
   const agent = join(import.meta.dirname, "demo-agent.mjs");

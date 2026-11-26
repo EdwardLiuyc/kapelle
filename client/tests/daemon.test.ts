@@ -54,7 +54,12 @@ async function fake(
   });
   await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
   t.after(() => server.close());
-  return { port: (server.address() as AddressInfo).port, token: "tok", seen };
+  return {
+    port: (server.address() as AddressInfo).port,
+    token: "tok",
+    fromClient: false,
+    seen,
+  };
 }
 
 const json = (res: ServerResponse, status: number, body: unknown) =>
@@ -96,7 +101,11 @@ test("client.json is strict, private and a full loopback origin", async (t) => {
     await writeFile(file, JSON.stringify({ daemonAddress, accessKey: "key" }), {
       mode: 0o600,
     });
-    assert.deepEqual(await readClientDaemon(file), { port, token: "key" });
+    assert.deepEqual(await readClientDaemon(file), {
+      port,
+      token: "key",
+      fromClient: true,
+    });
   }
 
   const bad: [unknown, RegExp][] = [
@@ -185,6 +194,8 @@ test("client.json is strict, private and a full loopback origin", async (t) => {
       accessKey: "key",
     }),
   );
+  await chmod(file, 0o400);
+  await assert.rejects(readClientDaemon(file), /mode 0600/);
   await chmod(file, 0o644);
   await assert.rejects(readClientDaemon(file), /mode 0600/);
 });
@@ -214,25 +225,30 @@ test("an unreachable daemon error names its origin, never the access key", async
   await new Promise<void>((ok, fail) =>
     server.close((err) => (err ? fail(err) : ok())),
   );
-  await assert.rejects(checkVersion({ port, token: "SECRET-TOKEN" }), (err) => {
-    assert.ok(err instanceof Error);
-    assert.ok(
-      err.message.includes(
-        `the daemon at http://127.0.0.1:${port} did not answer`,
-      ),
-    );
-    assert.doesNotMatch(err.message, /SECRET-TOKEN/);
-    return true;
-  });
+  await assert.rejects(
+    checkVersion({ port, token: "SECRET-TOKEN", fromClient: false }),
+    (err) => {
+      assert.ok(err instanceof Error);
+      assert.ok(
+        err.message.includes(
+          `the daemon at http://127.0.0.1:${port} did not answer`,
+        ),
+      );
+      assert.doesNotMatch(err.message, /SECRET-TOKEN/);
+      assert.ok(err.cause instanceof Error);
+      return true;
+    },
+  );
 });
 
 test("an invalid access key is refused by version check without echoing it", async () => {
   await assert.rejects(
-    checkVersion({ port: 1, token: "SECRET\nTOKEN" }),
+    checkVersion({ port: 1, token: "SECRET\nTOKEN", fromClient: false }),
     (err) => {
       assert.ok(err instanceof Error);
       assert.match(err.message, /access key is not a valid bearer token/);
       assert.doesNotMatch(err.message, /SECRET/);
+      assert.doesNotMatch(err.message, /did not answer/);
       return true;
     },
   );
@@ -428,7 +444,11 @@ test("daemon.json: missing, unready or an address", async (t) => {
     assert.equal(await readDaemonFile(file), "unready", text);
   }
   await writeFile(file, '{"port":1,"token":"x","pid":2}');
-  assert.deepEqual(await readDaemonFile(file), { port: 1, token: "x" });
+  assert.deepEqual(await readDaemonFile(file), {
+    port: 1,
+    token: "x",
+    fromClient: false,
+  });
 });
 
 test("client/ loads nothing under core/ or protocol/ at runtime", async () => {

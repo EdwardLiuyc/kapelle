@@ -77,8 +77,8 @@ refuses the daemon start (one line, exit 1), before the instance claim.
 
 Client-local connection settings only. The daemon never reads this file; on a
 remote client there need not be a daemon or `config.json` on that machine.
-The file must be a plain file owned by you with mode `0600`, because it holds
-a credential.
+The file must be a plain file owned by you with mode exactly `0600`, because it
+holds a credential. A stricter `0400` is refused too, as decided at pickup (#478).
 
 ```json
 {
@@ -99,11 +99,18 @@ falls back to `daemon.json`. A present setting wins over `daemon.json`: the
 client never starts a daemon and never reads the runtime file. If the
 configured daemon does not answer, the error names the address it tried.
 
+`kapelle daemon stop` only reads the local `daemon.json`; it never stops a
+daemon named by this file. When a configured daemon refuses its API version,
+the message says to stop it on the machine that runs it. `kapelle demo` is
+refused because its folder and `demo-agent.mjs` are local; run it on the
+daemon machine instead.
+
 With a client setting active, a non-detached `kapelle run --file` is refused
 with a message that points to `--detach`; running it locally would put the
-harness on the wrong machine. `--detach` is the supported remote run path,
-but until M11-5 its `--cwd` must name an existing repository folder on the
-daemon machine.
+harness on the wrong machine. A one-shot `kapelle "<prompt>"` still runs
+locally by design: only `run --file` has a daemon-backed `--detach` path.
+`--detach` is the supported remote run path, but until M11-5 its `--cwd` must
+name an existing repository folder on the daemon machine.
 
 | Case | Result |
 | --- | --- |
@@ -111,7 +118,7 @@ daemon machine.
 | valid pair | use the configured origin and bearer key |
 | only one key | refused: both must be set together |
 | unknown key | refused, naming the known keys |
-| not a plain `0600` file owned by you | refused |
+| not a plain file owned by you, or mode other than `0600` (including `0400`) | refused |
 | bad address or invalid key | refused; the key is not echoed |
 
 ## Project file — `<repo>/.kapelle/config.json`

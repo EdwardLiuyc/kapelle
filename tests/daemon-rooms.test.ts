@@ -1531,6 +1531,7 @@ test("a fast-forward refuses a busy or dirty target and a diverged one, with cod
 const addressOf = (d: Daemon) => ({
   port: Number(new URL(d.url).port),
   token: d.token,
+  fromClient: false,
 });
 
 /** Parses a typed line and sends it; the line must be a route command. */

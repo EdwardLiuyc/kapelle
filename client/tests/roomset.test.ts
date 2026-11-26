@@ -53,7 +53,7 @@ async function fake(t: TestContext, token = "tok") {
   /** Version checks whose answer waits for `releaseVersion`. */
   const heldVersions: (() => void)[] = [];
   const daemon = {
-    d: { port: 0, token } as DaemonAddress,
+    d: { port: 0, token, fromClient: false } as DaemonAddress,
     /** What `GET /version` answers. */
     version: { ...API_VERSION } as { major: number; minor: number },
     /** When set, a `GET /version` answer waits for `releaseVersion`. */
@@ -986,7 +986,7 @@ test("a new token whose version check fails is checked again", async (t) => {
   await until(() => old.streams.has("r1"));
   old.stop();
   // `daemon.json` names the new token before its daemon answers.
-  file.now = { port: old.d.port, token: "tok2" };
+  file.now = { port: old.d.port, token: "tok2", fromClient: false };
   await new Promise((r) => setTimeout(r, WAIT_MS / 3));
   const next = await fake(t, "tok2");
   next.status.set("r1", "paused");

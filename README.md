@@ -80,7 +80,7 @@ Try the chat before you install an agent:
 kapelle demo
 ```
 
-It opens a room with an offline demo agent. It needs no account, no tokens and no network. The agent answers, asks one permission question, and writes a file you can see with `@demo /diff`. The room works in its own folder, never in your checkout. Each `kapelle demo` deletes the last demo room and starts again.
+It opens a room with an offline demo agent. It needs no account, no tokens and no network. The agent answers, asks one permission question, and writes a file you can see with `@demo /diff`. The room works in its own folder, never in your checkout. Each `kapelle demo` deletes the last demo room and starts again. It is local-only: with a remote `client.json` setting it refuses, so run it on the daemon machine.
 
 For developers: in a source checkout, check that kapelle works with no agent and no account. This uses a test agent that ships with the repository, not with the package:
 
@@ -194,8 +194,9 @@ kapelle attach <runId> --task <taskId>   # watch one task in full
 kapelle rings the bell and sends a desktop notification when a run needs you.
 
 When [`client.json`](docs/CONFIG.md#client-file--xdg_config_homekapelleclientjson)
-names a daemon on another machine, run files must use `--detach`; until M11-5,
-`--cwd` must name an existing repository folder on that daemon's machine.
+reaches a daemon on another machine through an SSH tunnel at a local
+`127.0.0.1` port, run files must use `--detach`; until M11-5, `--cwd` must name
+an existing repository folder on that daemon's machine.
 
 ### Take the results
 

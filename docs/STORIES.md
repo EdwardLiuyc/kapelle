@@ -4615,6 +4615,11 @@ XDG rule, as `client/loop.ts` does, with a test that the two agree. A configured
 refuses a non-detached `run --file` and points to `--detach`. The address is exactly
 `http://127.0.0.1:<port>` until D6's host setting, and the key is never put in a URL or
 log.
+**Amended after outside review 2026-11-26 (#478):** C1 keeps the exact `0600` client-file
+mode, so `0400` is refused. C2 refuses `kapelle demo` while a client setting is active,
+because its folder and `demo-agent.mjs` are local. A one-shot `kapelle "<prompt>"` stays
+local; D2 guards only `run --file`, which has `--detach`. A remote version refusal says
+to stop the daemon on its own machine, never to run local `kapelle daemon stop`.
 *Done when* tests cover the setting used over `daemon.json`, no daemon started, and the
 message when nothing answers; and `docs/CONFIG.md` names the setting, its file, and who
 reads it.

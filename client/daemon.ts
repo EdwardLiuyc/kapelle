@@ -31,10 +31,12 @@ import { isAbsolute, join } from "node:path";
 import { API_VERSION, type ErrorReply, type VersionReply } from "./contract.ts";
 import { StreamClosed } from "./stream.ts";
 
-/** Where the daemon listens, and the token it wants. */
+/** Where the daemon listens, the token it wants, and which file named it. */
 export interface DaemonAddress {
   port: number;
   token: string;
+  /** True when `client.json` supplied this address, not `daemon.json`. */
+  fromClient: boolean;
 }
 
 /** The client connection file: `$XDG_CONFIG_HOME/kapelle/client.json`. */
@@ -83,7 +85,7 @@ function configuredAddress(
         `-._~+/ and optional = padding).`,
     );
   }
-  return { port, token: key };
+  return { port, token: key, fromClient: true };
 }
 
 /**
@@ -211,7 +213,7 @@ export async function readDaemonRecord(
     typeof token === "string" &&
     token !== ""
   ) {
-    record.address = { port, token };
+    record.address = { port, token, fromClient: false };
   }
   return record;
 }
@@ -242,6 +244,8 @@ export async function resolveDaemonAddress(
   return configured ?? (await readDaemonFile(daemonFile()));
 }
 
+class InvalidAccessKey extends Error {}
+
 /** One request, with the token on it. A body is JSON: the daemon refuses any
  *  other type with a 415 (M5-3). `init.headers` may take any form `fetch`
  *  takes: an object, a `Headers` or a list of pairs. */
@@ -251,7 +255,9 @@ export function request(
   init?: RequestInit,
 ): Promise<Response> {
   if (!isBearerToken(d.token)) {
-    throw new Error("the daemon access key is not a valid bearer token");
+    throw new InvalidAccessKey(
+      "the daemon access key is not a valid bearer token",
+    );
   }
   const headers = new Headers(init?.headers);
   headers.set("authorization", `Bearer ${d.token}`);
@@ -320,31 +326,38 @@ export async function checkVersion(
 ): Promise<string | undefined> {
   const ours = `${API_VERSION.major}.${API_VERSION.minor}`;
   const tried = `http://127.0.0.1:${d.port}`;
+  const stopHint = d.fromClient
+    ? "stop that daemon on the machine that runs it"
+    : "stop it with: kapelle daemon stop";
   let r: Reply<Partial<VersionReply>>;
   try {
     r = await call<Partial<VersionReply>>(d, "/version", { signal });
   } catch (err) {
+    if (err instanceof InvalidAccessKey) throw err;
     if (err instanceof UnreadableReply) {
       throw new VersionRefused(
         `the daemon at ${tried} has no readable API version ` +
           `(GET /version answered HTTP ${err.status} with a non-JSON body); ` +
-          `this client speaks ${ours}; stop it with: kapelle daemon stop`,
+          `this client speaks ${ours}; ${stopHint}`,
       );
     }
-    throw new Error(`the daemon at ${tried} did not answer: ${messageOf(err)}`);
+    throw new Error(
+      `the daemon at ${tried} did not answer: ${messageOf(err)}`,
+      {
+        cause: err,
+      },
+    );
   }
   if (!r.ok) {
     // A 404 is a daemon older than M5-1, which has no `/version` route.
     // Every other status is the daemon's own refusal, normalized by `call`.
     if (r.status === 404) {
       throw new VersionRefused(
-        `the daemon has no API version (this client speaks ${ours}); ` +
-          "stop it with: kapelle daemon stop",
+        `the daemon has no API version (this client speaks ${ours}); ${stopHint}`,
       );
     }
     throw new VersionRefused(
-      `the daemon refused GET /version: ${r.error.message}; ` +
-        "stop it with: kapelle daemon stop",
+      `the daemon refused GET /version: ${r.error.message}; ${stopHint}`,
     );
   }
   const theirs = r.body?.apiVersion;
@@ -354,15 +367,13 @@ export async function checkVersion(
     !Number.isInteger(theirs.minor)
   ) {
     throw new VersionRefused(
-      `the daemon has no readable API version (this client speaks ${ours}); ` +
-        "stop it with: kapelle daemon stop",
+      `the daemon has no readable API version (this client speaks ${ours}); ${stopHint}`,
     );
   }
   const both = `the daemon speaks API ${theirs.major}.${theirs.minor} and this client ${ours}`;
   if (theirs.major !== API_VERSION.major) {
     throw new VersionRefused(
-      `${both}; update the client or the daemon, then stop it with: ` +
-        "kapelle daemon stop",
+      `${both}; update the client or the daemon, then ${stopHint}`,
     );
   }
   if (theirs.minor !== API_VERSION.minor) {
