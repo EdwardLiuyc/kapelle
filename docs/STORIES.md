@@ -4916,12 +4916,15 @@ new files.
 `buildRoom` (about 845 lines) and `createParticipant` (about 970) share state through
 closures, so a change to the turn queue can break a revive or a save with nothing in
 sight. The shared state gets names, in small types with one job each, not one big state
-object. Then `core/room/turns.ts` takes the queue, the busy refusal and the turn cap, and
+object. Then `core/room/turns.ts` takes the queue and the busy refusal, and
 `core/room/participant.ts` takes the spawn, the revive with `session/load`, the mode sent
 again, the model and the level. `Room` stays the one public interface. Checkout work
 still calls `core/worktree.ts`. `AGENTS.md`'s `core/room/` row names the two new files,
 and its rules that say "see the top of `core/room.ts`" point to the file that now holds
 each rule.
+**Decided at pickup 2026-11-26 (#541):** the turn cap stays in `core/room.ts`. It is
+already the room's, in the room's `send`, and only a room's orchestrator has one, so it
+never moves to `turns.ts`.
 *Done when* the suite passes unchanged, including the multi-turn and revive tests
 against `mock-agent.mjs`; each rule in today's header of `core/room.ts` sits in exactly
 one header; and `AGENTS.md`'s table and rules point to the right files.
@@ -4932,8 +4935,6 @@ free of the room. Today they still take room things:
 
 - `createParticipant` takes `roomId`, `onAnswer` (the reply to a sender, which looks up
   the orchestrator), the room's `notices`, `dismissed` and the room's one watchdog.
-- The turn cap sits beside the queue in `core/room/turns.ts`, but only a room's
-  orchestrator has a cap.
 - Adding and removing a participant stay in `buildRoom`: opening its place
   (`roomPlaces`), the start, the rollback of a failed add, the release of its checkout,
   and `recordOf`.
@@ -4942,10 +4943,10 @@ free of the room. Today they still take room things:
 
 The parts take an owner instead: an owner id, a hook for a turn's end, the owner's
 notices and its stop flag, and a watchdog of their own or a shared one. The queue and
-the busy refusal stay with the agent; the turn cap goes back to the room. Adding,
-removing and saving one participant move out of `buildRoom`. One participant's record
-gets its own check in `core/room/record.ts`. None of the new files imports
-`core/room.ts`. `Room` works as today.
+the busy refusal stay with the agent. The turn cap stays in the room (decided
+2026-11-26, #541). Adding, removing and saving one participant move out of `buildRoom`.
+One participant's record gets its own check in `core/room/record.ts`. None of the new
+files imports `core/room.ts`. `Room` works as today.
 *Done when* a test runs one participant with no `Room`, against `mock-agent.mjs`: two
 turns, a pause, a revive with `session/load`, and a remove that releases its checkout;
 the import test shows the new files import nothing from `core/room.ts`; and the rest of

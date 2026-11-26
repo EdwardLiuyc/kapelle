@@ -164,7 +164,7 @@ and the person's shell (`chat/tui/term.ts`).
 | `core/harnesses.ts` | Which agents are installed, in `harnesses.json` (M9-3), and their npm install (M9-3b). |
 | `core/check.ts` | The login check and the saved models, in `checks.json` (M9-4). |
 | `core/room.ts` | A chat room: a roster of participants, each one harness kept alive across turns. |
-| `core/room/` | The room's shared types, constants and `RoomRefusal` (`types.ts`); request validation (`validate.ts`); and the `room.json` record and tombstones (`record.ts`). |
+| `core/room/` | The room's shared types, constants and `RoomRefusal` (`types.ts`); request validation (`validate.ts`); the `room.json` record and tombstones (`record.ts`); one participant's queue (`turns.ts`); and one participant's harness, revive, mode, model and level (`participant.ts`). |
 | `core/ids.ts`, `core/markdown.ts` | Ids and branch names; the only file that knows `marked`. |
 | `core/text.ts` | A harness's text made safe for a terminal (#229). |
 | `render.ts` | Terminal drawing of `session/update` events. |
@@ -221,8 +221,8 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
 - **Never fall back to `options[0]` when `pickOption` finds no match**, on any permission
   request. See the top of `protocol/agent.ts`.
 - **Never send `modeMap.auto`, and send the mode again after a `session/load`.** See
-  `harnessModeId` in `core/policy.ts`, and the top of `core/room.ts` for when a room
-  sends it.
+  `harnessModeId` in `core/policy.ts`, and the top of `core/room/participant.ts` for when
+  a room sends it.
 - **`--quiet` never hides the containment notice** or the "not negotiated" line (#13).
 - **Never take a status from `stopReason`.** See the top of `core/run.ts`.
 - **Never add up `usage` across tasks or harnesses.** See the top of `core/run.ts`.
