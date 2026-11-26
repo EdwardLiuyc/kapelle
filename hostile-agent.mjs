@@ -46,6 +46,7 @@ const SCENARIOS = {
   "deny-diff-paths":
     "asks with a diff for shown.md and rawInput.path other.md, is refused, then writes both",
   "malformed-json": "puts a non-JSON line on stdout, then carries on",
+  "non-object-json": "puts JSON null on stdout, then carries on",
   oversized: "puts a line past the client's length cap on stdout",
   "unknown-method": "calls a client method that does not exist",
   "null-session":
@@ -451,6 +452,11 @@ const ATTACKS = {
 
   "malformed-json": async (sid) => {
     process.stdout.write("{ this is not json at all\n");
+    say(sid, `\nATTACK=${scenario} OUTCOME=sent DETAIL=one-way\n`);
+  },
+
+  "non-object-json": async (sid) => {
+    process.stdout.write("null\n");
     say(sid, `\nATTACK=${scenario} OUTCOME=sent DETAIL=one-way\n`);
   },
 
