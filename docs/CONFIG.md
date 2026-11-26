@@ -274,7 +274,7 @@ Notes:
 - `daemon/routes/repos.ts` — `postRepo`, `GET /config`, `PATCH /config`,
   `PUT /config`.
 - `daemon/routes/runs.ts` — `postRun`.
-- `cli.ts` — `findDaemon`, the D2 `run --file` refusal, `runFromFile`, and
+- `cli.ts` — `findDaemon`, the M11-4 `run --file` refusal, `runFromFile`, and
   the project-config defaults for `--file`.
 - `chat/common.ts` — the screen's `client.json`-first address read.
 - `core/runfile.ts` — `RunDefaults` and the task > run > config > built-in chain.

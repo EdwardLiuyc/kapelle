@@ -18,8 +18,9 @@
  *
  * `checkVersion` is B5: a different `major` is refused, a different `minor`
  * is a warning. It returns the warning rather than print it; printing is the
- * caller's. A client checks once per daemon — per token, since a restart
- * brings a new one — and a restart is exactly when a new version arrives.
+ * caller's. A client checks once per address: a restart brings a new token,
+ * and a client setting can move the port under the same token. A restart is
+ * exactly when a new version arrives.
  * A refusal names `kapelle daemon stop` (M9-2): the daemon a new client
  * cannot use has to go, and that is the command that does it.
  */
@@ -90,6 +91,8 @@ function configuredAddress(
  * Everything else is strict: keys, types, mode and address shape are checked
  * here so a typo cannot silently fall back to a local daemon.
  */
+// The ordered guards are one decode boundary: no value is used before it checks.
+// pi-lens-ignore: high-complexity
 export async function readClientDaemon(
   file: string,
 ): Promise<DaemonAddress | undefined> {
@@ -120,8 +123,10 @@ export async function readClientDaemon(
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
-  } catch (err) {
-    throw new Error(`${file} is not valid JSON: ${messageOf(err)}`);
+  } catch {
+    // Do not include the parser's message: Node quotes the nearby text, and a
+    // malformed accessKey would then reach stderr.
+    throw new Error(`${file} is not valid JSON.`);
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error(`${file} must be a JSON object.`);

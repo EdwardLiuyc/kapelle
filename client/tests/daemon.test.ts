@@ -14,6 +14,7 @@ import {
   mkdtemp,
   readdir,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import {
@@ -166,8 +167,17 @@ test("client.json is strict, private and a full loopback origin", async (t) => {
     });
   }
 
-  await writeFile(file, "not json", { mode: 0o600 });
-  await assert.rejects(readClientDaemon(file), /not valid JSON/);
+  await writeFile(
+    file,
+    '{"daemonAddress":"http://127.0.0.1:4719","accessKey": SECRET-TOKEN}',
+    { mode: 0o600 },
+  );
+  await assert.rejects(readClientDaemon(file), (err) => {
+    assert.ok(err instanceof Error);
+    assert.match(err.message, /not valid JSON/);
+    assert.doesNotMatch(err.message, /SECRET/);
+    return true;
+  });
   await writeFile(
     file,
     JSON.stringify({
@@ -177,6 +187,24 @@ test("client.json is strict, private and a full loopback origin", async (t) => {
   );
   await chmod(file, 0o644);
   await assert.rejects(readClientDaemon(file), /mode 0600/);
+});
+
+test("client.json refuses a symlink even when its target is private", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "kapelle-client-symlink-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const target = join(dir, "real.json");
+  const file = join(dir, "client.json");
+  await writeFile(
+    target,
+    JSON.stringify({
+      daemonAddress: "http://127.0.0.1:4719",
+      accessKey: "key",
+    }),
+    { mode: 0o600 },
+  );
+  await symlink(target, file);
+
+  await assert.rejects(readClientDaemon(file), /plain file owned by you/);
 });
 
 test("an unreachable daemon error names its origin, never the access key", async () => {

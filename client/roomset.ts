@@ -83,38 +83,83 @@ const WAIT_MS = 30_000;
  * `address`, over `d`: the one address object a screen passes to every call.
  * A new address in the client daemon setting or `daemon.json` is checked with
  * `GET /version` once, then `d` takes it in place and `onNew` runs with the
- * `minor` warning, if any. A different `major` throws `VersionRefused` to this
- * call and every later one.
+ * `minor` warning, if any. A later address read supersedes an older check, so
+ * two edits cannot leave `d` on whichever check finished last. A different
+ * `major` throws `VersionRefused` to this call and every later one for that
+ * address.
  */
+// The revision and retry loop are one state machine: a stale check must not win.
+// pi-lens-ignore: high-complexity
 export function followDaemon(
   d: DaemonAddress,
   address: ReadAddress,
   onNew: (warning?: string) => void,
 ): ReadAddress {
-  let checking: { address: DaemonAddress; done: Promise<void> } | undefined;
+  type Pending = { address: DaemonAddress; done: Promise<void> };
+  type Refused = { address: DaemonAddress; refused: VersionRefused };
+  const same = (a: DaemonAddress, b: DaemonAddress) =>
+    a.port === b.port && a.token === b.token;
+  /** The last address a caller read, and how many changes it has seen. */
+  let latest: DaemonAddress = { ...d };
+  let revision = 0;
+  let checking: Pending | Refused | undefined;
+  // This loop owns the shared check, refusal and retry state.
+  // pi-lens-ignore: high-complexity
   return async () => {
-    const fresh = await address();
-    if (fresh.port === d.port && fresh.token === d.token) return d;
-    if (
-      !checking ||
-      checking.address.port !== fresh.port ||
-      checking.address.token !== fresh.token
-    ) {
-      const done = (async () => {
-        const warning = await checkVersion(fresh);
-        Object.assign(d, fresh);
-        onNew(warning);
-      })();
-      checking = { address: fresh, done };
-      // A daemon that did not answer is asked again on the next call.
-      done.catch((err) => {
-        if (!(err instanceof VersionRefused) && checking?.done === done) {
-          checking = undefined;
+    for (;;) {
+      const fresh = await address();
+      if (!same(fresh, latest)) {
+        latest = { ...fresh };
+        revision++;
+      }
+      if (checking && "refused" in checking) {
+        if (same(fresh, checking.address)) throw checking.refused;
+        checking = undefined;
+      }
+      // A check for an address nobody names any more cannot apply. Its own
+      // caller still awaits it; this call can move on without that wait.
+      if (checking && !same(fresh, checking.address)) checking = undefined;
+      if (checking) {
+        const pending = checking;
+        try {
+          await pending.done;
+        } catch (err) {
+          if (checking === pending) checking = undefined;
+          if (!same(await address(), pending.address)) continue;
+          throw err;
         }
-      });
+        if (checking === pending) checking = undefined;
+        continue;
+      }
+      if (same(fresh, d)) return d;
+      const checked = revision;
+      let pending!: Pending;
+      const done = (async () => {
+        try {
+          const warning = await checkVersion(fresh);
+          if (checked !== revision) return;
+          Object.assign(d, fresh);
+          onNew(warning);
+        } catch (err) {
+          // Keep a fatal refusal for this address, so every later call fails
+          // without another request. A different address can still replace it.
+          if (err instanceof VersionRefused && checked === revision) {
+            checking = { address: fresh, refused: err };
+          }
+          throw err;
+        }
+      })();
+      pending = { address: fresh, done };
+      checking = pending;
+      try {
+        await done;
+      } catch (err) {
+        if (checking === pending) checking = undefined;
+        if (!same(await address(), fresh)) continue;
+        throw err;
+      }
+      if (checking === pending) checking = undefined;
     }
-    await checking.done;
-    return d;
   };
 }
 

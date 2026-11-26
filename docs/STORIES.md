@@ -4607,16 +4607,14 @@ not answer, the client says so, with the address it tried. Until M11-8, the key 
 setting is `daemon.json`'s token, copied by hand. The daemon still refuses a `Host` that
 is not loopback (`403` `host_not_allowed`), so the address must reach it as
 `127.0.0.1`, as D6's tunnel does, until D6's later host setting.
-**Gap:** which file holds the setting, and how `client/` reads it. `docs/CONFIG.md`
-says the user config file holds daemon-wide knobs only, and that the CLI in its own
-process does not read it. `client/` cannot import `core/config.ts`, so it copies the
-XDG rule, as `client/loop.ts` does, with a test that the two agree.
 **Decided at pickup 2026-11-26 (#478):** the setting is the client-local
 `$XDG_CONFIG_HOME/kapelle/client.json`, mode `0600`, with `daemonAddress` and
 `accessKey`. It is read only by the client and wins over `daemon.json`; the daemon file
-is never needed or started. A configured client refuses a non-detached `run --file`
-and points to `--detach`. The address is exactly `http://127.0.0.1:<port>` until D6's
-host setting, and the key is never put in a URL or log.
+is never needed or started. `client/` cannot import `core/config.ts`, so it copies the
+XDG rule, as `client/loop.ts` does, with a test that the two agree. A configured client
+refuses a non-detached `run --file` and points to `--detach`. The address is exactly
+`http://127.0.0.1:<port>` until D6's host setting, and the key is never put in a URL or
+log.
 *Done when* tests cover the setting used over `daemon.json`, no daemon started, and the
 message when nothing answers; and `docs/CONFIG.md` names the setting, its file, and who
 reads it.
