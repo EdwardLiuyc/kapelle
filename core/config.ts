@@ -48,7 +48,7 @@ import {
 import { homedir, userInfo } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { SECRET_PREFIX } from "../protocol/registry.ts";
-import { DEFAULT_ORCHESTRATOR_TURN_CAP } from "./room.ts";
+import { DEFAULT_ORCHESTRATOR_TURN_CAP } from "./room/types.ts";
 import { DEFAULT_MAX_CONCURRENCY, type RunDefaults } from "./runfile.ts";
 import { WATCHDOG_DEFAULTS } from "./watchdog.ts";
 import { STATE_DIR, validateWorktreeLinks } from "./worktree.ts";

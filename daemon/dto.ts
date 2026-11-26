@@ -30,7 +30,12 @@ import type {
   PendingDecision as CorePendingDecision,
   SettledDecision as CoreSettledDecision,
 } from "../core/permissions.ts";
-import type { Participant, Room, RoomMeta, RoomRecord } from "../core/room.ts";
+import type {
+  Participant,
+  Room,
+  RoomMeta,
+  RoomRecord,
+} from "../core/room/types.ts";
 import type { RunReport, TaskRun } from "../core/run.ts";
 
 const USAGE_SEMANTICS = new Set(["per-turn", "cumulative", "unknown"]);

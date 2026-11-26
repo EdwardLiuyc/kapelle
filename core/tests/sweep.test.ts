@@ -22,12 +22,8 @@ import {
 } from "../../integration/helpers.ts";
 import { DEFAULT_RETENTION_MS } from "../config.ts";
 import { newRoomId } from "../ids.ts";
-import {
-  type RoomRecord,
-  readRoomRecord,
-  roomFile,
-  writeRoomRecord,
-} from "../room.ts";
+import { readRoomRecord, roomFile, writeRoomRecord } from "../room/record.ts";
+import type { RoomRecord } from "../room/types.ts";
 import { stateDirFor } from "../runtime.ts";
 import { processIdentity, roomWork, sweepBoot } from "../sweep.ts";
 import {

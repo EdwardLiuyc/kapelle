@@ -39,7 +39,9 @@ import {
 import { createEventBus } from "../core/events.ts";
 import { newRoomId } from "../core/ids.ts";
 import { createPermissionQueue } from "../core/permissions.ts";
-import { openRoom, type Participant, roomAgent } from "../core/room.ts";
+import type { Participant } from "../core/room/types.ts";
+import { roomAgent } from "../core/room/validate.ts";
+import { openRoom } from "../core/room.ts";
 import { stateDirFor } from "../core/runtime.ts";
 import { openWorktrees } from "../core/worktree.ts";
 import {

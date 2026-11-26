@@ -34,19 +34,19 @@ import {
 import { createEventBus } from "../../core/events.ts";
 import { HALL_ID, newRoomId } from "../../core/ids.ts";
 import type { createPermissionQueue } from "../../core/permissions.ts";
+import { readRoomRecord, roomFile } from "../../core/room/record.ts";
 import {
-  AGENT_FIELDS,
-  openRoom,
-  participantChanges,
   type Room,
   type RoomRecord,
   RoomRefusal,
-  readRoomRecord,
-  restoreRoom,
+} from "../../core/room/types.ts";
+import {
+  AGENT_FIELDS,
+  participantChanges,
   roomAgent,
   roomAgents,
-  roomFile,
-} from "../../core/room.ts";
+} from "../../core/room/validate.ts";
+import { openRoom, restoreRoom } from "../../core/room.ts";
 import { stateDir, stateDirFor } from "../../core/runtime.ts";
 import { removeRoom, roomDeletePreview, roomWork } from "../../core/sweep.ts";
 import { WATCHDOG_DEFAULTS, type WatchdogLimits } from "../../core/watchdog.ts";
