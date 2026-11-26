@@ -46,7 +46,7 @@ Legend: **✅ happy** · **⚠ warning** · **❌ bad**.
 | Config | Read by | Not read by |
 | --- | --- | --- |
 | User file | the daemon's start, however it is reached: `kapelle daemon start` or bare `kapelle` starting one (M9-2) | in-process CLI, merge, sweep |
-| Client file | `cli.ts` for daemon-facing HTTP calls and the bare-client auto-start decision; `chat.ts` and `chat/`; the non-detached `run --file` check reads it only to refuse | the daemon process, explicit `kapelle daemon start`/`stop`, `merge`, `workspace`, sweep |
+| Client file | `cli.ts` for daemon-facing HTTP calls and the bare-client auto-start decision; `chat.ts` and `chat/`; the non-detached `run --file` and `kapelle demo` checks read it only to refuse | the daemon process, explicit `kapelle daemon start`/`stop`, `merge`, `workspace`, sweep |
 | Project file | `POST /repos`, `POST /runs` (each request), `POST /rooms` and each room the daemon restores at start (its stall limits and turn cap), `kapelle run --file`, `sweepBoot` per repository, `GET /config`, `PATCH /config` and `PUT /config` | plain `kapelle "prompt"`, `merge` |
 | `KAPELLE_*` env | the daemon's start (including bare `kapelle`), every run-default and room-cap resolution, `kapelle run --file` | plain prompt, merge |
 
@@ -281,8 +281,8 @@ Notes:
 - `daemon/routes/repos.ts` — `postRepo`, `GET /config`, `PATCH /config`,
   `PUT /config`.
 - `daemon/routes/runs.ts` — `postRun`.
-- `cli.ts` — `findDaemon`, the M11-4 `run --file` refusal, `runFromFile`, and
-  the project-config defaults for `--file`.
+- `cli.ts` — `findDaemon`, the M11-4 `run --file` and `demo` refusals,
+  `runFromFile`, and the project-config defaults for `--file`.
 - `chat/common.ts` — the screen's `client.json`-first address read.
 - `core/runfile.ts` — `RunDefaults` and the task > run > config > built-in chain.
 - `core/sweep.ts` — the boot sweep and its use of the per-repository retention

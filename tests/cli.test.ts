@@ -784,8 +784,6 @@ test("a configured client refuses demo before starting or contacting a daemon", 
   const configHome = await tempDir(t);
   const remote = await fakeRemoteDaemon(t, (_path, res) => res.end("[]"));
   await writeClientDaemon(configHome, remote.origin);
-  // If startDaemon runs, runtimeDir() refuses this file before any spawn.
-  await writeFile(join(runtime, "kapelle"), "blocked", { mode: 0o600 });
 
   const r = await spawnCli(t, ["demo"], "cli.ts", {
     XDG_RUNTIME_DIR: runtime,
@@ -796,7 +794,6 @@ test("a configured client refuses demo before starting or contacting a daemon", 
   assert.match(r.stderr, /daemon machine/);
   assert.equal(remote.seen.length, 0, "demo must not contact a remote daemon");
   assert.doesNotMatch(r.stderr, /remote-key/);
-  assert.equal(await readFile(join(runtime, "kapelle"), "utf8"), "blocked");
 });
 
 test("a configured client names the unreachable daemon address", async (t) => {
@@ -810,6 +807,8 @@ test("a configured client names the unreachable daemon address", async (t) => {
   );
   const origin = `http://127.0.0.1:${port}`;
   await writeClientDaemon(configHome, origin);
+  // If findDaemon touches the runtime folder, runtimeDir() refuses this file.
+  await writeFile(join(runtime, "kapelle"), "blocked", { mode: 0o600 });
 
   const r = await spawnCli(t, ["ps"], "cli.ts", {
     XDG_RUNTIME_DIR: runtime,
@@ -819,7 +818,7 @@ test("a configured client names the unreachable daemon address", async (t) => {
   assert.match(r.stderr, /did not answer/);
   assert.ok(r.stderr.includes(origin), r.stderr);
   assert.doesNotMatch(r.stderr, /remote-key/);
-  await assert.rejects(readFile(join(runtime, "kapelle", "daemon.json")));
+  assert.equal(await readFile(join(runtime, "kapelle"), "utf8"), "blocked");
 });
 
 test("a daemon with a different API major is refused, one with a different minor warns", async (t) => {

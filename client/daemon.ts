@@ -21,8 +21,8 @@
  * caller's. A client checks once per address: a restart brings a new token,
  * and a client setting can move the port under the same token. A restart is
  * exactly when a new version arrives.
- * A refusal names `kapelle daemon stop` (M9-2): the daemon a new client
- * cannot use has to go, and that is the command that does it.
+ * A local refusal names `kapelle daemon stop` (M9-2). A configured remote
+ * daemon is stopped on the machine that runs it instead.
  */
 
 import { lstat, readFile } from "node:fs/promises";
@@ -256,7 +256,8 @@ export function request(
 ): Promise<Response> {
   if (!isBearerToken(d.token)) {
     throw new InvalidAccessKey(
-      "the daemon access key is not a valid bearer token",
+      `the daemon access key from ${d.fromClient ? "client.json" : "daemon.json"} ` +
+        `at http://127.0.0.1:${d.port} is not a valid bearer token`,
     );
   }
   const headers = new Headers(init?.headers);
@@ -318,7 +319,8 @@ export class VersionRefused extends StreamClosed {}
  * `VersionRefused` for a different `major`, an unreadable `apiVersion`, or a
  * non-404 refusal (with the daemon's own message), and answers a warning for
  * a different `minor`. A daemon it cannot reach throws with the address it
- * tried; the token is never part of that address or message.
+ * tried; an invalid bearer key throws its own error before a request. The
+ * token is never part of either message.
  */
 export async function checkVersion(
   d: DaemonAddress,

@@ -246,12 +246,57 @@ test("an invalid access key is refused by version check without echoing it", asy
     checkVersion({ port: 1, token: "SECRET\nTOKEN", fromClient: false }),
     (err) => {
       assert.ok(err instanceof Error);
-      assert.match(err.message, /access key is not a valid bearer token/);
+      assert.match(err.message, /access key from daemon\.json/);
+      assert.match(err.message, /http:\/\/127\.0\.0\.1:1/);
+      assert.match(err.message, /not a valid bearer token/);
       assert.doesNotMatch(err.message, /SECRET/);
       assert.doesNotMatch(err.message, /did not answer/);
       return true;
     },
   );
+});
+
+test("remote version refusals name the remote stop location on every path", async (t) => {
+  const cases: [string, (res: ServerResponse) => void][] = [
+    [
+      "unreadable reply",
+      (res) => res.writeHead(200, { "content-type": "text/plain" }).end("no"),
+    ],
+    [
+      "no version route",
+      (res) =>
+        json(res, 404, {
+          error: { code: "no_route", message: "no such route" },
+        }),
+    ],
+    [
+      "refused request",
+      (res) =>
+        json(res, 401, {
+          error: { code: "unauthorized", message: "wrong token" },
+        }),
+    ],
+    [
+      "unreadable api version",
+      (res) => json(res, 200, { apiVersion: { major: 1 } }),
+    ],
+    [
+      "major mismatch",
+      (res) =>
+        json(res, 200, {
+          apiVersion: { major: API_VERSION.major + 1, minor: 0 },
+        }),
+    ],
+  ];
+  for (const [name, reply] of cases) {
+    const d = await fake(t, reply);
+    await assert.rejects(checkVersion({ ...d, fromClient: true }), (err) => {
+      assert.ok(err instanceof Error, name);
+      assert.match(err.message, /machine that runs it/, name);
+      assert.doesNotMatch(err.message, /kapelle daemon stop/, name);
+      return true;
+    });
+  }
 });
 
 test("the same version passes silently, with the token sent", async (t) => {

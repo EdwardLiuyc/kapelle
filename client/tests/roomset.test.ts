@@ -818,6 +818,19 @@ for (const how of ["a crash", "a clean stop"]) {
   });
 }
 
+test("a source-file change with the same port and token is rechecked", async (t) => {
+  const server = await fake(t, "same-key");
+  const d = { ...server.d, fromClient: false };
+  const now = { ...server.d, fromClient: true };
+  await followDaemon(
+    d,
+    async () => now,
+    () => {},
+  )();
+  assert.equal(server.versionChecks, 1);
+  assert.equal(d.fromClient, true);
+});
+
 test("a client setting moves the screen to a new port under the same token", async (t) => {
   const old = await fake(t, "same-key");
   const { file, address } = daemonFile(old.d);
