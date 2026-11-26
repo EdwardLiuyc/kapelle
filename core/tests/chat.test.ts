@@ -168,9 +168,14 @@ test("chat.json's updatedAt moves on activity, not on a pause or a restore (M11-
   const tick = () => new Promise((ok) => setTimeout(ok, 5));
   await tick();
   await chat.participant.send("one");
-  await chat.pause();
+  // Read before the pause: stopping the harness logs its exit, which
+  // saves the record, and that save must not move the clock.
+  await tick();
   const active = readJson(file).updatedAt;
   assert.ok(active > opened.createdAt, "a turn moves updatedAt");
+  await chat.pause();
+  await tick();
+  assert.equal(readJson(file).updatedAt, active, "a pause is no activity");
 
   await tick();
   const back = await restoreChat({ ...deps(), id: chat.id });
@@ -230,6 +235,11 @@ test("a remove releases the checkout and moves the folder to the archive (M11-12
   const record = readJson(join(archived, "chat.json"));
   assert.equal(record.lifecycle, "archived");
   assert.equal(record.removedAt, during.removedAt, "removedAt is kept");
+  assert.equal(
+    record.updatedAt,
+    record.removedAt,
+    "the harness's exit during the remove does not move the clock",
+  );
   assert.equal(
     record.participant.status,
     "idle",
