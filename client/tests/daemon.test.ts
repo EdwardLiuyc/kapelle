@@ -325,13 +325,16 @@ test("request keeps the caller's headers in every form fetch takes", async (t) =
   assert.equal(d.seen.length, 3);
 });
 
-test("a different minor is a warning that names both versions", async (t) => {
+test("a different minor is a warning that names both versions and the address", async (t) => {
   const d = await fake(t, version(API_VERSION.major, API_VERSION.minor + 1));
   const warning = await checkVersion(d);
   assert.ok(
     (warning ?? "").includes(
       `speaks API ${API_VERSION.major}.${API_VERSION.minor + 1} and this client ${API_VERSION.major}.${API_VERSION.minor}`,
     ),
+  );
+  assert.ok(
+    (warning ?? "").includes(`the daemon at http://127.0.0.1:${d.port}`),
   );
 });
 
