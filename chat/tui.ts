@@ -273,9 +273,9 @@ export function screenLayout(p: {
   return { root, placeSide };
 }
 
-/** The last line for a daemon that is gone: a local daemon can be started
+/** The last line for a gone daemon end: a local daemon can be started
  *  here; a configured remote client must check its tunnel first. */
-function daemonStoppedLine(d: DaemonAddress): string {
+function daemonGoneLine(d: DaemonAddress): string {
   if (d.fromClient) {
     return (
       `! the daemon stopped: check the SSH tunnel on local port ${d.port} ` +
@@ -294,7 +294,7 @@ export function daemonGoneEnd(
 ): { code: number; lines: string[] } {
   return {
     code: 1,
-    lines: [message ? `! ${message}` : daemonStoppedLine(daemon)],
+    lines: [message ? `! ${message}` : daemonGoneLine(daemon)],
   };
 }
 
@@ -313,7 +313,7 @@ export function lostRoomEnd(
     return { code: codeOf(ended), lines: [`! ${err.message}`] };
   }
   if (hall && ended.kind === "gone") {
-    return { code: 1, lines: [daemonStoppedLine(daemon)] };
+    return { code: 1, lines: [daemonGoneLine(daemon)] };
   }
   const msg = err ? [`! ${(err as Error).message}`] : [];
   return {

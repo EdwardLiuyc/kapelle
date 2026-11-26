@@ -101,9 +101,11 @@ configured daemon does not answer, the error names the address it tried.
 
 `kapelle daemon stop` only reads the local `daemon.json`; it never stops a
 daemon named by this file. When a configured daemon refuses its API version,
-the message says to stop it on the machine that runs it. `kapelle demo` is
-refused because its folder and `demo-agent.mjs` are local; run it on the
-daemon machine instead.
+the message says to stop it on the machine that runs it. A chat that loses the
+daemon tells a configured client to check the SSH tunnel on its local port or
+the remote daemon, then reconnect with `kapelle chat`; a local client is told
+to start the daemon. `kapelle demo` is refused because its folder and
+`demo-agent.mjs` are local; run it on the daemon machine instead.
 
 With a client setting active, a non-detached `kapelle run --file` is refused
 with a message that points to `--detach`; running it locally would put the
