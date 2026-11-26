@@ -4996,8 +4996,9 @@ is refused with its name and the verb's usage. The refusals that are product rul
 such as `--agent` beside `--file`. `CHANGELOG.md` names the change. Moving verbs into a
 `cli/` folder is not part of this story. #394 clears old pi-lens warnings in the same
 file; take it with this story or just before it.
-*Done when* M12-10a's tests pass unchanged, except the unknown-flag cases, which now expect
-the refusal.
+*Done when* M12-10a's tests pass unchanged, except the unknown-flag, `--`,
+repeated value-flag and missing-value cases. Unknown flags now expect the refusal; the
+other three may change to `parseArgs`' behaviour.
 
 **M12-11 · A harness's title is cut before it is kept · S · needs nothing**
 D2. A tool call's title comes from the harness, and only the 32 MiB line limit bounds it.
