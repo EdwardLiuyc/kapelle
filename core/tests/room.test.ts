@@ -1891,6 +1891,31 @@ test("dismissing a room with only tombstones releases their clean checkouts (#31
   assert.equal(hasBranch(repo, saved.branch), false);
 });
 
+test("dismissing a room finishes a tombstone whose checkout a crash removed (M11-12)", async (t) => {
+  const { repo, room, file, roomId } = await pausable(t, "remember");
+  await room.pause();
+  const record = readRoomRecord(file);
+  const saved = record.participants[0];
+  assert.ok(saved?.branch);
+  saved.agent = "missing-harness";
+  delete saved.cmd;
+  // A release removes the checkout before its branch. A crash in that gap
+  // leaves the branch at its base with no checkout.
+  await git(repo, "worktree", "remove", "--force", saved.worktree);
+  assert.equal(hasBranch(repo, saved.branch), true);
+
+  const back = await restoreRoom({
+    record,
+    setup: await openWorktrees(repo, roomId),
+    bus: createEventBus(),
+    permissions: queue,
+    log: () => {},
+  });
+  t.after(() => back.dismiss());
+  await back.dismiss();
+  assert.equal(hasBranch(repo, saved.branch), false, "the branch is finished");
+});
+
 test("buildRoom closes its log and clears its watchdog after a failure (#312)", async (t) => {
   const { repo, room, file, roomId } = await pausable(t, "remember");
   await room.pause();

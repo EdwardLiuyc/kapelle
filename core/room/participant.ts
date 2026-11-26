@@ -135,6 +135,7 @@ import {
   type Answer,
   type Participant,
   type ParticipantRecord,
+  type ParticipantStatus,
   type RoomNotice,
   RoomRefusal,
 } from "./types.ts";
@@ -188,6 +189,11 @@ interface Lent {
   stderrLog: () => string | undefined;
   /** True once the owner stops for good: no revive, no send. */
   stopped: () => boolean;
+  /** What `status()` reports while `stopped()` is true. A room dismisses a
+   *  participant; a chat's lifecycle owns removal, so it stays `idle`. */
+  stoppedStatus?: ParticipantStatus;
+  /** What a send refused because the owner stopped says. */
+  stoppedMessage?: string;
   watchdog: Watchdog;
   limits: WatchdogLimits;
 }
@@ -264,6 +270,8 @@ export function createParticipant({
   notices,
   stderrLog,
   stopped: ownerStopped,
+  stoppedStatus = "dismissed",
+  stoppedMessage = "the room is dismissed",
   watchdog,
   limits,
   saved,
@@ -1058,7 +1066,7 @@ export function createParticipant({
       ];
     },
     status: () => {
-      if (ownerStopped()) return "dismissed";
+      if (ownerStopped()) return stoppedStatus;
       if (queue.busy()) return "busy";
       return stopped ?? "idle";
     },
@@ -1073,7 +1081,7 @@ export function createParticipant({
     },
     send(text, sender, kind) {
       if (ownerStopped()) {
-        throw new RoomRefusal("room_dismissed", "the room is dismissed");
+        throw new RoomRefusal("room_dismissed", stoppedMessage);
       }
       if (stopping) {
         throw new RoomRefusal("agent_exited", "the agent is stopping");

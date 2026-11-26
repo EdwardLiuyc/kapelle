@@ -1,11 +1,13 @@
 /**
- * Run, room, task and participant ids, and branch names — story M1a-8,
- * issue #16; rooms since M6-0 (#144) and M6-2 (#146).
+ * Run, room, chat, task and participant ids, and branch names — story M1a-8,
+ * issue #16; rooms since M6-0 (#144) and M6-2 (#146); chats since M11-12
+ * (#556).
  *
  * The strings the rest of the system agrees on: `runId` names a run and
  * `taskId` a task inside it; `roomId` names a room and a participant id one
- * participant inside it. The branch that carries the work is built from an
- * owner (run or room) and a unit (task or participant).
+ * participant inside it; `chatId` names a chat, whose one agent has a
+ * participant id too. The branch that carries the work is built from an
+ * owner (run, room or chat) and a unit (task or participant).
  * `<stateDirFor(root)>/wt/<ownerId>/<unitId>` is a filesystem path and
  * `kapelle/<ownerId>/<unitId>` is a git ref, so these ids have to be legal in
  * both places before anything is created.
@@ -57,6 +59,22 @@ export function newRoomId(now: Date = new Date()): string {
   return `room-${newRunId(now)}`;
 }
 
+/** A chat id is a run id behind a `chat-` prefix (M11-12), for the same
+ *  reasons as a room's. The stamp and four characters can repeat, so
+ *  `openChat` (`core/chat.ts`) refuses an id that is already a folder in
+ *  `<stateDir>/chats/` or `chats/archive/`: a new chat never takes an old
+ *  one's log, record or branches. */
+const CHAT_ID_PATTERN = /^chat-\d{8}-\d{6}-[0-9a-z]{4}$/;
+
+export function newChatId(now: Date = new Date()): string {
+  return `chat-${newRunId(now)}`;
+}
+
+/** True for a string `newChatId` could make. */
+export function isChatId(id: string): boolean {
+  return CHAT_ID_PATTERN.test(id);
+}
+
 /** The operator's hall (M11-1): the one room with a fixed id. It never
  *  matches `ROOM_ID_PATTERN`, so no new room can take it. Since M11-2 a hall
  *  agent in a repository has a worktree and a branch, `kapelle/hall/<id>`. */
@@ -64,8 +82,8 @@ export const HALL_ID = "hall";
 
 /** A participant id: `p-` and 8 base36 characters. Opaque, so a rename
  *  never moves it (R10), and a legal task id, so M6-6a can name the
- *  participant's branch `kapelle/<roomId>/<participantId>` with
- *  `branchName`. Unique within one room is all it needs to be. */
+ *  participant's branch `kapelle/<ownerId>/<participantId>` with
+ *  `branchName`. Unique within one room or chat is all it needs to be. */
 export function newParticipantId(): string {
   const suffix = Math.floor(Math.random() * 36 ** 8)
     .toString(36)
@@ -74,17 +92,23 @@ export function newParticipantId(): string {
 }
 
 /**
- * A run id **or** a room id — the two things that own a branch namespace and
- * a worktree directory. `core/worktree.ts` serves both, so it validates here
- * rather than against either vocabulary alone.
+ * A run, room or chat id — the things that own a branch namespace and a
+ * worktree directory. `core/worktree.ts` serves all three, so it validates
+ * here rather than against one vocabulary alone.
  */
 function assertOwnerId(id: string): string {
-  if (RUN_ID_PATTERN.test(id) || ROOM_ID_PATTERN.test(id) || id === HALL_ID) {
+  if (
+    RUN_ID_PATTERN.test(id) ||
+    ROOM_ID_PATTERN.test(id) ||
+    CHAT_ID_PATTERN.test(id) ||
+    id === HALL_ID
+  ) {
     return id;
   }
   throw new Error(
-    `invalid run or room id ${JSON.stringify(id)}: must match ` +
-      `${RUN_ID_PATTERN.source} or ${ROOM_ID_PATTERN.source}, or be ${HALL_ID}`,
+    `invalid run, room or chat id ${JSON.stringify(id)}: must match ` +
+      `${RUN_ID_PATTERN.source}, ${ROOM_ID_PATTERN.source} or ` +
+      `${CHAT_ID_PATTERN.source}, or be ${HALL_ID}`,
   );
 }
 
@@ -116,8 +140,8 @@ export function assertTaskId(id: string): string {
  *  and a run whose directory and branches disagree reads as two tools. */
 const BRANCH_PREFIX = "kapelle";
 
-/** The folder of refs every branch of one run or room hangs under, with
- *  its trailing `/`. A room delete lists its branches by it (#235). */
+/** The folder of refs every branch of one run, room or chat hangs under,
+ *  with its trailing `/`. A room delete lists its branches by it (#235). */
 export function branchPrefix(ownerId: string): string {
   return `${BRANCH_PREFIX}/${assertOwnerId(ownerId)}/`;
 }

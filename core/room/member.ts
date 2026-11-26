@@ -59,6 +59,7 @@ import {
   type Answer,
   type Participant,
   type ParticipantRecord,
+  type ParticipantStatus,
   type RoomNotice,
   RoomRefusal,
 } from "./types.ts";
@@ -145,6 +146,38 @@ export function ownWatchdog(
   return { watchdog, limits, stop: () => clearInterval(sweep) };
 }
 
+/** §M0-4: every measured harness ends a cancelled turn within 64 ms, so a
+ *  turn still live after 2 s is not going to end by itself. An owner's
+ *  pause waits this long. */
+export const PAUSE_GRACE_MS = 2_000;
+
+/** The lines after which an owner saves its record: each changes what
+ *  `recordOf` gives. */
+export const SAVED_ON: ReadonlySet<string> = new Set([
+  "_client_participant_added",
+  "_client_participant_changed",
+  "_client_participant_removed",
+  "_client_participant_revived",
+  "_client_user_message",
+  "_client_turn_ended",
+  "_client_harness_exited",
+]);
+
+/** A stderr log per harness start in `dir`, as `AcpAgent` opens them with
+ *  `ax`: a revive must not write into the first harness's file. */
+export function stderrLogs(dir: string) {
+  let starts = 0;
+  return (participantId: string) => {
+    const first = join(dir, `${participantId}.stderr.log`);
+    // The time tells two daemons apart; the count, two starts in one
+    // millisecond.
+    starts += 1;
+    return existsSync(first)
+      ? join(dir, `${participantId}.${Date.now()}-${starts}.stderr.log`)
+      : first;
+  };
+}
+
 /** What an owner lends each participant, and what it hears back. A member
  *  reads some fields once, when it is made, and others at each call, so an
  *  owner never replaces a field once its first member exists. */
@@ -165,6 +198,12 @@ export interface Owner {
   stderrLog: (participantId: string) => string | undefined;
   /** True once the owner stops for good: no revive, no send. */
   stopped: () => boolean;
+  /** What `status()` reports while the owner is stopped. A room dismisses a
+   *  participant; a chat keeps a participant status and archives its
+   *  lifecycle instead. */
+  stoppedStatus?: ParticipantStatus;
+  /** What a send refused because the owner stopped says. */
+  stoppedMessage?: string;
   watchdog: Watchdog;
   limits: WatchdogLimits;
   /** Gets what each real session said (M9-4, `core/check.ts`). */
@@ -216,6 +255,8 @@ function makeMember(
     notices: () => [...owner.notices(), ...own],
     stderrLog: () => owner.stderrLog(id),
     stopped: owner.stopped,
+    ...(owner.stoppedStatus && { stoppedStatus: owner.stoppedStatus }),
+    ...(owner.stoppedMessage && { stoppedMessage: owner.stoppedMessage }),
     watchdog: owner.watchdog,
     limits: owner.limits,
     ...(saved && { saved }),
@@ -428,9 +469,10 @@ export async function restoreMember(
 /**
  * Stops a participant the caller already took off its roster, logs
  * `_client_participant_removed`, and releases its checkout. A kept checkout
- * is the owner's to report, since the participant is gone.
+ * is the owner's to report, since the participant is gone. Answers what
+ * `release` does: whether the release wrote a notice.
  */
-export async function removeMember(owner: Owner, m: Member): Promise<void> {
+export async function removeMember(owner: Owner, m: Member): Promise<boolean> {
   const { id, worktree } = m.participant;
   // No `finally` for the release: `stop()` cannot reject. It awaits the
   // harness's exit, which only resolves, and a turn whose handlers only
@@ -443,7 +485,7 @@ export async function removeMember(owner: Owner, m: Member): Promise<void> {
     agent: id,
     update: { sessionUpdate: "_client_participant_removed" },
   });
-  await release(id, worktree, owner.onNotice, m.place);
+  return release(id, worktree, owner.onNotice, m.place);
 }
 
 /** The record of one participant, as its owner's record file keeps it. */

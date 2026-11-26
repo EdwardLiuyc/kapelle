@@ -101,7 +101,7 @@
  * one when a machine actually runs out of memory or file handles, not before.
  */
 
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import type { MessageKind } from "../protocol/types.ts";
@@ -121,12 +121,15 @@ import {
   type Owner,
   ownerPlaces,
   ownWatchdog,
+  PAUSE_GRACE_MS,
   type Places,
   recordOf,
   release,
   removeMember,
   restoreMember,
   rollback,
+  SAVED_ON,
+  stderrLogs,
 } from "./room/member.ts";
 import {
   crashed,
@@ -202,10 +205,6 @@ export interface RoomOptions extends RoomDeps {
   /** From `roomAgents`, added in this order. */
   agents: AgentRequest[];
 }
-
-/** §M0-4: every measured harness ends a cancelled turn within 64 ms, so a
- *  turn still live after 2 s is not going to end by itself. */
-const PAUSE_GRACE_MS = 2_000;
 
 /** Opens a room and resolves once every participant's harness has a
  *  session. A harness that cannot start is a throw, never a dead
@@ -401,15 +400,6 @@ async function buildRoom(
       save();
     });
   };
-  const SAVED_ON = new Set([
-    "_client_participant_added",
-    "_client_participant_changed",
-    "_client_participant_removed",
-    "_client_participant_revived",
-    "_client_user_message",
-    "_client_turn_ended",
-    "_client_harness_exited",
-  ]);
   bus.addListener(({ update }) => {
     if (SAVED_ON.has(update.sessionUpdate)) saveSoon();
   });
@@ -477,19 +467,8 @@ async function buildRoom(
     return pausing;
   };
 
-  /** A stderr log per harness start, as `AcpAgent` opens them with `ax`: a
-   *  revive must not write into the first harness's file. */
-  let starts = 0;
-  const stderrFor = (id: string) => {
-    if (!eventLog) return undefined;
-    const first = join(logDir, `${id}.stderr.log`);
-    // The time tells two daemons apart; the count, two starts in one
-    // millisecond.
-    starts += 1;
-    return existsSync(first)
-      ? join(logDir, `${id}.${Date.now()}-${starts}.stderr.log`)
-      : first;
-  };
+  const nextStderr = stderrLogs(logDir);
+  const stderrFor = (id: string) => (eventLog ? nextStderr(id) : undefined);
 
   // M8-2: a turn that ended sends its answer on. A message from a
   // participant gets a reply to it; a person's message to a worker, a copy

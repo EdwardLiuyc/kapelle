@@ -518,8 +518,9 @@ export interface Worktrees {
   acquire(taskId: string, baseRef?: string): Promise<string>;
   /** Commits and removes on success, keeps on failure, and rolls back a task
    *  that produced nothing at all. Safe to call for a task never acquired.
-   *  Returns a warning to print when it kept a checkout it meant to remove,
-   *  and `null` when retention went as planned. */
+   *  When a crash already removed the checkout, finishes its untouched branch.
+   *  Returns a warning to print when it kept a checkout or branch it meant to
+   *  remove, and `null` when retention went as planned. */
   release(taskId: string, action: ReleaseAction): Promise<string | null>;
   /** The branch, base SHA and configured ref for an acquired task, or
    *  undefined when it never acquired a worktree. Runs use the first two. */
@@ -1214,6 +1215,43 @@ export async function openWorktrees(
         // not create clears the flag, so that name is never deleted.
         const original = branchName(runId, taskId);
         const ours = task.branch === original || task.renamed === true;
+        // A crash can land between `worktree remove` and `branch -D`: the
+        // checkout is gone and only its branch is left. Finish that remove
+        // when the branch is still ours and at its base. A branch that moved
+        // may hold committed work, so it is kept and named. Only `keep`
+        // deletes: a `commit` keeps a branch at its base (#19), and with no
+        // checkout there is nothing to commit.
+        if (!existsSync(task.path)) {
+          const head = await tryGitLine(
+            root,
+            ["rev-parse", "--verify", `refs/heads/${task.branch}`],
+            GIT,
+          );
+          if (head === null) return null;
+          if (!ours) {
+            return (
+              `left branch ${task.branch}: its checkout is gone and the ` +
+              `branch is not one ${runId} created. Nothing was removed.`
+            );
+          }
+          if (action === "commit") {
+            return (
+              `left branch ${task.branch}: its checkout is gone, so nothing ` +
+              "was committed. Nothing was removed."
+            );
+          }
+          if (head !== task.baseSha) {
+            return (
+              `left branch ${task.branch}: its checkout is gone and the ` +
+              "branch is past its base, so it may hold work. Nothing was " +
+              "removed."
+            );
+          }
+          await mutateWorktrees(() =>
+            git(root, ["branch", "-D", task.branch], GIT),
+          );
+          return null;
+        }
         const on = await tryGitLine(
           task.path,
           ["symbolic-ref", "--quiet", "--short", "HEAD"],
