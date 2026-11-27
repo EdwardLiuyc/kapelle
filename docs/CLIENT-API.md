@@ -1233,9 +1233,10 @@ room's event log on disk and replayed to every client that attaches.
 
 **Reply `200`:** one decision. An open one looks the same as in `GET /permissions`. A
 closed one also has `allow` and `reason`, and its `title` is cut at 1,000 characters, so
-a cut title ends with `…`. Since 1.31. A question that has to fall back to a kept title
-starts with the cut title, in `GET /permissions` and in its events. The `tool_call` event
-in the stream keeps the whole title.
+a cut title ends with `…`. Since 1.31. When the harness asks about a tool call that has
+already ended, and does not send its title again, the question starts with the cut title,
+in `GET /permissions` and in its events. The `tool_call` event in the stream keeps the
+whole title.
 
 ```json
 {
