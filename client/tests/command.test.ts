@@ -502,13 +502,42 @@ test("delete retries after room_active, and falls back to GET after room_dismiss
     ],
     [
       "POST /rooms/room-fallback/dismiss",
-      [[409, { error: { code: "room_dismissed" } }]],
+      [
+        [
+          409,
+          {
+            error: {
+              code: "room_dismissed",
+              message: "room room-fallback is already dismissed",
+            },
+          },
+        ],
+      ],
     ],
     ["GET /rooms/room-fallback", [[200, room("room-fallback")]]],
     ["DELETE /rooms/room-refused", [[409, active]]],
     [
       "POST /rooms/room-refused/dismiss",
       [[409, { error: { code: "room_busy", message: "room is busy" } }]],
+    ],
+    ["DELETE /rooms/room-no-get", [[409, active], [204]]],
+    [
+      "POST /rooms/room-no-get/dismiss",
+      [
+        [
+          409,
+          {
+            error: {
+              code: "room_dismissed",
+              message: "room room-no-get is already dismissed",
+            },
+          },
+        ],
+      ],
+    ],
+    [
+      "GET /rooms/room-no-get",
+      [[500, { error: { code: "get_failed", message: "cannot read room" } }]],
     ],
   ]);
   const used = new Map<string, number>();
@@ -556,6 +585,9 @@ test("delete retries after room_active, and falls back to GET after room_dismiss
     assert.match(refused.message, /busy/);
   }
 
+  const noGet = await runCommand(d, "room-no-get", { verb: "delete" });
+  assert.deepEqual(noGet, { ok: true, line: "deleted room-no-get" });
+
   assert.deepEqual(calls, [
     "DELETE /rooms/room-ok",
     "POST /rooms/room-ok/dismiss",
@@ -566,6 +598,10 @@ test("delete retries after room_active, and falls back to GET after room_dismiss
     "DELETE /rooms/room-fallback",
     "DELETE /rooms/room-refused",
     "POST /rooms/room-refused/dismiss",
+    "DELETE /rooms/room-no-get",
+    "POST /rooms/room-no-get/dismiss",
+    "GET /rooms/room-no-get",
+    "DELETE /rooms/room-no-get",
   ]);
 });
 

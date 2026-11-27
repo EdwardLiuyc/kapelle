@@ -48,7 +48,6 @@
  */
 
 import { parseArgs } from "node:util";
-
 import { CONFIG_APPLIES, type ConfigPatch } from "./config.ts";
 import type {
   ConfigView,
@@ -262,10 +261,6 @@ function roomVerbFamily(verb: string): RoomVerbFamily | undefined {
   return Object.hasOwn(ROOM_VERB_FAMILY, verb)
     ? ROOM_VERB_FAMILY[verb as RoomVerb]
     : undefined;
-}
-
-function unhandledRoomFamily(family: never): never {
-  throw new Error(`unhandled room-verb family: ${String(family)}`);
 }
 
 function formOptions(verb: "new" | "add" | "chat") {
@@ -650,8 +645,10 @@ export function parseCommand(
       return parseAgentForm(verb, args, hall);
     case undefined:
       break;
-    default:
-      return unhandledRoomFamily(family);
+    default: {
+      const unhandled: never = family;
+      return unhandled;
+    }
   }
   if (!isAgentVerb(verb)) return undefined;
   return parseTargeted({
