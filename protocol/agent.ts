@@ -1182,10 +1182,9 @@ export class AcpAgent {
     const known = this.#toolCalls.get(toolCall?.toolCallId) ?? {};
     const detail: PolicyToolCall = {
       toolCallId: toolCall?.toolCallId,
+      // `known.title` passed `wireTitle` when the call was stored.
       title:
-        wireTitle(toolCall?.title) ??
-        wireTitle(known.title) ??
-        "(untitled tool call)",
+        wireTitle(toolCall?.title) ?? known.title ?? "(untitled tool call)",
       kind: toolCall?.kind ?? known.kind ?? "other",
       rawInput: toolCall?.rawInput ?? known.rawInput,
     };

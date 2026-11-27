@@ -400,7 +400,7 @@ const TOOL_CALL_PROBE = [
   '        method: "session/request_permission",',
   "        params: {",
   '          sessionId: "s1",',
-  "          toolCall: { toolCallId: msg.params.id },",
+  "          toolCall: { toolCallId: msg.params.id, title: msg.params.title },",
   '          options: [{ optionId: "ok", name: "Allow", kind: "allow_once" }],',
   "        },",
   "      });",
@@ -447,8 +447,9 @@ async function toolCallProbe(
   const turn = agent.prompt("go");
   turn.catch(() => {});
   const send = (update: object) => agent.request("debug/update", update);
-  const ask = async (id: string) => {
-    await agent.request("debug/ask", { id });
+  /** `title`, when given, rides on the permission request itself. */
+  const ask = async (id: string, title?: unknown) => {
+    await agent.request("debug/ask", { id, title });
     return seen[seen.length - 1];
   };
   const end = async () => {
@@ -661,6 +662,19 @@ test("a non-string title from the wire is ignored, not cut", async (t) => {
   });
   assert.equal((await ask("c1")).title, "(untitled tool call)");
   await end();
+});
+
+test("a permission request's non-string title falls back to the kept one", async (t) => {
+  const { send, ask } = await toolCallProbe(t);
+  await send({
+    sessionUpdate: "tool_call",
+    toolCallId: "c1",
+    title: "Run tests",
+    kind: "execute",
+  });
+  // The policy must get text: the queue cuts it when the decision settles.
+  assert.equal((await ask("c1", { length: 5_000 })).title, "Run tests");
+  assert.equal((await ask("c1", "Run all tests")).title, "Run all tests");
 });
 
 test("an update changes only the fields it carries", async (t) => {
