@@ -1978,6 +1978,10 @@ test("a live chat's checkout and branch are kept; one with no record is an orpha
   const stray = await addWorktree(root, "p-solo", strayId);
   const husk = archivedChatDir(newChatId());
   await mkdir(husk, { recursive: true });
+  // A file in either chats folder is no chat, and is not named as one.
+  for (const dir of [join(chatDir("x"), ".."), join(husk, "..")]) {
+    await writeFile(join(dir, "notes.txt"), "not a chat\n");
+  }
 
   const notices = await sweep(root, join(await tempDir(t), "children.json"));
 
@@ -1987,6 +1991,11 @@ test("a live chat's checkout and branch are kept; one with no record is an orpha
       `the folder with no record is named: ${notices.join(" | ")}`,
     );
   }
+  assert.equal(
+    notices.some((n) => n.includes("notes.txt")),
+    false,
+    `a file is not named as a chat folder: ${notices.join(" | ")}`,
+  );
   assert.equal(existsSync(chat.worktree), true, notices.join("\n"));
   assert.equal(await hasBranch(root, chat.branch), true);
   assert.equal(
@@ -2075,10 +2084,12 @@ test("a removed chat past retention with uncommitted work is kept and named", as
   assert.equal(await hasBranch(root, chat.branch), true);
 });
 
-test("an archive whose chat.json cannot be read is kept, named and never reaped", async (t) => {
+test("a chat.json that cannot be read is kept and named once, live or archived, and never reaped", async (t) => {
   const root = await gitRepo(t);
   const chat = await writeChat(root, "archived");
   await writeFile(chat.file, "{ not json\n");
+  const live = await writeChat(root, "active");
+  await writeFile(live.file, "{ not json\n");
 
   const notices = await sweep(
     root,
@@ -2092,10 +2103,20 @@ test("an archive whose chat.json cannot be read is kept, named and never reaped"
     1,
     `one notice for one cause: ${named.join(" | ")}`,
   );
-  assert.ok(named[0]?.includes("keeping removed chat"), named[0]);
+  assert.ok(
+    named[0]?.includes(`cannot read chat ${chat.id}'s record`),
+    named[0],
+  );
   assert.equal(existsSync(chat.file), true);
   assert.equal(existsSync(chat.worktree), true);
   assert.equal(await hasBranch(root, chat.branch), true);
+  const liveNamed = notices.filter((n) => n.includes(live.id));
+  assert.equal(liveNamed.length, 1, liveNamed.join(" | "));
+  assert.ok(
+    liveNamed[0]?.includes(`cannot read chat ${live.id}'s record`),
+    liveNamed[0],
+  );
+  assert.equal(existsSync(live.worktree), true, "a live chat's checkout too");
 });
 
 test("a chat left removing is finished at boot", async (t) => {

@@ -891,7 +891,7 @@ async function sweepChats(pass: ChatPass): Promise<Set<string> | null> {
   if (live === null) return null;
   for (const id of live) {
     if (id === "archive") continue;
-    const record = readKept(chatDir(id), id, "chat", pass);
+    const record = readChatFolder(chatDir(id), id, pass);
     if (record === null) continue;
     kept.add(id);
     if (record?.lifecycle === "removing") await finishRemove(id, pass);
@@ -901,13 +901,13 @@ async function sweepChats(pass: ChatPass): Promise<Set<string> | null> {
   if (archived === null) return null;
   for (const id of archived) {
     const dir = archivedChatDir(id);
-    let record = readKept(dir, id, "removed chat", pass);
+    let record = readChatFolder(dir, id, pass);
     if (record === null) continue;
     kept.add(id);
     if (record?.lifecycle === "removing") {
       await finishRemove(id, pass);
       // A finish writes `archived`; one that failed left `removing`.
-      record = readKept(dir, id, "removed chat", pass);
+      record = readChatFolder(dir, id, pass);
     }
     if (!record) continue;
     const since = Date.parse(record.removedAt ?? "");
@@ -932,10 +932,9 @@ async function sweepChats(pass: ChatPass): Promise<Set<string> | null> {
  * chat, and a notice names it, since nothing deletes it. `undefined` when
  * it cannot be read: the chat is kept and named.
  */
-function readKept(
+function readChatFolder(
   dir: string,
   id: string,
-  what: string,
   { onNotice }: ChatPass,
 ): ChatRecord | null | undefined {
   const file = join(dir, "chat.json");
@@ -949,19 +948,24 @@ function readKept(
   try {
     return readChatRecord(file, id);
   } catch (err) {
-    onNotice(`keeping ${what} ${id}: ${messageOf(err)}`);
+    onNotice(
+      `cannot read chat ${id}'s record, so its checkout is kept and ` +
+        `nothing of it is removed: ${messageOf(err)}`,
+    );
     return undefined;
   }
 }
 
 /** The folders in `dir`, `[]` when it is missing, `null` when it cannot be
- *  read. */
+ *  read. A file there is no chat. */
 function listChats(
   dir: string,
   onNotice: (text: string) => void,
 ): string[] | null {
   try {
-    return readdirSync(dir);
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
     onNotice(`cannot list chats under ${dir}: ${messageOf(err)}`);
