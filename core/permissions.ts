@@ -35,7 +35,7 @@
 
 import { randomUUID } from "node:crypto";
 
-import type { Policy, PolicyEdit } from "../protocol/agent.ts";
+import { KEPT_TITLE, type Policy, type PolicyEdit } from "../protocol/agent.ts";
 import type { Diff, PermissionReason, ToolKind } from "../protocol/types.ts";
 import { editDiff } from "./diff.ts";
 import type { EventBus } from "./events.ts";
@@ -57,7 +57,8 @@ export type PendingDecision = Asker & {
   diff?: Diff;
 };
 
-/** A decision that has closed, as `GET /permissions/:id` returns it. */
+/** A decision that has closed, as `GET /permissions/:id` returns it. Its
+ *  `title` is cut at `KEPT_TITLE` (M12-11). */
 export type SettledDecision = PendingDecision & {
   allow: boolean;
   reason: PermissionReason;
@@ -144,13 +145,12 @@ export function createPermissionQueue(timeoutMs: number) {
   >();
   // ponytail: every settled decision is kept for the daemon's lifetime, so a
   // late answer reads 409 rather than 404 and `get` can still say how it
-  // closed. The growth term is `title` (`input` and `diff` are cut): it comes from the harness's
-  // `tool_call`, bounded only by `MAX_LINE_LENGTH` (32 MiB), so "a couple
-  // of hundred bytes" is the typical entry, not the bound, and a harness that
-  // loops on requests grows the map. The daemon never drops a run or a
-  // room from memory either, so all three live equally long; an `ask` room that
-  // lives for days is the longest. Drop them with their run or room once the
-  // daemon evicts those, or truncate `title` here if a loop shows up.
+  // closed. Each entry is bounded: `input` and `diff` are cut, and `title` is
+  // cut at `KEPT_TITLE` when it settles (M12-11). The count is not bounded: a
+  // harness that loops on requests grows the map. The daemon never drops a run
+  // or a room from memory either, so all three live equally long; an `ask`
+  // room that lives for days is the longest. Drop them with their run or room
+  // once the daemon evicts those.
   const settled = new Map<string, SettledDecision>();
 
   /**
@@ -219,7 +219,12 @@ export function createPermissionQueue(timeoutMs: number) {
         clearTimeout(timer);
         signal.removeEventListener("abort", onAbort);
         pending.delete(id);
-        settled.set(id, { ...decision, allow, reason });
+        settled.set(id, {
+          ...decision,
+          title: cut(decision.title, KEPT_TITLE),
+          allow,
+          reason,
+        });
         // ponytail: a `run_end` deny comes after `core/run.ts` has closed
         // the event log, so only `get` records it; unreachable today,
         // since `denyTask` runs at every task's end. M5-5's run-finished

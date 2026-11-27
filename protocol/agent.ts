@@ -6,8 +6,8 @@
  * - **The `toolCallId → {title, kind, rawInput}` map stays here.** A
  *   permission request can carry only a `toolCallId`, so without the map
  *   every decision goes blind. A finished call, or one outside a turn, keeps
- *   only its title, kind and status (`settled`, #163). Do not bring back the
- *   whole-object merge: a room would keep every call's input.
+ *   only its title, cut (M12-11), kind and status (`settled`, #163). Do not
+ *   bring back the whole-object merge: a room would keep every call's input.
  * - **An approval covers one write per file it named, of the bytes the
  *   person saw** (#310). A denial is sticky. The detail is at
  *   `#writeDecisions`.
@@ -195,8 +195,9 @@ interface PendingRequest {
 /**
  * What we retain per `toolCallId`: only what `#requestPermission` reads, and
  * the status that says when the heavy part can go (#163). The entries are
- * never removed, and a title is kept whole, so a room still holds one small
- * entry per call for its life. That is the end state #163 chose.
+ * never removed, so a room still holds one small entry per call for its life.
+ * That is the end state #163 chose. A settled entry's title is cut at
+ * `KEPT_TITLE` (M12-11), so the entry stays small.
  */
 interface RememberedToolCall {
   title?: string;
@@ -217,8 +218,28 @@ interface RememberedToolCall {
  * list it if a late ask needs it and it is small.
  */
 function settled({ title, kind, status }: RememberedToolCall) {
-  return { title, kind, status };
+  return {
+    title: title === undefined ? undefined : cutTitle(title),
+    kind,
+    status,
+  };
 }
+
+/**
+ * The longest title a settled call or decision keeps, in characters (M12-11).
+ * Only the 32 MiB line limit bounds a harness's title, and a whole shell
+ * command can be the title: 51,580 characters was seen in two weeks of
+ * event logs (#545). A call keeps its whole title until it first settles, so
+ * a question about a live call shows all of it; a late question shows the
+ * cut one. The event log keeps the whole line. 1,000 fills the question box
+ * on a normal screen. `core/permissions.ts` cuts a settled decision's title
+ * at it too.
+ */
+export const KEPT_TITLE = 1000;
+
+/** A title cut to `KEPT_TITLE`, ending with `…` when it was cut. */
+const cutTitle = (title: string) =>
+  title.length > KEPT_TITLE ? `${title.slice(0, KEPT_TITLE - 1)}…` : title;
 
 interface ReadTextFileParams {
   path: string;
@@ -241,6 +262,13 @@ interface RequestPermissionParams {
 // pi-lens-ignore: no-unknown-parameters
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** A title from the wire, when a broken harness sent text. The wire is
+ *  unchecked, so `title` can be any JSON value. */
+function wireTitle(value: unknown): string | undefined {
+  // pi-lens-ignore: no-runtime-typeof
+  return typeof value === "string" ? value : undefined;
 }
 
 /** The harness answered a request with a JSON-RPC error. `code` tells a
@@ -676,9 +704,15 @@ export class AcpAgent {
       // the agent into refusing all later prompts.
       this.#promptInFlight = false;
       // A cancelled turn leaves its calls `pending` for ever, so a turn's end
-      // settles every call too (#163). Only the live ones: the rest already are.
+      // settles every call too (#163). Only the live ones: the rest already
+      // are. A live call with no input still needs its title cut (M12-11).
       for (const [id, call] of this.#toolCalls) {
-        if (call.rawInput === undefined && call.content === undefined) continue;
+        if (
+          call.rawInput === undefined &&
+          call.content === undefined &&
+          (call.title?.length ?? 0) <= KEPT_TITLE
+        )
+          continue;
         this.#toolCalls.set(id, settled(call));
       }
     }
@@ -943,7 +977,7 @@ export class AcpAgent {
           ? { kind: "other" }
           : (this.#toolCalls.get(update.toolCallId) ?? {});
       const call: RememberedToolCall = {
-        title: update.title ?? prev.title,
+        title: wireTitle(update.title) ?? prev.title,
         kind: update.kind ?? prev.kind,
         status: update.status ?? prev.status,
         rawInput: update.rawInput ?? prev.rawInput,
@@ -1149,7 +1183,9 @@ export class AcpAgent {
     const known = this.#toolCalls.get(toolCall?.toolCallId) ?? {};
     const detail: PolicyToolCall = {
       toolCallId: toolCall?.toolCallId,
-      title: toolCall?.title ?? known.title ?? "(untitled tool call)",
+      // `known.title` passed `wireTitle` when the call was stored.
+      title:
+        wireTitle(toolCall?.title) ?? known.title ?? "(untitled tool call)",
       kind: toolCall?.kind ?? known.kind ?? "other",
       rawInput: toolCall?.rawInput ?? known.rawInput,
     };

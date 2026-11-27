@@ -72,6 +72,8 @@ const SCENARIOS = {
   "diff-only":
     "like diff-first, but rawInput names no path: only the diff block does",
   "file-text": "the default path, asking with copilot's rawInput.file_text",
+  "long-title":
+    "the default path, with a write titled by 5,000 more characters, as a whole shell command can be",
   "diff-bad-old":
     "like diff-first, but the diff block's oldText is a number, not text",
   runs: "a note and six tool calls, then a wait for runs.go in its folder, then a note; later turns only the note",
@@ -955,7 +957,10 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     update(sid, {
       sessionUpdate: "tool_call",
       toolCallId: "t2",
-      title: "Write ACP_TEST.md",
+      title:
+        scenario === "long-title"
+          ? `Write ACP_TEST.md ${"#".repeat(5_000)}`
+          : "Write ACP_TEST.md",
       kind: "edit",
       rawInput:
         scenario === "file-text"

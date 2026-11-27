@@ -39,16 +39,16 @@ export type { AgentEvent, Diff, PermissionReason, ToolCallStatus, ToolKind };
 
 /**
  * The contract version (B2, amended 2026-09-22). `major` goes up for a change
- * that breaks a client; `minor` goes up when something is added. A client
- * refuses a daemon with a different `major` and warns on a different `minor`
- * (B5).
+ * that breaks a client; `minor` goes up when something is added, or changed
+ * so that old clients keep working (M12-11). A client refuses a daemon with a
+ * different `major` and warns on a different `minor` (B5).
  *
  * Only a **stable** part is versioned. A provisional part changes with its
  * named story and without a version step — that is what the label is for
  * (M5-2 changed one). Which rows are stable is the table in
  * `docs/CLIENT-API.md`.
  */
-export const API_VERSION = { major: 1, minor: 30 } as const;
+export const API_VERSION = { major: 1, minor: 31 } as const;
 
 /**
  * What this daemon can do (B4). Names are only ever added, never removed or
@@ -342,7 +342,8 @@ export type PendingDecision = {
 );
 
 /** `GET /permissions/:id` (M5-4, #136): an open decision as the list shows
- *  it, or a closed one with its answer and why it closed. `allow` and
+ *  it, or a closed one with its answer and why it closed. A closed one's
+ *  `title` is cut at 1,000 characters (M12-11, 1.31). `allow` and
  *  `reason` come together or not at all; the `never` members make a reply
  *  with only one of them fail `satisfies`, which a plain
  *  `PendingDecision | (PendingDecision & {…})` would accept, the second
