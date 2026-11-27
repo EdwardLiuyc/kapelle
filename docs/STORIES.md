@@ -394,7 +394,8 @@ or more untyped protocol surfaces.
 
 **M1a-3 · Port `acp.mjs` → `protocol/agent.ts` · M · needs M1a-2**
 Essentially intact. Both invariants preserved verbatim: the `toolCallId → {title, kind,
-rawInput}` map (`protocol/agent.ts`) and `#guardPath` (`protocol/agent.ts`). The single `onEvent`
+rawInput}` map (`protocol/agent.ts`) and `#guardPath` (`protocol/agent.ts`, historical;
+now `guardPathOnDisk` in `protocol/path-guard.ts`). The single `onEvent`
 callback becomes typed (`EventSink`, over an envelope wrapping the `AgentEvent` union)
 rather than an
 emitter — **amended 2026-08-31**: a multi-listener emitter has no consumer, and
