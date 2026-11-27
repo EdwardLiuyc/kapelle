@@ -215,6 +215,10 @@ export interface Owner {
   onTurnEnd: (worker: Participant, answer: Answer) => void;
   /** Something changed that no stream line carries, which a save keeps. */
   onChange: () => void;
+  /** An add failed after it tried to start a harness. Its record, after the
+   *  rollback, so a chat can keep the stderr log and a kept checkout
+   *  (M11-14). */
+  onAddFailed?: (saved: ParticipantRecord) => void;
 }
 
 /** One participant, and what its owner needs to end and save it. */
@@ -363,6 +367,7 @@ export async function addMember(
   // path to look at.
   let worktree: string | undefined;
   let place = owner.places.home;
+  let made: Member | undefined;
   try {
     if (request.cwd !== undefined) {
       place = await owner.places.open(request.cwd, false);
@@ -397,11 +402,12 @@ export async function addMember(
         },
       });
     }
-    const made = makeMember(owner, request, id, place, worktree, info, own);
+    made = makeMember(owner, request, id, place, worktree, info, own);
     await made.launch();
     return made;
   } catch (err) {
     await rollback(owner, id, worktree, place);
+    if (made) owner.onAddFailed?.(recordOf(made));
     // The record keeps a repository even when its add failed and left a
     // written checkout. A later delete must still find that work.
     owner.onChange();

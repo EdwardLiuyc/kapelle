@@ -38,14 +38,26 @@
  *    path `DELETE /rooms/:id` takes (#235): checkouts, branches, record and
  *    log. One with uncommitted work is kept and named. A paused room is
  *    never reaped.
+ * 5. **Chats** (M11-14). `<stateDir>/chats/` is one folder for the whole
+ *    daemon, so it is swept once, before the repositories. A chat left
+ *    `removing` is finished (`finishChatRemove`). An archive past the
+ *    retention window is reaped by `removeOwnerWork`, in each
+ *    repository its record names: checkouts, branches, then its folder.
+ *    One with uncommitted work is kept and named. Every checkout under a
+ *    chat with a `chat.json` is kept. A chat folder with no `chat.json` is
+ *    named at each boot, and its checkout follows the orphan rule. The
+ *    window has no project file to read, since an archive is in no
+ *    repository.
  *
  * **A room's checkouts can sit in other repositories** (M11-2, decided
  * 2026-11-19, #476). A participant may work in a repository other than the
  * one its room's record is in, and a hall agent's record is in the hall's
  * folder, which is no added repository. So the pass first reads which rooms
  * have a record, in every added repository and every `roomRoots` folder,
- * and only then names an orphan. A room's removal goes to each repository
- * its record names, for its checkouts and its branches.
+ * and which chats do, and only then names an orphan. A room's removal goes
+ * to each repository its record names, for its checkouts and its branches.
+ * If a rooms or a chats folder cannot be listed, no orphan is named in any
+ * repository.
  *
  * **Whole-run reaping is ordered worktree-first.** If a checkout cannot be
  * removed, the record is kept too and the run is retried on the next boot —
@@ -62,7 +74,19 @@ import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { rename, writeFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { promisify } from "node:util";
-import { DEFAULT_RETENTION_MS, resolveRetentionMs } from "./config.ts";
+import {
+  archivedChatDir,
+  type ChatRecord,
+  chatDir,
+  chatsDir,
+  finishChatRemove,
+  readChatRecord,
+} from "./chat.ts";
+import {
+  DEFAULT_RETENTION_MS,
+  readEnvConfig,
+  resolveRetentionMs,
+} from "./config.ts";
 import {
   GitError,
   type GitOptions,
@@ -230,16 +254,12 @@ async function sweepChildren(
     // `{pid, runId, taskId}` entry — written by a daemon from before rooms
     // landed — is read as a run, so an upgrade never strands a live harness.
     const kind = raw.kind === "room" ? "room" : "run";
-    const owner = isString(raw.ownerId)
-      ? raw.ownerId
-      : isString(raw.runId)
-        ? raw.runId
-        : "unknown";
-    const unit = isString(raw.unitId)
-      ? raw.unitId
-      : isString(raw.taskId)
-        ? raw.taskId
-        : "unknown";
+    let owner = "unknown";
+    if (isString(raw.ownerId)) owner = raw.ownerId;
+    else if (isString(raw.runId)) owner = raw.runId;
+    let unit = "unknown";
+    if (isString(raw.unitId)) unit = raw.unitId;
+    else if (isString(raw.taskId)) unit = raw.taskId;
     const where =
       kind === "room"
         ? `room ${owner}, participant ${unit}`
@@ -517,23 +537,52 @@ async function roomRepos(root: string, roomId: string) {
       error = err;
     }
   }
-  const repos = new Map<string, SavedParticipant[]>([[root, []]]);
-  for (const at of record?.repositories ?? []) {
-    if (!repos.has(at)) repos.set(at, []);
-  }
-  for (const p of [
-    ...(record?.participants ?? []),
-    ...(record?.tombstones ?? []),
-  ]) {
-    let at = root;
+  const repos = await ownerRepos(
+    [root, ...(record?.repositories ?? [])],
+    [...(record?.participants ?? []), ...(record?.tombstones ?? [])],
+    root,
+  );
+  return { record, error, repos };
+}
+
+/**
+ * Each repository an owner's record names, with the saved participants that
+ * work in it. A participant with no `cwd` works in `home`, or in a scratch
+ * folder when the owner has none; a folder that is no repository has no
+ * checkout to name.
+ */
+async function ownerRepos(
+  roots: readonly string[],
+  saved: readonly SavedParticipant[],
+  home?: string,
+): Promise<Map<string, SavedParticipant[]>> {
+  const repos = new Map<string, SavedParticipant[]>(roots.map((r) => [r, []]));
+  for (const p of saved) {
+    let at = home;
     if (p.cwd !== undefined) {
       const found = await stateDirRoot(p.cwd);
       if (!found.isRepo) continue;
       at = found.root;
     }
+    if (at === undefined) continue;
     repos.set(at, [...(repos.get(at) ?? []), p]);
   }
-  return { record, error, repos };
+  return repos;
+}
+
+/** Each uncommitted file, untracked ones too, as a full path, in an owner's
+ *  checkouts in `roots`. */
+async function ownerWork(
+  ownerId: string,
+  roots: Iterable<string>,
+): Promise<string[]> {
+  const files: string[] = [];
+  for (const at of roots) {
+    for (const path of await roomCheckouts(at, ownerId)) {
+      for (const file of await changedPaths(path)) files.push(join(path, file));
+    }
+  }
+  return files;
 }
 
 /** The most commits one branch's preview carries. A branch with more shows
@@ -563,13 +612,8 @@ export async function roomWork(
   root: string,
   roomId: string,
 ): Promise<string[]> {
-  const files: string[] = [];
-  for (const at of (await roomRepos(root, roomId)).repos.keys()) {
-    for (const path of await roomCheckouts(at, roomId)) {
-      for (const file of await changedPaths(path)) files.push(join(path, file));
-    }
-  }
-  return files;
+  const { repos } = await roomRepos(root, roomId);
+  return ownerWork(roomId, repos.keys());
 }
 
 /**
@@ -678,8 +722,13 @@ async function repoDeletePreview(
 
   // `--stdin` keeps a repository with thousands of refs off the argv.
   const negative = outside.map((ref) => `^${ref}`).join("\n");
-  return await Promise.all(
-    [...branches].sort().map(async (branch) => {
+  const sorted = [...branches].sort((a, b) => {
+    if (a < b) return -1;
+    if (a > b) return 1;
+    return 0;
+  });
+  return Promise.all(
+    sorted.map(async (branch) => {
       const log = await gitWithInput(
         root,
         [
@@ -693,13 +742,11 @@ async function repoDeletePreview(
         negative,
         GIT_INPUT,
       );
-      const commits = log
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => {
-          const [sha = "", subject = ""] = line.split("\0");
-          return { sha, subject };
-        });
+      const commits = log.split("\n").flatMap((line) => {
+        if (!line) return [];
+        const [sha = "", subject = ""] = line.split("\0");
+        return [{ sha, subject }];
+      });
       const total =
         commits.length > DELETE_PREVIEW_COMMITS
           ? Number(
@@ -751,11 +798,30 @@ export async function removeRoom(
         `under ${prefix} are removed`,
     );
   }
+  await removeOwnerWork(roomId, repos, left);
+  rmSync(join(stateDirFor(root), "rooms", roomId), {
+    recursive: true,
+    force: true,
+  });
+  return left;
+}
+
+/**
+ * `removeRoom`'s steps for any owner, a room or a chat (M11-14): in each
+ * repository the caller names, the owner's checkouts, then its branches.
+ * The caller removes its own folder after. Adds a line to `left` for each
+ * branch it leaves.
+ */
+async function removeOwnerWork(
+  ownerId: string,
+  repos: ReadonlyMap<string, readonly SavedParticipant[]>,
+  left: string[],
+): Promise<void> {
   for (const [at, saved] of repos) {
-    for (const path of await roomCheckouts(at, roomId)) {
+    for (const path of await roomCheckouts(at, ownerId)) {
       await worktreeGit(at, ["worktree", "remove", "--force", path]);
     }
-    rmSync(join(stateDirFor(at), "wt", roomId), {
+    rmSync(join(stateDirFor(at), "wt", ownerId), {
       recursive: true,
       force: true,
     });
@@ -765,7 +831,7 @@ export async function removeRoom(
     // A checkout removed by hand leaves an admin entry that still holds its
     // branch; `roomCheckouts` skipped the prune when the folder was gone.
     await worktreeGit(at, ["worktree", "prune"]);
-    for (const branch of await roomBranches(at, roomId, saved, left)) {
+    for (const branch of await roomBranches(at, ownerId, saved, left)) {
       try {
         await worktreeGit(at, ["branch", "-D", branch]);
       } catch (err) {
@@ -773,11 +839,6 @@ export async function removeRoom(
       }
     }
   }
-  rmSync(join(stateDirFor(root), "rooms", roomId), {
-    recursive: true,
-    force: true,
-  });
-  return left;
 }
 
 /**
@@ -805,6 +866,158 @@ async function reapRoom(id: string, pass: RepoPass): Promise<boolean> {
     return false;
   }
   onNotice(`reaped room ${id}`);
+  return true;
+}
+
+/** What the chat pass needs, as `RepoPass` for one repository. */
+interface ChatPass {
+  /** `null` when the window cannot be read: no archive is reaped. */
+  retentionMs: number | null;
+  now: number;
+  onNotice: (text: string) => void;
+}
+
+/**
+ * Step 5: the chats (M11-14). Finishes each remove a daemon left at
+ * `removing`, then reaps each archive past retention. Answers the id of
+ * every chat with a `chat.json`, live or archived, so its checkouts are not
+ * taken for orphans; `null` when a chats folder cannot be listed. A chat
+ * folder with no `chat.json` names no chat: it is named, and its checkout
+ * follows the orphan rule (decided at pickup 2026-11-27, #557).
+ */
+async function sweepChats(pass: ChatPass): Promise<Set<string> | null> {
+  const kept = new Set<string>();
+  const live = listChats(chatsDir(), pass.onNotice);
+  if (live === null) return null;
+  for (const id of live) {
+    if (id === "archive") continue;
+    const record = readChatFolder(chatDir(id), id, pass);
+    if (record === null) continue;
+    kept.add(id);
+    if (record?.lifecycle === "removing") await finishRemove(id, pass);
+  }
+  // After the finishes, which move folders here.
+  const archived = listChats(join(chatsDir(), "archive"), pass.onNotice);
+  if (archived === null) return null;
+  for (const id of archived) {
+    const dir = archivedChatDir(id);
+    let record = readChatFolder(dir, id, pass);
+    if (record === null) continue;
+    kept.add(id);
+    if (record?.lifecycle === "removing") {
+      await finishRemove(id, pass);
+      // A finish writes `archived`; one that failed left `removing`.
+      record = readChatFolder(dir, id, pass);
+    }
+    if (!record) continue;
+    const since = Date.parse(record.removedAt ?? "");
+    if (Number.isNaN(since)) {
+      pass.onNotice(
+        `keeping removed chat ${id}: its record carries no readable ` +
+          "removedAt, so it cannot be dated against retention",
+      );
+      continue;
+    }
+    const past =
+      record.lifecycle === "archived" &&
+      pass.retentionMs !== null &&
+      pass.now - since > pass.retentionMs;
+    if (past && (await reapChat(record, pass.onNotice))) kept.delete(id);
+  }
+  return kept;
+}
+
+/**
+ * The `chat.json` in `dir`. `null` when there is none: the folder names no
+ * chat, and a notice names it, since nothing deletes it. `undefined` when
+ * it cannot be read: the chat is kept and named.
+ */
+function readChatFolder(
+  dir: string,
+  id: string,
+  { onNotice }: ChatPass,
+): ChatRecord | null | undefined {
+  const file = join(dir, "chat.json");
+  if (!existsSync(file)) {
+    onNotice(
+      `the chat folder ${dir} has no chat.json, so its checkout follows ` +
+        "the orphan rule; read any stderr log in it, then delete it by hand",
+    );
+    return null;
+  }
+  try {
+    return readChatRecord(file, id);
+  } catch (err) {
+    onNotice(
+      `cannot read chat ${id}'s record, so its checkout is kept and ` +
+        `nothing of it is removed: ${messageOf(err)}`,
+    );
+    return undefined;
+  }
+}
+
+/** The folders in `dir`, `[]` when it is missing, `null` when it cannot be
+ *  read. A file there is no chat. */
+function listChats(
+  dir: string,
+  onNotice: (text: string) => void,
+): string[] | null {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    onNotice(`cannot list chats under ${dir}: ${messageOf(err)}`);
+    return null;
+  }
+}
+
+/** Finishes a chat's remove its record says is `removing`. A finish that
+ *  throws is named, and the chat stays `removing`. */
+async function finishRemove(id: string, { onNotice }: ChatPass): Promise<void> {
+  try {
+    for (const notice of await finishChatRemove(id)) {
+      onNotice(`chat ${id}: ${notice.text}`);
+    }
+    onNotice(`finished the remove of chat ${id}`);
+  } catch (err) {
+    onNotice(`cannot finish chat ${id}: ${messageOf(err)}`);
+  }
+}
+
+/**
+ * Reaps a removed chat past retention, by `removeOwnerWork` in each
+ * repository its record names, then its archived folder. One with
+ * uncommitted work is kept and named, as a dismissed room is. A scratch
+ * folder is left to `kapelle chat scratch`. Answers whether the chat is gone.
+ */
+async function reapChat(
+  record: ChatRecord,
+  onNotice: (text: string) => void,
+): Promise<boolean> {
+  const { id } = record;
+  try {
+    const repos = await ownerRepos(record.repositories ?? [], [
+      record.participant,
+    ]);
+    const work = await ownerWork(id, repos.keys());
+    if (work.length > 0) {
+      onNotice(
+        `keeping removed chat ${id} past retention: ${work.length} ` +
+          `uncommitted ${work.length === 1 ? "file" : "files"}, such as ${work[0]}`,
+      );
+      return false;
+    }
+    const left: string[] = [];
+    await removeOwnerWork(id, repos, left);
+    for (const line of left) onNotice(`chat ${id}: ${line}`);
+    rmSync(archivedChatDir(id), { recursive: true, force: true });
+  } catch (err) {
+    onNotice(`cannot reap chat ${id}: ${messageOf(err)}`);
+    return false;
+  }
+  onNotice(`reaped chat ${id}`);
   return true;
 }
 
@@ -1205,8 +1418,8 @@ async function sweepRepo(
 
   await reapExpired(records, managed, pass, liveWriters);
 
-  // Without every room's record, a room's checkout here is not provably
-  // an orphan (M11-2).
+  // Without every room's and chat's record, a checkout here is not
+  // provably an orphan (M11-2, M11-14).
   if (recorded === null) {
     onNotice(`skipping orphan cleanup in ${root} until the next boot`);
     return;
@@ -1246,6 +1459,24 @@ function recordedRooms(
     }
   }
   return ids;
+}
+
+/**
+ * The window for removed chats. An archive is in no repository, so no
+ * project file sets it: the option (tests), then `KAPELLE_RETENTION_MS`,
+ * then the default. `null`, and named, when the variable is bad.
+ */
+function chatRetentionMs(
+  override: number | undefined,
+  onNotice: (text: string) => void,
+): number | null {
+  if (override !== undefined) return override;
+  try {
+    return readEnvConfig().retentionMs ?? DEFAULT_RETENTION_MS;
+  } catch (err) {
+    onNotice(`not reaping removed chats: ${messageOf(err)}`);
+    return null;
+  }
 }
 
 /**
@@ -1314,10 +1545,23 @@ export async function sweepBoot(options: SweepOptions): Promise<void> {
   } catch (err) {
     onNotice(`cannot sweep ${childrenFile}: ${messageOf(err)}`);
   }
-  const recorded = recordedRooms(
+  // Once per boot, before the repositories: `<stateDir>/chats/` is one
+  // folder for the whole daemon (M11-14).
+  let chats: Set<string> | null = null;
+  try {
+    chats = await sweepChats({
+      retentionMs: chatRetentionMs(overrideRetentionMs, onNotice),
+      now,
+      onNotice,
+    });
+  } catch (err) {
+    onNotice(`cannot sweep chats: ${messageOf(err)}`);
+  }
+  const rooms = recordedRooms(
     [...repos, ...(options.roomRoots ?? [])],
     onNotice,
   );
+  const recorded = rooms && chats && new Set([...rooms, ...chats]);
   for (const root of repos) {
     try {
       // The repository itself is gone — moved, renamed, or deleted. Its

@@ -38,8 +38,17 @@
  * A daemon that dies part way leaves the record at `removing`, before or
  * after the move; `finishChatRemove` does the rest at the next boot.
  *
- * Nothing reaches the API yet: M11-13 adds the routes and M11-14 the boot
- * cleanup that calls `finishChatRemove`.
+ * **An open that fails after it tried to start a harness is archived at
+ * once** (M11-14, decided at pickup 2026-11-27, #557). The harness may have
+ * written into its checkout, and its stderr log is the one clue to why it
+ * failed. So the folder moves to the archive with a record, as a remove
+ * leaves it, and the boot sweep (`core/sweep.ts`) keeps it and reaps it as
+ * any archive. The open's error names the archived folder and the kept
+ * checkout. If the archive cannot be written, the live folder stays with
+ * the stderr log, and its checkout follows the sweep's orphan rule. An open
+ * that fails before a harness starts keeps nothing.
+ *
+ * Nothing reaches the API yet: M11-13 adds the routes.
  */
 
 import {
@@ -95,7 +104,7 @@ type ChatLifecycle = "active" | "removing" | "archived";
 const LIFECYCLES: readonly ChatLifecycle[] = ["active", "removing", "archived"];
 
 /** `chat.json`. */
-interface ChatRecord {
+export interface ChatRecord {
   id: string;
   createdAt: string;
   updatedAt: string;
@@ -111,7 +120,8 @@ interface ChatRecord {
   participant: ParticipantRecord;
 }
 
-const chatsDir = () => join(stateDir(), "chats");
+/** Every live chat's folder is in it, and so is `archive/`. */
+export const chatsDir = () => join(stateDir(), "chats");
 
 /** A live chat's folder. */
 export const chatDir = (id: string) => join(chatsDir(), id);
@@ -161,7 +171,8 @@ function assertChatId(id: string): void {
 /**
  * A new chat, once its agent has a session. The id is new, or refused when
  * it is already a live or an archived chat's folder (`core/ids.ts`). A
- * harness that cannot start is a throw, and nothing is kept of the chat.
+ * harness that cannot start is a throw. Its folder goes to the archive, so
+ * its stderr log and a kept checkout stay known (see the file header).
  */
 export async function openChat({
   id = newChatId(),
@@ -188,10 +199,18 @@ export async function openChat({
     throw err;
   }
   const now = new Date().toISOString();
+  const claim: OpenClaim = {};
   try {
-    return await buildChat(deps, { id, createdAt: now, updatedAt: now }, agent);
+    return await buildChat(
+      deps,
+      { id, createdAt: now, updatedAt: now },
+      agent,
+      claim,
+    );
   } catch (err) {
-    rmSync(dir, { recursive: true, force: true });
+    // A harness start keeps the folder for its stderr log, whether or not it
+    // could be archived. A failure before that leaves nothing worth keeping.
+    if (!claim.keepFolder) rmSync(dir, { recursive: true, force: true });
     throw err;
   }
 }
@@ -203,8 +222,8 @@ export async function openChat({
  * with `seq` carried on. A chat that is not `active` throws. So does one
  * whose harness no longer resolves: a room keeps such a participant as a
  * tombstone (#312), and a chat has no roster to keep it in. M11-13 restores
- * chats at boot and decides what it does with that chat; M11-14's boot
- * sweep only finishes removes (`finishChatRemove`).
+ * chats at boot and decides what it does with that chat; the boot sweep
+ * only finishes removes and reaps archives (M11-14).
  */
 export async function restoreChat({
   id,
@@ -227,8 +246,8 @@ export async function restoreChat({
 }
 
 /**
- * Finishes a remove a daemon left at `removing`. M11-14's boot sweep calls
- * it, before M11-13's boot restores the live chats (`restoreChat`).
+ * Finishes a remove a daemon left at `removing`. The boot sweep calls it
+ * (M11-14), before M11-13's boot restores the live chats (`restoreChat`).
  * Before the move, the harness died with the daemon: the checkout is
  * released here, then the folder moves. After the move only the record is
  * left to say `archived`. Answers the notices it added. It throws when the
@@ -295,10 +314,11 @@ function keptText(p: {
   scratch?: true;
 }): string | undefined {
   if (!existsSync(p.worktree)) return undefined;
-  return p.scratch
-    ? `the scratch folder ${p.worktree} is kept: it holds work`
-    : `the checkout ${p.worktree}${p.branch ? ` on ${p.branch}` : ""} is ` +
-        "kept: it holds work";
+  if (p.scratch) {
+    return `the scratch folder ${p.worktree} is kept: it holds work`;
+  }
+  const on = p.branch ? ` on ${p.branch}` : "";
+  return `the checkout ${p.worktree}${on} is kept: it holds work`;
 }
 
 /** Names a checkout a release kept with work in it, once: a `keep` release
@@ -314,6 +334,11 @@ function nameKept(
   if (text && !notices.some((n) => n.text === text)) notices.push({ text });
 }
 
+/** Whether a failed `openChat` keeps the live folder it claimed. The live
+ *  folder is kept when a harness started, whether or not the archive could
+ *  be written; it still holds the stderr log a person needs. */
+type OpenClaim = { keepFolder?: boolean };
+
 /** Moves a chat's folder to the archive, unless it is there, and marks it
  *  `archived`. */
 function archive(id: string, at: string, record: ChatRecord): void {
@@ -323,6 +348,41 @@ function archive(id: string, at: string, record: ChatRecord): void {
     renameSync(at, to);
   }
   writeRecord(join(to, "chat.json"), { ...record, lifecycle: "archived" });
+}
+
+/**
+ * Archives an open that failed after it tried to start a harness, dated
+ * now, and makes its error name the folder that holds the stderr log and
+ * each notice, such as a kept checkout. A folder that cannot move stays at
+ * its live path, so the stderr log is still there to read; its checkout
+ * then follows the sweep's orphan rule.
+ */
+function keepFailedOpen(record: ChatRecord, err: Error | undefined): void {
+  const removedAt = new Date().toISOString();
+  const from = chatDir(record.id);
+  const to = archivedChatDir(record.id);
+  const lines = record.notices.map((n) => n.text);
+  let keptAt: string | undefined;
+  try {
+    archive(record.id, from, { ...record, updatedAt: removedAt, removedAt });
+    keptAt = to;
+    lines.push(`the chat's folder and stderr log are kept in ${to}`);
+  } catch (moveErr) {
+    // A failed write after the rename leaves the folder in the archive. A
+    // failed rename or mkdir leaves it at the live path.
+    if (existsSync(from)) keptAt = from;
+    else if (existsSync(to)) keptAt = to;
+    lines.push(
+      `cannot archive the chat's folder: ${moveErr instanceof Error ? moveErr.message : String(moveErr)}`,
+    );
+    if (keptAt) {
+      lines.push(`the chat's folder and stderr log are kept in ${keptAt}`);
+    }
+  }
+  if (err === undefined) return;
+  // The start's help names the stderr log where it was written.
+  if (keptAt) err.message = err.message.replaceAll(from, keptAt);
+  for (const line of lines) err.message += `\n${line}`;
 }
 
 /** The chat both entries build: a new agent from `agent`, or the one
@@ -340,6 +400,7 @@ async function buildChat(
   }: ChatDeps,
   meta: Pick<ChatRecord, "id" | "createdAt" | "updatedAt">,
   start: AgentRequest | ChatRecord,
+  claim?: OpenClaim,
 ): Promise<Chat> {
   const from = "lifecycle" in start ? start : undefined;
   const { id } = meta;
@@ -428,6 +489,7 @@ async function buildChat(
   });
 
   const nextStderr = stderrLogs(dir);
+  let failed: ParticipantRecord | undefined;
   const owner: Owner = {
     id,
     bus,
@@ -449,6 +511,9 @@ async function buildChat(
     // A chat has nobody to send an answer on to.
     onTurnEnd: () => {},
     onChange: saveSoon,
+    onAddFailed: (saved) => {
+      failed = saved;
+    },
   };
 
   let m: Member;
@@ -474,6 +539,21 @@ async function buildChat(
       await eventLog?.close();
     } catch {
       // Keep the cause that stopped the chat from opening.
+    }
+    if (failed) {
+      // Even if archiving fails, keep the folder: it holds the stderr log.
+      if (claim) claim.keepFolder = true;
+      const repositories = places.repositories();
+      keepFailedOpen(
+        {
+          ...meta,
+          lifecycle: "archived",
+          notices,
+          ...(repositories.length > 0 && { repositories }),
+          participant: { ...failed, status: "exited" },
+        },
+        err instanceof Error ? err : undefined,
+      );
     }
     throw err;
   }
@@ -565,7 +645,7 @@ async function buildChat(
 }
 
 /** `chat.json` for `id`, read and checked, or a throw naming what is wrong. */
-function readChatRecord(path: string, id: string): ChatRecord {
+export function readChatRecord(path: string, id: string): ChatRecord {
   const bad = (why: string) => new Error(`${path}: ${why}`);
   let raw: unknown;
   try {
