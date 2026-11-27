@@ -461,6 +461,51 @@ test("a flag with no value records today's outcome", {
   ]);
 });
 
+test("an empty value is refused like a missing value", {
+  concurrency: 4,
+  timeout: 60_000,
+}, async (t) => {
+  const f = await fixture(t);
+  await runCases(t, f, [
+    {
+      name: "prompt --cmd with an empty value",
+      args: ["hi", "--cmd", ""],
+      code: 1,
+      stderr: "Option '--cmd <value>' argument missing",
+    },
+    {
+      name: "prompt --cmd= with an empty value",
+      args: ["hi", "--cmd="],
+      code: 1,
+      stderr: "Option '--cmd <value>' argument missing",
+    },
+    {
+      name: "run --file with an empty value",
+      args: ["run", "--file", ""],
+      code: 1,
+      stderr: "Option '--file <value>' argument missing",
+    },
+    {
+      name: "workspace --cwd with an empty value",
+      args: ["workspace", "--cwd", ""],
+      code: 1,
+      stderr: "Option '--cwd <value>' argument missing",
+    },
+    {
+      name: "loop --cmd with an empty value",
+      args: ["loop", "recipe", "task", "--cmd", ""],
+      code: 1,
+      stderr: "Option '--cmd <value>' argument missing",
+    },
+    {
+      name: "room add --cmd with an empty value",
+      args: ["room", "add", "mock", "--cmd", ""],
+      code: 1,
+      stderr: "Option '--cmd <value>' argument missing",
+    },
+  ]);
+});
+
 test("a repeated value flag records today's outcome", {
   concurrency: 4,
   timeout: 60_000,
@@ -1364,6 +1409,77 @@ test("every argument refusal owned by cli.ts is pinned", {
       args: ["demo", "x"],
       code: 1,
       stderr: DEMO_USAGE,
+    },
+  ]);
+});
+
+test("global options and -- still cover the handoffs", {
+  concurrency: 4,
+  timeout: 60_000,
+}, async (t) => {
+  const f = await fixture(t);
+  await runCases(t, f, [
+    {
+      name: "--help before daemon start",
+      args: ["--help", "daemon", "start"],
+      code: 0,
+      stdout: HELP,
+    },
+    {
+      name: "daemon start --help",
+      args: ["daemon", "start", "--help"],
+      code: 0,
+      stdout: HELP,
+    },
+    {
+      name: "--version before daemon start",
+      args: ["--version", "daemon", "start"],
+      code: 1,
+      stderr: "--version takes no other arguments",
+    },
+    {
+      name: "daemon start --version",
+      args: ["daemon", "start", "--version"],
+      code: 1,
+      stderr: "--version takes no other arguments",
+    },
+    {
+      name: "--version before chat",
+      args: ["--version", "chat"],
+      code: 1,
+      stderr: "--version takes no other arguments",
+    },
+    {
+      name: "chat --version",
+      args: ["chat", "--version"],
+      code: 1,
+      stderr: "--version takes no other arguments",
+    },
+    {
+      name: "daemon start -- --help stays positional",
+      args: ["daemon", "start", "--", "--help"],
+      code: 1,
+      stderr:
+        "Unexpected argument '--help'. This command does not take positional arguments",
+    },
+    {
+      name: "chat -- --version stays positional",
+      args: ["chat", "--", "--version"],
+      code: 1,
+      stderr: NO_DAEMON,
+    },
+    {
+      name: "chat -- --quiet stays positional",
+      args: ["chat", "--", "--quiet"],
+      code: 1,
+      stderr: NO_DAEMON,
+    },
+    {
+      name: "daemon start -- --verbose stays positional",
+      args: ["daemon", "start", "--", "--verbose"],
+      code: 1,
+      stderr:
+        "Unexpected argument '--verbose'. This command does not take positional arguments",
     },
   ]);
 });

@@ -298,6 +298,45 @@ function positionalsWithIndex(
   return words;
 }
 
+/** Everything a child parser should see; only global flags before `--` go. */
+function handoffArgs(...removed: (number | undefined)[]): string[] {
+  const drop = new Set(removed.filter((index) => index !== undefined));
+  const rest: string[] = [];
+  let literal = false;
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i] as string;
+    if (drop.has(i)) continue;
+    if (arg === "--") literal = true;
+    else if (!literal && (arg === "--quiet" || arg === "--verbose")) continue;
+    rest.push(arg);
+  }
+  return rest;
+}
+
+/**
+ * The global flags a handoff still owns. `strict: false` leaves the child's
+ * own options alone, and `--` still ends options. Only the named flags are
+ * returned.
+ */
+function handoffFlags(
+  names: string[],
+): Map<string, string | boolean | undefined> {
+  const options: ParseArgsOptionsConfig = Object.fromEntries(
+    names.map((name) => [name, booleanOption]),
+  );
+  const { values: parsed } = parseArgs({
+    args: argv,
+    options,
+    allowPositionals: true,
+    strict: false,
+  });
+  const flags: Map<string, string | boolean | undefined> = new Map();
+  for (const name of names) {
+    if (parsed[name] === true) flags.set(name, true);
+  }
+  return flags;
+}
+
 const SIMPLE_LEAVES = new Map<string, Leaf>([
   ["demo", "demo"],
   ["run", "run"],
@@ -365,7 +404,11 @@ const daemonStartVerb =
   commandWords[0] === "daemon" && commandWords[1] === "start";
 let values = new Map<string, string | boolean | undefined>();
 let positional: string[] = commandWords;
-if (!chatVerb && !daemonStartVerb && argv.length !== 0) {
+if (chatVerb) {
+  values = handoffFlags(["version"]);
+} else if (daemonStartVerb) {
+  values = handoffFlags(["help", "version"]);
+} else if (argv.length !== 0) {
   const leaf = selectLeaf(commandWords);
   try {
     const parsed = parseArgs({
@@ -384,6 +427,16 @@ if (!chatVerb && !daemonStartVerb && argv.length !== 0) {
     const message = messageOf(err);
     console.error(message);
     if (message.startsWith("Unknown option ")) console.error(USAGE[leaf]);
+    process.exit(1);
+  }
+}
+
+// `parseArgs` accepts an empty string as a value. A flag that is present but
+// carries no value is a usage error, not an absence: `--cmd ""` must not
+// silently start the default harness.
+for (const [name, value] of values) {
+  if (value === "") {
+    console.error(`Option '--${name} <value>' argument missing`);
     process.exit(1);
   }
 }
@@ -526,11 +579,10 @@ if (chatVerb) {
   // when imported, so the word that chose it is taken out and the rest is
   // handed over as typed. `wordEntries[0]` is that word's argv index: a flag
   // value that happens to be `chat` must stay. The global presentation
-  // flags go too, as for `daemon start`: `chat.ts` defines neither.
+  // flags before `--` go too, as for `daemon start`: `chat.ts` defines
+  // neither, but after `--` they are the caller's text.
   const chatAt = wordEntries[0]?.index;
-  const rest = argv.filter(
-    (a, i) => i !== chatAt && a !== "--quiet" && a !== "--verbose",
-  );
+  const rest = handoffArgs(chatAt);
   process.argv.splice(2, Infinity, ...rest);
   await import("./chat.ts");
 } else if (argv.length === 0) {
@@ -551,14 +603,11 @@ if (chatVerb) {
 } else if (daemonStartVerb) {
   // `daemon.ts` parses its own flags from `process.argv`, so the words that
   // chose it — by their argv index, as for `chat` — and the global
-  // presentation flags it does not define are taken out, and the rest is
-  // handed over as typed so `--port n` reaches it.
+  // presentation flags before `--` are taken out, and the rest is handed
+  // over as typed so `--port n` reaches it.
   const daemonAt = wordEntries[0]?.index;
   const startAt = wordEntries[1]?.index;
-  const rest = argv.filter(
-    (a, i) =>
-      i !== daemonAt && i !== startAt && a !== "--quiet" && a !== "--verbose",
-  );
+  const rest = handoffArgs(daemonAt, startAt);
   process.argv.splice(2, Infinity, ...rest);
   await import("./daemon.ts");
 } else if (positional[0] === "daemon") {
@@ -2071,10 +2120,6 @@ async function runLoopCommand(): Promise<number> {
   }
   // A missing or empty model is a usage error, before any room (M9-5c).
   const model = list ? undefined : flag("model");
-  if (model === "") {
-    console.error("Option '--model <value>' argument missing");
-    return 1;
-  }
 
   if (list) return listLoopRecipes(cwd);
 
@@ -2341,19 +2386,11 @@ async function runRoomCommand(): Promise<number> {
   const invocation = parseRoomInvocation();
   if (!invocation) return 1;
   const { verb, args } = invocation;
-  // A usage error is the caller's, not the daemon's: catch a missing or empty
-  // model or level before any request (M9-5b, #392; M9-9b, #509).
+  // A usage error is the caller's, not the daemon's: the argv guard has
+  // already refused a missing or empty model or level before any request
+  // (M9-5b, #392; M9-9b, #509).
   const model = verb === "add" ? flag("model") : undefined;
   const level = verb === "add" ? flag("level") : undefined;
-  for (const [name, value] of [
-    ["model", model],
-    ["level", level],
-  ] as const) {
-    if (value === "") {
-      console.error(`Option '--${name} <value>' argument missing`);
-      return 1;
-    }
-  }
   const d = await findDaemon();
   if (!d) return 1;
   const found = await roomAndSender(d);
