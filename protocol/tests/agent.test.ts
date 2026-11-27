@@ -621,7 +621,7 @@ test("a live call's question has its whole title, a late one the cut title, and 
   assert.equal(announced?.title, LONG_TITLE);
 });
 
-test("a settled call keeps a title of KEPT_TITLE characters whole", async (t) => {
+test("a settled call keeps KEPT_TITLE characters whole and cuts one more", async (t) => {
   const { send, ask } = await toolCallProbe(t);
   const title = "y".repeat(KEPT_TITLE);
   await send({
@@ -632,6 +632,16 @@ test("a settled call keeps a title of KEPT_TITLE characters whole", async (t) =>
     status: "completed",
   });
   assert.equal((await ask("c1")).title, title);
+
+  const over = "z".repeat(KEPT_TITLE + 1);
+  await send({
+    sessionUpdate: "tool_call",
+    toolCallId: "c2",
+    title: over,
+    kind: "execute",
+    status: "completed",
+  });
+  assert.equal((await ask("c2")).title, `${"z".repeat(KEPT_TITLE - 1)}…`);
 });
 
 test("a turn's end cuts the title of a live call with no input", async (t) => {

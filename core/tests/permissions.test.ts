@@ -250,6 +250,18 @@ test("a settled decision keeps a cut title; an open one and its event keep it wh
   queue.answer(next.id, true);
   await short;
   assert.equal(queue.get(next.id)?.title, "do edit");
+
+  // One character past the limit is the boundary the cut has to catch.
+  const boundary = policy({
+    agent: "task-a",
+    toolCall: { title: "z".repeat(KEPT_TITLE + 1), kind: "execute" },
+    options: [],
+  });
+  const [edge] = queue.list();
+  assert.ok(edge);
+  queue.answer(edge.id, true);
+  await boundary;
+  assert.equal(queue.get(edge.id)?.title, `${"z".repeat(KEPT_TITLE - 1)}…`);
 });
 
 test("a question carries the tool's input as text, cut to stay under 4 KB", () => {
