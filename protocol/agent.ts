@@ -228,16 +228,17 @@ function settled({ title, kind, status }: RememberedToolCall) {
 /**
  * The longest title a settled call or decision keeps, in characters (M12-11).
  * Only the 32 MiB line limit bounds a harness's title, and a whole shell
- * command can be the title: 51,580 characters was seen. A live call keeps its
- * whole title, so a question about it shows all of it; a late question shows
- * the cut one. The event log keeps the whole line. 1,000 fills the question
- * box on a normal screen. `core/permissions.ts` cuts a settled decision's
- * title with it too.
+ * command can be the title: 51,580 characters was seen in two weeks of
+ * event logs (#545). A call keeps its whole title until it first settles, so
+ * a question about a live call shows all of it; a late question shows the
+ * cut one. The event log keeps the whole line. 1,000 fills the question box
+ * on a normal screen. `core/permissions.ts` cuts a settled decision's title
+ * at it too.
  */
 export const KEPT_TITLE = 1000;
 
 /** A title cut to `KEPT_TITLE`, ending with `…` when it was cut. */
-export const cutTitle = (title: string) =>
+const cutTitle = (title: string) =>
   title.length > KEPT_TITLE ? `${title.slice(0, KEPT_TITLE - 1)}…` : title;
 
 interface ReadTextFileParams {

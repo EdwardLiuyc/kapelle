@@ -1198,7 +1198,9 @@ instead. `turn` is the number on that turn's `_client_user_message`.
 ```
 
 `kind` is one of `read`, `edit`, `delete`, `move`, `search`, `execute`, `think`, `fetch`,
-`switch_mode`, `other`. Treat `id` as an opaque string.
+`switch_mode`, `other`. Treat `id` as an opaque string. A question about a tool call that
+has already ended can have a cut `title`: see
+[`GET /permissions/:id`](#get-permissionsid).
 
 `input` is the tool's input as the harness sent it, so a person can judge the action. Since
 1.6. It is absent when the harness sent none. Each value is text: a value that was not a

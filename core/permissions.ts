@@ -35,7 +35,7 @@
 
 import { randomUUID } from "node:crypto";
 
-import { cutTitle, type Policy, type PolicyEdit } from "../protocol/agent.ts";
+import { KEPT_TITLE, type Policy, type PolicyEdit } from "../protocol/agent.ts";
 import type { Diff, PermissionReason, ToolKind } from "../protocol/types.ts";
 import { editDiff } from "./diff.ts";
 import type { EventBus } from "./events.ts";
@@ -221,7 +221,7 @@ export function createPermissionQueue(timeoutMs: number) {
         pending.delete(id);
         settled.set(id, {
           ...decision,
-          title: cutTitle(decision.title),
+          title: cut(decision.title, KEPT_TITLE),
           allow,
           reason,
         });

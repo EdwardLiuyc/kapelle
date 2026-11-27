@@ -40,9 +40,8 @@ export type { AgentEvent, Diff, PermissionReason, ToolCallStatus, ToolKind };
 /**
  * The contract version (B2, amended 2026-09-22). `major` goes up for a change
  * that breaks a client; `minor` goes up when something is added, or changed
- * so that old clients keep working (M12-11). A client
- * refuses a daemon with a different `major` and warns on a different `minor`
- * (B5).
+ * so that old clients keep working (M12-11). A client refuses a daemon with a
+ * different `major` and warns on a different `minor` (B5).
  *
  * Only a **stable** part is versioned. A provisional part changes with its
  * named story and without a version step — that is what the label is for

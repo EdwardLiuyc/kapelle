@@ -10,10 +10,9 @@
  * (#62 R4), stderr capture on death, `#guardPath` containment, `#guardWrite`'s
  * no-ask refusal and its reuse of an approved edit decision bound to that
  * decision's shown text (#310), the toolCall-id lookup's parity with the
- * pre-port client, a finished call
- * that keeps its title and kind but not its input (#163), and its title cut
- * (M12-11), the handshake's
- * version/auth handling, and exact read ranges.
+ * pre-port client, a finished call that keeps its title and kind but not its
+ * input (#163), the handshake's version/auth handling, and exact read ranges.
+ * A finished call's kept title is also cut at `KEPT_TITLE` (M12-11).
  */
 
 import assert from "node:assert/strict";
