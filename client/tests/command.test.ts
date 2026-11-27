@@ -497,7 +497,7 @@ test("delete retries after room_active, and falls back to GET after room_dismiss
       "DELETE /rooms/room-fallback",
       [
         [409, active],
-        [500, { error: { code: "delete_failed" } }],
+        [500, { error: { code: "delete_failed", message: "still busy" } }],
       ],
     ],
     [
@@ -525,7 +525,13 @@ test("delete retries after room_active, and falls back to GET after room_dismiss
     sendJson(res, 500, { error: { code: "unexpected", message: key } });
   });
   await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
-  t.after(() => server.close());
+  t.after(
+    () =>
+      new Promise<void>((ok) => {
+        server.close(() => ok());
+        server.closeAllConnections();
+      }),
+  );
   const d: DaemonAddress = {
     port: (server.address() as AddressInfo).port,
     token: "tok",
@@ -539,6 +545,7 @@ test("delete retries after room_active, and falls back to GET after room_dismiss
   assert.equal(fallback.ok, false);
   if (!fallback.ok) {
     assert.equal(fallback.code, "delete_failed");
+    assert.equal(fallback.message, "still busy");
     assert.equal(fallback.room?.id, "room-fallback");
   }
 
