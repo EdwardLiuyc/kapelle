@@ -14,6 +14,7 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -34,6 +35,7 @@ import {
   chatDir,
   finishChatRemove,
   openChat,
+  readChatRecord,
   restoreChat,
 } from "../chat.ts";
 import { createEventBus } from "../events.ts";
@@ -667,6 +669,100 @@ test("an open whose harness wrote and failed is archived with its stderr log, an
     notices.some((n) => n.includes("leaving orphan worktree")),
     false,
     `the archived chat kept its checkout: ${notices.join(" | ")}`,
+  );
+});
+
+test("an open whose harness fails without work is still archived with its stderr log (M11-14)", async (t) => {
+  const repo = await gitRepo(t);
+  const script = join(await tempDir(t), "agent.sh");
+  writeFileSync(script, "#!/bin/sh\necho 'no login' >&2\nexit 1\n");
+  chmodSync(script, 0o755);
+  const id = newChatId();
+  let err: unknown;
+  try {
+    await openChat({
+      ...deps(),
+      id,
+      agent: roomAgent({ cmd: script, name: "solo", cwd: repo }),
+    });
+  } catch (caught) {
+    err = caught;
+  }
+  assert.ok(err instanceof Error, "the open should fail");
+
+  const archived = archivedChatDir(id);
+  const file = join(archived, "chat.json");
+  assert.ok(!existsSync(chatDir(id)), "the live folder moved");
+  const record = readChatRecord(file, id);
+  assert.equal(record.lifecycle, "archived");
+  assert.equal(typeof record.removedAt, "string");
+  assert.equal(record.participant.status, "exited");
+  assert.deepEqual(record.repositories, [repo]);
+  assert.equal(existsSync(record.participant.worktree), false);
+  const log = join(archived, `${record.participant.id}.stderr.log`);
+  assert.match(readFileSync(log, "utf8"), /no login/);
+  assert.ok(err.message.includes(archived), err.message);
+  assert.ok(err.message.includes(log), err.message);
+});
+
+// This end-to-end test owns the archive fallback, error and sweep checks.
+// pi-lens-ignore: high-fan-out
+test("an open that cannot be archived keeps its stderr log and the sweep keeps its checkout (M11-14)", async (t) => {
+  const repo = await gitRepo(t);
+  // A file where the archive folder belongs makes the move fail.
+  mkdirSync(join(stateDir(), "chats"), { recursive: true });
+  const blocker = join(stateDir(), "chats", "archive");
+  writeFileSync(blocker, "not a folder\n");
+  const script = join(await tempDir(t), "agent.sh");
+  writeFileSync(
+    script,
+    "#!/bin/sh\necho work > work.txt\necho 'no login' >&2\nexit 1\n",
+  );
+  chmodSync(script, 0o755);
+  const id = newChatId();
+  let err: unknown;
+  try {
+    await openChat({
+      ...deps(),
+      id,
+      agent: roomAgent({ cmd: script, name: "solo", cwd: repo }),
+    });
+  } catch (caught) {
+    err = caught;
+  }
+  assert.ok(err instanceof Error, "the open should fail");
+
+  const live = chatDir(id);
+  assert.ok(existsSync(live), "the folder that holds stderr is kept");
+  const stderr = readdirSync(live).find((name) => name.endsWith(".stderr.log"));
+  assert.ok(stderr, "the harness wrote a stderr log");
+  const log = join(live, stderr);
+  assert.match(readFileSync(log, "utf8"), /no login/);
+  assert.ok(err.message.includes(live), err.message);
+  assert.ok(err.message.includes(log), err.message);
+
+  // With the blocker gone, the folder has no record, so the checkout follows
+  // the orphan rule; its work makes that rule keep and name it.
+  rmSync(blocker);
+  const notices: string[] = [];
+  await sweepBoot({
+    repos: [repo],
+    childrenFile: join(await tempDir(t), "children.json"),
+    onNotice: (text) => notices.push(text),
+  });
+  const worktree = join(
+    stateDirFor(repo),
+    "wt",
+    id,
+    readdirSync(join(stateDirFor(repo), "wt", id))[0] as string,
+  );
+  assert.ok(existsSync(join(worktree, "work.txt")), notices.join("\n"));
+  assert.ok(
+    notices.some(
+      (notice) =>
+        notice.includes("leaving orphan worktree") && notice.includes(worktree),
+    ),
+    notices.join("\n"),
   );
 });
 

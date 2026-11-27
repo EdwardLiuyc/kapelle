@@ -1971,12 +1971,19 @@ async function writeChat(
 test("a live chat's checkout and branch are kept; one with no record is an orphan", async (t) => {
   const root = await gitRepo(t);
   const chat = await writeChat(root, "active");
-  const stray = await addWorktree(root, "p-solo", newChatId());
+  const strayId = newChatId();
+  await mkdir(chatDir(strayId), { recursive: true });
+  const stray = await addWorktree(root, "p-solo", strayId);
 
   const notices = await sweep(root, join(await tempDir(t), "children.json"));
 
   assert.equal(existsSync(chat.worktree), true, notices.join("\n"));
   assert.equal(await hasBranch(root, chat.branch), true);
+  assert.equal(
+    existsSync(join(chatDir(strayId), "chat.json")),
+    false,
+    "the stray chat folder has no record",
+  );
   assert.equal(existsSync(stray), false, "the orphan rule applies (B1)");
 });
 
@@ -1987,6 +1994,11 @@ test("a removed chat inside retention is kept, and one past it is reaped once wi
     root,
     "archived",
     new Date(PAST_RETENTION).toISOString(),
+  );
+  const boundary = await writeChat(
+    root,
+    "archived",
+    new Date(PAST_RETENTION - DEFAULT_RETENTION_MS).toISOString(),
   );
   const children = join(await tempDir(t), "children.json");
 
@@ -1999,6 +2011,13 @@ test("a removed chat inside retention is kept, and one past it is reaped once wi
   assert.equal(existsSync(recent.worktree), true, "inside its window");
   assert.equal(await hasBranch(root, recent.branch), true);
   assert.equal(existsSync(recent.file), true);
+  assert.equal(
+    existsSync(boundary.worktree),
+    true,
+    "the window is not past at exactly its edge",
+  );
+  assert.equal(await hasBranch(root, boundary.branch), true);
+  assert.equal(existsSync(boundary.file), true);
 
   const again = await sweep(root, children, PAST_RETENTION);
   assert.equal(
