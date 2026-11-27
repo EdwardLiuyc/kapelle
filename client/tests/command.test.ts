@@ -1,12 +1,16 @@
 /**
  * The typed room commands — `client/command.ts`, story M4-5 (#181).
  *
- * Only the parser: no daemon. `tests/daemon-rooms.test.ts` sends each command to
- * its route, and shows each refusal's message, against `mock-agent.mjs`.
+ * The parser and route helpers that can run without a full daemon.
+ * `tests/daemon-rooms.test.ts` sends each command to its real HTTP route, and
+ * shows each refusal's message, against `mock-agent.mjs`.
  */
 
 import assert from "node:assert/strict";
 import { mkdtemp, rmdir } from "node:fs/promises";
+import type { ServerResponse } from "node:http";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -16,9 +20,11 @@ import {
   loopCommand,
   modelLines,
   parseCommand,
+  runCommand,
   USAGE,
 } from "../command.ts";
 import type { ParticipantDto } from "../contract.ts";
+import type { DaemonAddress } from "../daemon.ts";
 import { FOLDER_GONE } from "../folder.ts";
 
 const roster = [
@@ -26,6 +32,15 @@ const roster = [
   { id: "p-b", name: "Bob" },
 ];
 const parse = (s: string) => parseCommand(s, roster);
+
+function sendJson(res: ServerResponse, status: number, body?: unknown): void {
+  if (body === undefined) {
+    res.writeHead(status).end();
+  } else {
+    res.writeHead(status, { "content-type": "application/json" });
+    res.end(JSON.stringify(body));
+  }
+}
 
 test("a line that is not a known command is a message", () => {
   for (const s of [
@@ -460,6 +475,133 @@ test("the delete preview names every branch and only its unmerged commits", () =
   );
   assert.deepEqual(deletePreviewLines({ branches: [] }), [
     "no room-owned branches would be removed",
+  ]);
+});
+
+test("delete retries after room_active, and falls back to GET after room_dismissed", async (t) => {
+  const calls: string[] = [];
+  const room = (id: string) => ({
+    id,
+    cwd: "/r",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    status: "dismissed",
+    seq: 0,
+    participants: [],
+  });
+  const active = { error: { code: "room_active", message: "active" } };
+  const replies = new Map<string, [number, unknown?][]>([
+    ["DELETE /rooms/room-ok", [[409, active], [204]]],
+    ["POST /rooms/room-ok/dismiss", [[200, room("room-ok")]]],
+    [
+      "DELETE /rooms/room-fallback",
+      [
+        [409, active],
+        [500, { error: { code: "delete_failed", message: "still busy" } }],
+      ],
+    ],
+    [
+      "POST /rooms/room-fallback/dismiss",
+      [
+        [
+          409,
+          {
+            error: {
+              code: "room_dismissed",
+              message: "room room-fallback is already dismissed",
+            },
+          },
+        ],
+      ],
+    ],
+    ["GET /rooms/room-fallback", [[200, room("room-fallback")]]],
+    ["DELETE /rooms/room-refused", [[409, active]]],
+    [
+      "POST /rooms/room-refused/dismiss",
+      [[409, { error: { code: "room_busy", message: "room is busy" } }]],
+    ],
+    ["DELETE /rooms/room-no-get", [[409, active], [204]]],
+    [
+      "POST /rooms/room-no-get/dismiss",
+      [
+        [
+          409,
+          {
+            error: {
+              code: "room_dismissed",
+              message: "room room-no-get is already dismissed",
+            },
+          },
+        ],
+      ],
+    ],
+    [
+      "GET /rooms/room-no-get",
+      [[500, { error: { code: "get_failed", message: "cannot read room" } }]],
+    ],
+  ]);
+  const used = new Map<string, number>();
+  const server = createServer((req, res) => {
+    const key = `${req.method} ${req.url}`;
+    calls.push(key);
+    const n = used.get(key) ?? 0;
+    used.set(key, n + 1);
+    const reply = replies.get(key)?.[n];
+    if (reply) {
+      sendJson(res, ...reply);
+      return;
+    }
+    sendJson(res, 500, { error: { code: "unexpected", message: key } });
+  });
+  await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
+  t.after(
+    () =>
+      new Promise<void>((ok) => {
+        server.close(() => ok());
+        server.closeAllConnections();
+      }),
+  );
+  const d: DaemonAddress = {
+    port: (server.address() as AddressInfo).port,
+    token: "tok",
+    fromClient: false,
+  };
+
+  const direct = await runCommand(d, "room-ok", { verb: "delete" });
+  assert.deepEqual(direct, { ok: true, line: "deleted room-ok" });
+
+  const fallback = await runCommand(d, "room-fallback", { verb: "delete" });
+  assert.equal(fallback.ok, false);
+  if (!fallback.ok) {
+    assert.equal(fallback.code, "delete_failed");
+    assert.equal(fallback.message, "still busy");
+    assert.equal(fallback.room?.id, "room-fallback");
+  }
+
+  const refused = await runCommand(d, "room-refused", { verb: "delete" });
+  assert.equal(refused.ok, false);
+  if (!refused.ok) {
+    assert.equal(refused.code, "room_busy");
+    assert.match(refused.message, /busy/);
+  }
+
+  const noGet = await runCommand(d, "room-no-get", { verb: "delete" });
+  assert.deepEqual(noGet, { ok: true, line: "deleted room-no-get" });
+
+  assert.deepEqual(calls, [
+    "DELETE /rooms/room-ok",
+    "POST /rooms/room-ok/dismiss",
+    "DELETE /rooms/room-ok",
+    "DELETE /rooms/room-fallback",
+    "POST /rooms/room-fallback/dismiss",
+    "GET /rooms/room-fallback",
+    "DELETE /rooms/room-fallback",
+    "DELETE /rooms/room-refused",
+    "POST /rooms/room-refused/dismiss",
+    "DELETE /rooms/room-no-get",
+    "POST /rooms/room-no-get/dismiss",
+    "GET /rooms/room-no-get",
+    "DELETE /rooms/room-no-get",
   ]);
 });
 

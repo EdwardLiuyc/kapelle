@@ -1,8 +1,20 @@
 {
-  "ignore": ["assets/"],
+  "ignore": ["/assets/"],
   "rules": {
     "cli-output": {
       "disable": ["no-console-except-error-js"]
+    },
+    "console-statement": {
+      "ignorePaths": [
+        "# Console output belongs to the CLI, chat and daemon presentation layers.",
+        "/cli.ts",
+        "/chat.ts",
+        "/chat/",
+        "/daemon/"
+      ]
+    },
+    "high-import-coupling": {
+      "ignorePaths": ["/cli.ts"]
     }
   }
 }

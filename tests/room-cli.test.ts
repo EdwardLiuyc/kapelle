@@ -147,7 +147,7 @@ test("from a participant's checkout, info and send find the room and the sender"
   // Any participant may read: here `dev`, from its own checkout.
   const info = await room(t, f.runtime, dev.worktree, ["info"]);
   assert.equal(info.code, 0, info.stderr);
-  assert.match(info.stdout, new RegExp(`^${f.room.id}  active`));
+  assert.ok(info.stdout.startsWith(`${f.room.id}  active`));
   // Each participant's branch follows its mode (#358). Whole rows, so a
   // column added anywhere fails here.
   for (const p of [po, dev, rev]) assert.ok(p.branch, p.name);
@@ -200,7 +200,7 @@ test("a room opened in a repository subdirectory is found from its checkout, wor
   for (const cwd of [checkout, po.worktree, inside]) {
     const info = await room(t, runtime, cwd, ["info"]);
     assert.equal(info.code, 0, info.stderr);
-    assert.match(info.stdout, new RegExp(`^${opened.body.id}  active`));
+    assert.ok(info.stdout.startsWith(`${opened.body.id}  active`));
   }
 });
 
@@ -273,7 +273,7 @@ test("a room add and info keep an ESC in a harness label off the terminal", asyn
 
   const info = await room(t, f.runtime, po.worktree, ["info"]);
   assert.equal(info.code, 0, info.stderr);
-  assert.match(info.stdout, new RegExp(`^${f.room.id}  active`));
+  assert.ok(info.stdout.startsWith(`${f.room.id}  active`));
   for (const output of [info.stdout, info.stderr]) {
     assert.ok(!output.includes("\u001b"), JSON.stringify(output));
   }
@@ -355,6 +355,8 @@ test("add --model exits 1 when the agent is not on the model, and keeps it (M9-5
   );
 });
 
+// This end-to-end test owns the fake daemon, recorder and roster checks.
+// pi-lens-ignore: high-fan-out
 test("add --level sends thoughtLevel, fails loudly, and keeps the agent (M9-9b)", async (t) => {
   const f = await fixture(t);
   const po = f.p("po").worktree;

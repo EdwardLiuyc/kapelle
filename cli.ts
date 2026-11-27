@@ -150,6 +150,8 @@ function flag(name: string, fallback?: string): string | undefined {
 const has = (name: string) => argv.includes(`--${name}`);
 
 /** `catch` binds `unknown`; a harness can reject with anything. */
+// This is the boundary that turns a caught value into a message.
+// pi-lens-ignore: no-unknown-parameters
 const messageOf = (err: unknown) =>
   err instanceof Error ? err.message : String(err);
 
@@ -589,14 +591,16 @@ if (chatVerb) {
  */
 async function runFromFileUnlessRemote(path: string): Promise<number> {
   try {
-    if (await readClientDaemon(clientFile())) {
+    if (await readClientDaemon(clientConfigPath())) {
       console.error(
-        `error: a remote daemon is configured in ${clientFile()}; ` +
+        `error: a remote daemon is configured in ${clientConfigPath()}; ` +
           "non-detached run --file would run on this machine. " +
           "Use: kapelle run --file <file> --detach",
       );
       return 1;
     }
+    // The refusal is this command's exit code; no caller can retry it.
+    // pi-lens-ignore: missing-error-propagation
   } catch (err) {
     console.error(`error: ${messageOf(err)}`);
     return 1;
@@ -614,6 +618,10 @@ async function runFromFileUnlessRemote(path: string): Promise<number> {
  * interleaved token streams are unreadable, and a summary nobody can read is
  * the same as no summary. Only milestones — a tool call — go out live.
  */
+// The run lifecycle is one ordered state machine: concurrency, the asker, bus
+// listeners and shutdown share state across phases, so extraction would pass a
+// mutable context between halves of the same job.
+// pi-lens-ignore: high-complexity, high-fan-out
 async function runFromFile(path: string): Promise<number> {
   const parsed = await loadRunFile(path);
   if (parsed === undefined) return 1;
@@ -956,6 +964,20 @@ interface AttachState {
   notices?: { taskId: string; text: string; kind?: Warning["kind"] }[];
 }
 
+/** The run's verdict from the daemon, a task card, or the cards' own status. */
+function attachStatus(
+  state: AttachState,
+  mine: string | undefined,
+  fromTasks: string,
+): string {
+  if (state.error) return "failed";
+  if (mine !== undefined) return mine === "running" ? "failed" : mine;
+  if (state.status !== undefined && state.status !== "running") {
+    return state.status;
+  }
+  return fromTasks;
+}
+
 function printTask(task: Card): void {
   const secs = (task.durationMs / 1000).toFixed(1);
   console.log(`\n▸ ${task.id} (${task.agent}) ${task.status} in ${secs}s`);
@@ -984,14 +1006,10 @@ function daemonFile(): string {
   return join(runtimeDir(), "daemon.json");
 }
 
-function clientFile(): string {
-  return clientConfigPath();
-}
-
 /** Start the daemon detached when none answers (M9-2). A configured client
  *  daemon is remote: it skips both this start and the runtime folder. */
 async function startDaemon(): Promise<void> {
-  if (await readClientDaemon(clientFile())) return;
+  if (await readClientDaemon(clientConfigPath())) return;
   return ensureDaemon({
     file: daemonFile(),
     log: join(stateDir(), "daemon.log"),
@@ -1012,10 +1030,12 @@ async function startDaemon(): Promise<void> {
  * throws, a different `minor` warns.
  */
 async function findDaemon(): Promise<DaemonAddress | undefined> {
-  const d = await resolveDaemonAddress(clientFile(), daemonFile);
+  const d = await resolveDaemonAddress(clientConfigPath(), daemonFile);
+  // The helper returns its refusal as a string beside the address union.
+  // pi-lens-ignore: no-runtime-typeof
   if (typeof d === "string") {
     console.error(
-      `no daemon is listening (${clientFile()} has no setting and ` +
+      `no daemon is listening (${clientConfigPath()} has no setting and ` +
         `${daemonFile()} is missing or not ready). ` +
         "Start one with: kapelle daemon start",
     );
@@ -1115,6 +1135,8 @@ async function listRuns(): Promise<number> {
  * The filter is ours, not the daemon's — every event already names its task —
  * so a replay still downloads the other tasks' events and drops them.
  */
+// The live attach view is one ordered state machine over a shared stream.
+// pi-lens-ignore: high-complexity, high-fan-out
 async function attachRun(): Promise<number> {
   const [, id, ...extra] = positional;
   if (!id || extra.length) {
@@ -1142,9 +1164,12 @@ async function attachRun(): Promise<number> {
   // Both connection files are read again on every call: a daemon that
   // restarts while this is attached has a new token, and maybe a new port
   // (M5-6). A configured client daemon wins over `daemon.json`.
-  const freshDaemon = () => resolveDaemonAddress(clientFile(), daemonFile);
+  const freshDaemon = () =>
+    resolveDaemonAddress(clientConfigPath(), daemonFile);
   const daemon = async (): Promise<DaemonAddress> => {
     const d = await freshDaemon();
+    // The helper returns its refusal as a string beside the address union.
+    // pi-lens-ignore: no-runtime-typeof
     if (typeof d === "string") throw new Error("no daemon is listening");
     return d;
   };
@@ -1213,8 +1238,9 @@ async function attachRun(): Promise<number> {
   const asker = process.stdin.isTTY ? makeAskPolicy() : undefined;
   let answering = Promise.resolve();
   const answer = (agent: string, decision: ClientPermissionQueuedEvent) => {
-    answering = answering
-      .then(async () => {
+    answering = (async () => {
+      await answering;
+      try {
         const open = await call<PendingDecision[]>(
           await daemon(),
           "/permissions",
@@ -1241,8 +1267,12 @@ async function attachRun(): Promise<number> {
           { method: "POST", body: { allow } },
         );
         if (!posted.ok) console.error(`error: ${posted.error.message}`);
-      })
-      .catch((err) => console.error(`error: ${messageOf(err)}`));
+        // This is the terminal handler for one serialized answer; no caller waits.
+        // pi-lens-ignore: missing-error-propagation
+      } catch (err) {
+        console.error(`error: ${messageOf(err)}`);
+      }
+    })();
   };
 
   const cards = new Map<string, Card>();
@@ -1412,15 +1442,7 @@ async function attachRun(): Promise<number> {
   // settled status is the verdict; the cards only stand in when GET still
   // reads `running` (a cut stream) or is missing (pre-M5-2 daemon).
   const mine = only ? cards.get(only)?.status : undefined;
-  const status: string = state.error
-    ? "failed"
-    : mine !== undefined
-      ? mine === "running"
-        ? "failed"
-        : mine
-      : state.status !== undefined && state.status !== "running"
-        ? state.status
-        : fromTasks;
+  const status = attachStatus(state, mine, fromTasks);
   if (!quiet) {
     console.log(`\n${status} — ${plural(statuses.length, "task")}`);
   } else if (!only && status !== "done" && status !== "warned") {
@@ -1531,7 +1553,14 @@ async function roomAndSender(
   const own = await ownCheckout(d);
   let room: RoomDto;
   let sender: ParticipantDto | undefined;
-  if (typeof own !== "string") {
+  // The helper returns its refusal as a string beside the checkout union.
+  // pi-lens-ignore: no-runtime-typeof
+  if (typeof own === "string") {
+    if (roomFlag === undefined) return own;
+    const r = await call<RoomDto>(d, `/rooms/${encodeURIComponent(roomFlag)}`);
+    if (!r.ok) return `${r.error.message} (${r.error.code})`;
+    room = r.body;
+  } else {
     if (roomFlag !== undefined && roomFlag !== own.room.id) {
       return (
         `this is ${own.self.name}'s checkout in room ${own.room.id}, not in ` +
@@ -1540,12 +1569,6 @@ async function roomAndSender(
     }
     room = own.room;
     sender = own.self;
-  } else if (roomFlag === undefined) {
-    return own;
-  } else {
-    const r = await call<RoomDto>(d, `/rooms/${encodeURIComponent(roomFlag)}`);
-    if (!r.ok) return `${r.error.message} (${r.error.code})`;
-    room = r.body;
   }
   const as = flag("as");
   if (as !== undefined) {
@@ -1559,7 +1582,13 @@ async function roomAndSender(
 async function ownCheckout(
   d: DaemonAddress,
 ): Promise<{ room: RoomDto; self: ParticipantDto } | string> {
-  const real = (p: string) => realpath(p).catch(() => p);
+  const real = async (p: string) => {
+    try {
+      return await realpath(p);
+    } catch {
+      return p;
+    }
+  };
   const typedCwd = resolve(flag("cwd", process.cwd()));
   const cwd = await real(typedCwd);
   const { root, isRepo } = await stateDirRoot(cwd);
@@ -1619,6 +1648,118 @@ function byName(room: RoomDto, name: string): ParticipantDto | undefined {
  * `attach with:` line `kapelle loop` prints: the demo is a chat to try, and
  * its tests drive it there.
  */
+interface CommandFailure {
+  code: string;
+  message: string;
+}
+
+type DemoRoomResult =
+  | { ok: true; room: RoomDto }
+  | { ok: false; code: string; message: string };
+
+function demoGit(cwd: string, ...args: string[]): void {
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=kapelle demo",
+      "-c",
+      "user.email=demo@kapelle.invalid",
+      "-c",
+      "commit.gpgsign=false",
+      ...args,
+    ],
+    { cwd, stdio: "ignore" },
+  );
+}
+
+async function removeOldDemoRooms(
+  d: DaemonAddress,
+  folder: string,
+): Promise<CommandFailure | undefined> {
+  const rooms = await call<RoomListEntry[]>(d, "/rooms");
+  if (!rooms.ok) return rooms.error;
+  // The daemon deletes no room with uncommitted work, and the demo agent
+  // leaves `notes.md`. Clean the checkouts after the dismiss, as the daemon
+  // checks them, so a removed participant's checkout is cleaned too.
+  for (const old of rooms.body.filter((r) => r.cwd === folder)) {
+    console.log(`removing the previous demo room ${old.id}`);
+    const stop = await call<RoomDto>(d, `/rooms/${old.id}/dismiss`, {
+      method: "POST",
+    });
+    if (!stop.ok && stop.error.code !== "room_dismissed") return stop.error;
+    let worktrees: string[] = [];
+    try {
+      worktrees = await roomCheckouts(folder, old.id);
+    } catch {
+      // When git cannot answer, the delete below says why.
+    }
+    for (const worktree of worktrees) {
+      try {
+        demoGit(worktree, "reset", "-q", "--hard");
+        demoGit(worktree, "clean", "-q", "-fd");
+      } catch {
+        // A checkout that is gone has nothing to clean.
+      }
+    }
+    const out = await runCommand(d, old.id, { verb: "delete" });
+    if (!out.ok) return out;
+  }
+  return undefined;
+}
+
+async function resetDemoFolder(folder: string): Promise<void> {
+  await rm(folder, { recursive: true, force: true });
+  await mkdir(folder);
+  await writeFile(
+    join(folder, "README.md"),
+    "# The kapelle demo\n\nA folder for the demo agent. `kapelle demo` makes it again each time.\n",
+  );
+  demoGit(folder, "init", "-q");
+  demoGit(folder, "add", "README.md");
+  demoGit(folder, "commit", "-q", "-m", "The demo folder");
+}
+
+async function openDemoRoom(
+  d: DaemonAddress,
+  folder: string,
+  agent: string,
+): Promise<DemoRoomResult> {
+  const out = await runCommand(d, undefined, {
+    verb: "new",
+    body: {
+      cwd: folder,
+      title: "demo",
+      agents: [
+        {
+          // `node`, as the bin's shebang needs, so the label is `demo-agent`.
+          cmd: `node ${agent}`,
+          name: "demo",
+          role: "developer",
+          mode: "ask",
+        },
+      ],
+    },
+  });
+  if (!out.ok) return { ok: false, code: out.code, message: out.message };
+  return { ok: true, room: out.room as RoomDto };
+}
+
+async function sendDemoIntro(
+  d: DaemonAddress,
+  room: RoomDto,
+): Promise<CommandFailure | undefined> {
+  const demo = room.participants[0];
+  if (!demo)
+    return { code: "", message: `the demo room ${room.id} has no agent` };
+  const sent = await call<MessageAccepted>(
+    d,
+    `/rooms/${room.id}/agents/${demo.id}/messages`,
+    { method: "POST", body: { text: "Hello! Show me around." } },
+  );
+  return sent.ok ? undefined : sent.error;
+}
+
 async function runDemoCommand(): Promise<number> {
   const command = argv.filter((a) => a !== "--quiet" && a !== "--verbose");
   if (command.length !== 1 || command[0] !== "demo") {
@@ -1626,14 +1767,16 @@ async function runDemoCommand(): Promise<number> {
     return 1;
   }
   try {
-    if (await readClientDaemon(clientFile())) {
+    if (await readClientDaemon(clientConfigPath())) {
       console.error(
         "error: kapelle demo is local: its folder and demo-agent.mjs are on " +
-          `this machine, but ${clientFile()} names a daemon elsewhere. ` +
+          `this machine, but ${clientConfigPath()} names a daemon elsewhere. ` +
           "Run kapelle demo on the daemon machine, or remove the client setting.",
       );
       return 1;
     }
+    // The refusal is this command's exit code; no caller can retry it.
+    // pi-lens-ignore: missing-error-propagation
   } catch (err) {
     console.error(`error: ${messageOf(err)}`);
     return 1;
@@ -1651,66 +1794,12 @@ async function runDemoCommand(): Promise<number> {
   if (!d) return 1;
 
   const folder = join(stateDir(), "demo");
-  const rooms = await call<RoomListEntry[]>(d, "/rooms");
-  if (!rooms.ok) {
-    printRefusal(rooms.error);
+  const stale = await removeOldDemoRooms(d, folder);
+  if (stale) {
+    printRefusal(stale);
     return 1;
   }
-  // Its own identity: the person may have no git name set.
-  const git = (cwd: string, ...args: string[]) =>
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=kapelle demo",
-        "-c",
-        "user.email=demo@kapelle.invalid",
-        "-c",
-        "commit.gpgsign=false",
-        ...args,
-      ],
-      { cwd, stdio: "ignore" },
-    );
-  // The daemon deletes no room with uncommitted work, and the demo agent
-  // leaves `notes.md`. So the old checkouts are cleaned after the dismiss,
-  // the same checkouts the daemon checks: git's own worktrees under the
-  // room's folder, so a removed participant's checkout is cleaned too, and
-  // git never runs in a folder that is not one.
-  for (const old of rooms.body.filter((r) => r.cwd === folder)) {
-    console.log(`removing the previous demo room ${old.id}`);
-    const stop = await call<RoomDto>(d, `/rooms/${old.id}/dismiss`, {
-      method: "POST",
-    });
-    if (!stop.ok && stop.error.code !== "room_dismissed") {
-      printRefusal(stop.error);
-      return 1;
-    }
-    // When git cannot answer, the delete below says why.
-    const worktrees = await roomCheckouts(folder, old.id).catch(() => []);
-    for (const worktree of worktrees) {
-      try {
-        git(worktree, "reset", "-q", "--hard");
-        git(worktree, "clean", "-q", "-fd");
-      } catch {
-        // A checkout that is gone has nothing to clean.
-      }
-    }
-    const out = await runCommand(d, old.id, { verb: "delete" });
-    if (!out.ok) {
-      printRefusal(out);
-      return 1;
-    }
-  }
-
-  await rm(folder, { recursive: true, force: true });
-  await mkdir(folder);
-  await writeFile(
-    join(folder, "README.md"),
-    "# The kapelle demo\n\nA folder for the demo agent. `kapelle demo` makes it again each time.\n",
-  );
-  git(folder, "init", "-q");
-  git(folder, "add", "README.md");
-  git(folder, "commit", "-q", "-m", "The demo folder");
+  await resetDemoFolder(folder);
 
   const added = await call<RepoAdded>(d, "/repos", {
     method: "POST",
@@ -1720,46 +1809,64 @@ async function runDemoCommand(): Promise<number> {
     printRefusal(added.error);
     return 1;
   }
-  const out = await runCommand(d, undefined, {
-    verb: "new",
-    body: {
-      cwd: folder,
-      title: "demo",
-      agents: [
-        {
-          // `node`, as the bin's shebang needs, so the label is `demo-agent`.
-          cmd: `node ${agent}`,
-          name: "demo",
-          role: "developer",
-          mode: "ask",
-        },
-      ],
-    },
-  });
-  if (!out.ok) {
-    printRefusal(out);
+  const opened = await openDemoRoom(d, folder, agent);
+  if (!opened.ok) {
+    printRefusal(opened);
     return 1;
   }
-  const room = out.room as RoomDto;
+  const room = opened.room;
+  const sent = await sendDemoIntro(d, room);
+  if (sent) {
+    printRefusal(sent);
+    return 1;
+  }
   const id = room.id;
-  const demo = room.participants[0];
-  if (!demo) {
-    console.error(`error: the demo room ${id} has no agent`);
-    return 1;
-  }
-  const sent = await call<MessageAccepted>(
-    d,
-    `/rooms/${id}/agents/${demo.id}/messages`,
-    { method: "POST", body: { text: "Hello! Show me around." } },
-  );
-  if (!sent.ok) {
-    printRefusal(sent.error);
-    return 1;
-  }
   // As for `chat`: `chat.ts` parses `process.argv` itself.
   // The room first: the setup list would cover it (#463).
   process.argv.splice(2, Infinity, "attach", id, "--no-setup");
   await import("./chat.ts");
+  return 0;
+}
+
+async function listLoopRecipes(cwd: string): Promise<number> {
+  const recipes = await listRecipes(cwd);
+  // A guard only: the package ships `starter` (M10-4), so this fires only
+  // when an install lost its `assets/loops/`.
+  if (!recipes.length) {
+    console.log(`no recipes: looked in ${loopFolders(cwd).join(" and ")}`);
+  }
+  for (const r of recipes) {
+    const hidden = r.wins ? "" : "  (hidden: the one above wins)";
+    console.log(oneLine(`${r.name}  ${r.path}${hidden}`));
+  }
+  return 0;
+}
+
+type LoopRouteCommand = Extract<RouteCommand, { verb: "loop" }>;
+
+async function startLoopRoute(
+  c: LoopRouteCommand,
+  cwd: string,
+): Promise<number> {
+  const d = await findDaemon();
+  if (!d) return 1;
+  const out = await runCommand(d, undefined, c);
+  if (!out.ok) {
+    printRefusal(out);
+    if (out.code === "repo_not_added") {
+      console.error(`add the repository first: kapelle daemon add ${cwd}`);
+    }
+    return 1;
+  }
+  const id = out.room?.id as string;
+  if (process.stdin.isTTY && process.stdout.isTTY) {
+    // As for `chat`: `chat.ts` parses `process.argv` itself.
+    process.argv.splice(2, Infinity, "attach", id);
+    await import("./chat.ts");
+    return 0;
+  }
+  console.log(oneLine(out.line));
+  console.log(`attach with: kapelle chat attach ${id}`);
   return 0;
 }
 
@@ -1804,65 +1911,33 @@ async function runLoopCommand(): Promise<number> {
   // A missing or empty model is a usage error, before any room (M9-5c).
   const model = list ? undefined : flag("model");
 
-  if (list) {
-    const recipes = await listRecipes(cwd);
-    // A guard only: the package ships `starter` (M10-4), so this fires only
-    // when an install lost its `assets/loops/`.
-    if (!recipes.length) {
-      console.log(`no recipes: looked in ${loopFolders(cwd).join(" and ")}`);
-    }
-    for (const r of recipes) {
-      const hidden = r.wins ? "" : "  (hidden: the one above wins)";
-      console.log(oneLine(`${r.name}  ${r.path}${hidden}`));
-    }
-    return 0;
-  }
+  if (list) return listLoopRecipes(cwd);
 
-  const c = loopCommand({
-    recipe: first,
-    task,
-    note,
-    agent: flag("agent"),
-    cmd: flag("cmd"),
-    model,
+  return startLoopRoute(
+    loopCommand({
+      recipe: first,
+      task,
+      note,
+      agent: flag("agent"),
+      cmd: flag("cmd"),
+      model,
+      cwd,
+    }),
     cwd,
-  });
-  const d = await findDaemon();
-  if (!d) return 1;
-  const out = await runCommand(d, undefined, c);
-  if (!out.ok) {
-    printRefusal(out);
-    if (out.code === "repo_not_added") {
-      console.error(`add the repository first: kapelle daemon add ${cwd}`);
-    }
-    return 1;
-  }
-  const id = out.room?.id as string;
-  if (process.stdin.isTTY && process.stdout.isTTY) {
-    // As for `chat`: `chat.ts` parses `process.argv` itself.
-    process.argv.splice(2, Infinity, "attach", id);
-    await import("./chat.ts");
-    return 0;
-  }
-  console.log(oneLine(out.line));
-  console.log(`attach with: kapelle chat attach ${id}`);
-  return 0;
+  );
 }
 
-/**
- * `kapelle room <verb>` (M8-3): what an orchestrator does in its room, from
- * its shell. `add`, `remove` and `ff` act as the screens' `/add`, `/remove`
- * and `/ff` (`client/command.ts`). `send` returns at once: the turn's answer
- * comes back as a reply (M8-2), so there is no `wait`.
- *
- * `send`, `add`, `ff` and `remove` are the orchestrator's. The daemon refuses
- * `send` from a worker (`invalid_sender`); the others carry no sender, so
- * the CLI refuses them here (`not_orchestrator`, decided 2026-10-22, #267).
- * Like the daemon's, the check is a guard against a mistake, not a lock:
- * `--as` passes it. `info` and `diff` only read, so anyone may run them.
- */
-async function runRoomCommand(): Promise<number> {
-  const usage = [
+/** How a busy participant's turn is attributed, after the branch column. */
+function turnFrom(room: RoomDto, p: ParticipantDto): string {
+  if (p.status !== "busy") return "";
+  if (p.turnFrom === undefined) return ", from the person";
+  const sender =
+    room.participants.find((q) => q.id === p.turnFrom)?.name ?? p.turnFrom;
+  return `, from ${oneLine(sender)}`;
+}
+
+function roomUsage(): string {
+  return [
     "usage: kapelle room <verb> [--room <id>] [--as <name>] [--cwd dir]",
     "  info                       the room, each agent's branch, and who sent",
     "                             each busy agent's work",
@@ -1877,8 +1952,22 @@ async function runRoomCommand(): Promise<number> {
     "The checkout it runs in names the room and the sender. --as names another",
     "participant as the sender; --cwd <dir> outside any checkout sends as the person.",
   ].join("\n");
-  const [, verb, ...args] = positional as string[];
-  const takes: Record<string, [min: number, max: number]> = {
+}
+
+interface RoomInvocation {
+  verb: string;
+  args: string[];
+}
+
+interface RoomOrderRequest extends RoomInvocation {
+  model?: string;
+  level?: string;
+}
+
+function roomTakes(): Record<string, [min: number, max: number]> {
+  // The verb token is the runtime key; this is the one lookup shape it needs.
+  // pi-lens-ignore: no-known-value-widening
+  return {
     info: [0, 0],
     send: [1, Infinity],
     add: [0, 1],
@@ -1886,6 +1975,44 @@ async function runRoomCommand(): Promise<number> {
     diff: [1, 2],
     remove: [1, 1],
   };
+}
+
+function roomOptions(verb: string): Set<string> {
+  const options = new Set(["room", "as", "cwd", "quiet", "verbose"]);
+  if (verb === "add") {
+    for (const o of ["cmd", "name", "role", "mode", "model", "level", "base"]) {
+      options.add(o);
+    }
+  }
+  if (verb === "ff") options.add("from");
+  return options;
+}
+
+function checkRoomOptions({ verb, args }: RoomInvocation): boolean {
+  // An option the verb does not take is refused, never dropped: in `send`,
+  // `use --force now` would lose `--force now` from the message unseen.
+  const options = roomOptions(verb);
+  const unknown = argv.find(
+    (a) => a.startsWith("--") && !options.has(a.slice(2)),
+  );
+  if (unknown !== undefined) {
+    const hint = verb === "send" ? "; send such text on stdin" : "";
+    console.error(`error: room ${verb} has no option ${unknown}${hint}`);
+    return false;
+  }
+  // On a terminal, a stdin read would wait for ^D with no word (#334).
+  if (verb === "send" && args.length === 1 && process.stdin.isTTY) {
+    console.error(
+      "error: room send needs the text: after the name, or piped on stdin",
+    );
+    return false;
+  }
+  return true;
+}
+
+function parseRoomInvocation(): RoomInvocation | undefined {
+  const [, verb, ...args] = positional as string[];
+  const takes = roomTakes();
   // `hasOwn`: `takes.constructor` is not a verb (#334).
   const range =
     verb !== undefined && Object.hasOwn(takes, verb) ? takes[verb] : undefined;
@@ -1896,124 +2023,98 @@ async function runRoomCommand(): Promise<number> {
     (verb === "diff" && args[1] !== undefined && args[1] !== "base") ||
     (verb === "ff" && !flag("from"))
   ) {
-    console.error(usage);
-    return 1;
+    console.error(roomUsage());
+    return undefined;
   }
-  // An option the verb does not take is refused, never dropped: in `send`,
-  // `use --force now` would lose `--force now` from the message unseen.
-  const options = new Set(["room", "as", "cwd", "quiet", "verbose"]);
-  if (verb === "add") {
-    for (const o of ["cmd", "name", "role", "mode", "model", "level", "base"]) {
-      options.add(o);
-    }
-  }
-  if (verb === "ff") options.add("from");
-  const unknown = argv.find(
-    (a) => a.startsWith("--") && !options.has(a.slice(2)),
-  );
-  if (unknown !== undefined) {
-    const hint = verb === "send" ? "; send such text on stdin" : "";
-    console.error(`error: room ${verb} has no option ${unknown}${hint}`);
-    return 1;
-  }
-  // On a terminal, a stdin read would wait for ^D with no word (#334).
-  if (verb === "send" && args.length === 1 && process.stdin.isTTY) {
-    console.error(
-      "error: room send needs the text: after the name, or piped on stdin",
-    );
-    return 1;
-  }
-  // A usage error is the caller's, not the daemon's: catch a missing or empty
-  // model or level before any request (M9-5b, #392; M9-9b, #509).
-  const model = verb === "add" ? flag("model") : undefined;
-  const level = verb === "add" ? flag("level") : undefined;
-  const d = await findDaemon();
-  if (!d) return 1;
-  const found = await roomAndSender(d);
-  if (typeof found === "string") {
-    console.error(`error: ${oneLine(found)}`);
-    return 1;
-  }
-  const { room, sender } = found;
-  const named = (name: string) => {
+  const invocation = { verb, args };
+  return checkRoomOptions(invocation) ? invocation : undefined;
+}
+
+type RoomNamed = (name: string) => ParticipantDto | undefined;
+
+function roomNamed(room: RoomDto): RoomNamed {
+  return (name: string) => {
     const p = byName(room, name);
     if (!p) console.error(`error: no participant named ${oneLine(name)}`);
     return p;
   };
+}
 
-  if (verb === "info") {
-    const title = room.title ? `  ${oneLine(room.title)}` : "";
-    console.log(`${room.id}  ${room.status}${title}`);
-    for (const p of room.participants) {
-      const from =
-        p.status !== "busy"
-          ? ""
-          : p.turnFrom === undefined
-            ? ", from the person"
-            : `, from ${oneLine(room.participants.find((q) => q.id === p.turnFrom)?.name ?? p.turnFrom)}`;
-      console.log(
-        oneLine(
-          `  ${p.name}  ${p.role ?? "-"}  ${p.harness}  ${p.mode}  ${p.branch ?? "-"}  ${p.status}${from}`,
-        ),
-      );
-    }
-    return 0;
-  }
+interface RoomContext {
+  d: DaemonAddress;
+  room: RoomDto;
+  sender: ParticipantDto | undefined;
+  named: RoomNamed;
+}
 
-  if (verb === "diff") {
-    const p = named(args[0] as string);
-    if (!p) return 1;
-    const r = await agentDiff(d, room.id, p.id, args[1] ? "base" : "head");
-    if (!r.ok) {
-      printRefusal(r.error);
-      return 1;
-    }
-    console.log(r.body.text ? clean(r.body.text) : "no changes");
-    return 0;
-  }
-
-  if (verb === "send") {
-    const p = named(args[0] as string);
-    if (!p) return 1;
-    const body =
-      args.length > 1 ? args.slice(1).join(" ") : await text(process.stdin);
-    if (!body.trim()) {
-      console.error("error: the message is empty");
-      return 1;
-    }
-    const r = await call<MessageAccepted>(
-      d,
-      `/rooms/${room.id}/agents/${p.id}/messages`,
-      {
-        method: "POST",
-        body: { text: body, ...(sender && { from: sender.id }) },
-      },
-    );
-    if (!r.ok) {
-      printRefusal(r.error);
-      return 1;
-    }
-    const name = oneLine(p.name);
+function printRoomInfo(room: RoomDto): void {
+  const title = room.title ? `  ${oneLine(room.title)}` : "";
+  console.log(`${room.id}  ${room.status}${title}`);
+  for (const p of room.participants) {
+    const from = turnFrom(room, p);
     console.log(
-      r.body.queued
-        ? `queued for ${name}, behind ${r.body.queued}`
-        : `sent to ${name}`,
+      oneLine(
+        `  ${p.name}  ${p.role ?? "-"}  ${p.harness}  ${p.mode}  ${p.branch ?? "-"}  ${p.status}${from}`,
+      ),
     );
-    return 0;
   }
+}
 
-  // add, ff, remove: orders.
-  if (sender && sender.role !== "orchestrator") {
-    printRefusal({
-      code: "not_orchestrator",
-      message: `only the orchestrator may ${verb}; ${sender.name} is ${sender.role ?? "a participant with no role"}`,
-    });
+async function runRoomDiff(
+  { d, room, named }: RoomContext,
+  args: string[],
+): Promise<number> {
+  const p = named(args[0] as string);
+  if (!p) return 1;
+  const r = await agentDiff(d, room.id, p.id, args[1] ? "base" : "head");
+  if (!r.ok) {
+    printRefusal(r.error);
     return 1;
   }
-  let command: RouteCommand;
+  console.log(r.body.text ? clean(r.body.text) : "no changes");
+  return 0;
+}
+
+async function runRoomSend(
+  { d, room, sender, named }: RoomContext,
+  args: string[],
+): Promise<number> {
+  const p = named(args[0] as string);
+  if (!p) return 1;
+  const body =
+    args.length > 1 ? args.slice(1).join(" ") : await text(process.stdin);
+  if (!body.trim()) {
+    console.error("error: the message is empty");
+    return 1;
+  }
+  const r = await call<MessageAccepted>(
+    d,
+    `/rooms/${room.id}/agents/${p.id}/messages`,
+    {
+      method: "POST",
+      body: { text: body, ...(sender && { from: sender.id }) },
+    },
+  );
+  if (!r.ok) {
+    printRefusal(r.error);
+    return 1;
+  }
+  const name = oneLine(p.name);
+  console.log(
+    r.body.queued
+      ? `queued for ${name}, behind ${r.body.queued}`
+      : `sent to ${name}`,
+  );
+  return 0;
+}
+
+function buildRoomOrder(
+  { verb, args, model, level }: RoomOrderRequest,
+  named: RoomNamed,
+): RouteCommand | undefined {
   if (verb === "add") {
     const role = flag("role");
-    command = {
+    return {
       verb,
       agent: {
         agent: args[0],
@@ -2027,37 +2128,96 @@ async function runRoomCommand(): Promise<number> {
         base: flag("base"),
       },
     };
-  } else {
-    const p = named(args[0] as string);
-    if (!p) return 1;
-    if (verb === "remove") {
-      command = { verb, id: p.id, name: p.name };
-    } else {
-      const from = named(flag("from") as string);
-      if (!from) return 1;
-      command = {
-        verb: "forward",
-        id: p.id,
-        name: p.name,
-        fromId: from.id,
-        fromName: from.name,
-      };
-    }
   }
+  const p = named(args[0] as string);
+  if (!p) return undefined;
+  if (verb === "remove") return { verb, id: p.id, name: p.name };
+  const from = named(flag("from") as string);
+  if (!from) return undefined;
+  return {
+    verb: "forward",
+    id: p.id,
+    name: p.name,
+    fromId: from.id,
+    fromName: from.name,
+  };
+}
+
+function roomOrderOff(
+  command: RouteCommand,
+  participant: ParticipantDto | undefined,
+): string | undefined {
+  if (command.verb !== "add") return undefined;
+  return (
+    notOnModel(command.agent.model, participant) ??
+    notOnLevel(command.agent.thoughtLevel, participant)
+  );
+}
+
+async function runRoomOrder(
+  { d, room, sender, named }: RoomContext,
+  request: RoomOrderRequest,
+): Promise<number> {
+  // add, ff, remove: orders.
+  if (sender && sender.role !== "orchestrator") {
+    printRefusal({
+      code: "not_orchestrator",
+      message: `only the orchestrator may ${request.verb}; ${sender.name} is ${sender.role ?? "a participant with no role"}`,
+    });
+    return 1;
+  }
+  const command = buildRoomOrder(request, named);
+  if (!command) return 1;
   const outcome = await runCommand(d, room.id, command);
   if (!outcome.ok) {
     printRefusal(outcome);
     return 1;
   }
-  const off =
-    command.verb === "add"
-      ? (notOnModel(command.agent.model, outcome.participant) ??
-        notOnLevel(command.agent.thoughtLevel, outcome.participant))
-      : undefined;
+  const off = roomOrderOff(command, outcome.participant);
   if (off) {
     printRefusal({ code: "", message: off });
     return 1;
   }
   console.log(outcome.line);
   return 0;
+}
+
+/**
+ * `kapelle room <verb>` (M8-3): what an orchestrator does in its room, from
+ * its shell. `add`, `remove` and `ff` act the screens' `/add`, `/remove`
+ * and `/ff` (`client/command.ts`). `send` returns at once: the turn's answer
+ * comes back as a reply (M8-2), so there is no `wait`.
+ *
+ * `send`, `add`, `ff` and `remove` are the orchestrator's. The daemon refuses
+ * `send` from a worker (`invalid_sender`); the others carry no sender, so
+ * the CLI refuses them here (`not_orchestrator`, decided 2026-10-22, #267).
+ * Like the daemon's, the check is a guard against a mistake, not a lock:
+ * `--as` passes it. `info` and `diff` only read, so anyone may run them.
+ */
+async function runRoomCommand(): Promise<number> {
+  const invocation = parseRoomInvocation();
+  if (!invocation) return 1;
+  const { verb, args } = invocation;
+  // A usage error is the caller's, not the daemon's: catch a missing or empty
+  // model or level before any request (M9-5b, #392; M9-9b, #509).
+  const model = verb === "add" ? flag("model") : undefined;
+  const level = verb === "add" ? flag("level") : undefined;
+  const d = await findDaemon();
+  if (!d) return 1;
+  const found = await roomAndSender(d);
+  // The helper returns its refusal as a string beside the room union.
+  // pi-lens-ignore: no-runtime-typeof
+  if (typeof found === "string") {
+    console.error(`error: ${oneLine(found)}`);
+    return 1;
+  }
+  const { room, sender } = found;
+  const context: RoomContext = { d, room, sender, named: roomNamed(room) };
+  if (verb === "info") {
+    printRoomInfo(room);
+    return 0;
+  }
+  if (verb === "diff") return runRoomDiff(context, args);
+  if (verb === "send") return runRoomSend(context, args);
+  return runRoomOrder(context, { ...invocation, model, level });
 }
