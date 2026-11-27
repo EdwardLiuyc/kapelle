@@ -1653,6 +1653,10 @@ interface CommandFailure {
   message: string;
 }
 
+type DemoRoomResult =
+  | { ok: true; room: RoomDto }
+  | { ok: false; code: string; message: string };
+
 function demoGit(cwd: string, ...args: string[]): void {
   execFileSync(
     "git",
@@ -1720,7 +1724,7 @@ async function openDemoRoom(
   d: DaemonAddress,
   folder: string,
   agent: string,
-): Promise<RoomDto | CommandFailure> {
+): Promise<DemoRoomResult> {
   const out = await runCommand(d, undefined, {
     verb: "new",
     body: {
@@ -1737,8 +1741,8 @@ async function openDemoRoom(
       ],
     },
   });
-  if (!out.ok) return out;
-  return out.room as RoomDto;
+  if (!out.ok) return { ok: false, code: out.code, message: out.message };
+  return { ok: true, room: out.room as RoomDto };
 }
 
 async function sendDemoIntro(
@@ -1805,11 +1809,12 @@ async function runDemoCommand(): Promise<number> {
     printRefusal(added.error);
     return 1;
   }
-  const room = await openDemoRoom(d, folder, agent);
-  if ("message" in room) {
-    printRefusal(room);
+  const opened = await openDemoRoom(d, folder, agent);
+  if (!opened.ok) {
+    printRefusal(opened);
     return 1;
   }
+  const room = opened.room;
   const sent = await sendDemoIntro(d, room);
   if (sent) {
     printRefusal(sent);
@@ -1837,8 +1842,10 @@ async function listLoopRecipes(cwd: string): Promise<number> {
   return 0;
 }
 
+type LoopRouteCommand = Extract<RouteCommand, { verb: "loop" }>;
+
 async function startLoopRoute(
-  c: ReturnType<typeof loopCommand>,
+  c: LoopRouteCommand,
   cwd: string,
 ): Promise<number> {
   const d = await findDaemon();
@@ -2023,12 +2030,21 @@ function parseRoomInvocation(): RoomInvocation | undefined {
   return checkRoomOptions(invocation) ? invocation : undefined;
 }
 
-function roomNamed(room: RoomDto) {
+type RoomNamed = (name: string) => ParticipantDto | undefined;
+
+function roomNamed(room: RoomDto): RoomNamed {
   return (name: string) => {
     const p = byName(room, name);
     if (!p) console.error(`error: no participant named ${oneLine(name)}`);
     return p;
   };
+}
+
+interface RoomContext {
+  d: DaemonAddress;
+  room: RoomDto;
+  sender: ParticipantDto | undefined;
+  named: RoomNamed;
 }
 
 function printRoomInfo(room: RoomDto): void {
@@ -2045,10 +2061,8 @@ function printRoomInfo(room: RoomDto): void {
 }
 
 async function runRoomDiff(
-  d: DaemonAddress,
-  room: RoomDto,
+  { d, room, named }: RoomContext,
   args: string[],
-  named: ReturnType<typeof roomNamed>,
 ): Promise<number> {
   const p = named(args[0] as string);
   if (!p) return 1;
@@ -2059,15 +2073,6 @@ async function runRoomDiff(
   }
   console.log(r.body.text ? clean(r.body.text) : "no changes");
   return 0;
-}
-
-type RoomNamed = ReturnType<typeof roomNamed>;
-
-interface RoomContext {
-  d: DaemonAddress;
-  room: RoomDto;
-  sender: ParticipantDto | undefined;
-  named: RoomNamed;
 }
 
 async function runRoomSend(
@@ -2105,7 +2110,7 @@ async function runRoomSend(
 
 function buildRoomOrder(
   { verb, args, model, level }: RoomOrderRequest,
-  named: ReturnType<typeof roomNamed>,
+  named: RoomNamed,
 ): RouteCommand | undefined {
   if (verb === "add") {
     const role = flag("role");
@@ -2207,13 +2212,12 @@ async function runRoomCommand(): Promise<number> {
     return 1;
   }
   const { room, sender } = found;
-  const named = roomNamed(room);
+  const context: RoomContext = { d, room, sender, named: roomNamed(room) };
   if (verb === "info") {
     printRoomInfo(room);
     return 0;
   }
-  if (verb === "diff") return runRoomDiff(d, room, args, named);
-  const context = { d, room, sender, named };
+  if (verb === "diff") return runRoomDiff(context, args);
   if (verb === "send") return runRoomSend(context, args);
   return runRoomOrder(context, { ...invocation, model, level });
 }

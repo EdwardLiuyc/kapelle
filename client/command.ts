@@ -101,7 +101,8 @@ export type RouteCommand =
   | { verb: "title"; title: string }
   | { verb: "cap"; turnCap: number }
   | { verb: "config"; cwd: string; patch: ConfigPatch; replace?: true }
-  | { verb: "remove" | "cancel"; id: string; name: string }
+  | { verb: "remove"; id: string; name: string }
+  | { verb: "cancel"; id: string; name: string }
   | {
       verb: "forward";
       id: string;
@@ -196,22 +197,52 @@ export const USAGE: Record<string, string> = {
   config: "usage: /config",
 };
 
-const ROOM_VERBS = new Set([
-  "new",
-  "add",
-  "chat",
-  "loop",
-  "title",
-  "cap",
-  "dismiss",
-  "delete",
-  "leave",
-  "help",
-  "term",
-  "setup",
-  "config",
-]);
-const AGENT_VERBS = new Set([
+type AgentVerb =
+  | "rename"
+  | "role"
+  | "mode"
+  | "model"
+  | "level"
+  | "cancel"
+  | "remove"
+  | "diff"
+  | "ff";
+type ChangeVerb = Exclude<AgentVerb, "cancel" | "remove" | "diff" | "ff">;
+type SimpleTargetVerb = Exclude<AgentVerb, "diff" | "ff">;
+type RoomVerb =
+  | "new"
+  | "add"
+  | "chat"
+  | "loop"
+  | "title"
+  | "cap"
+  | "dismiss"
+  | "delete"
+  | "leave"
+  | "help"
+  | "term"
+  | "setup"
+  | "config";
+type RoomVerbFamily = "untargeted" | "setting" | "simple" | "form";
+
+// One owner for room-verb membership and family; the parser derives both.
+const ROOM_VERB_FAMILY = {
+  new: "form",
+  add: "form",
+  chat: "form",
+  loop: "simple",
+  title: "setting",
+  cap: "setting",
+  dismiss: "untargeted",
+  delete: "untargeted",
+  leave: "untargeted",
+  help: "untargeted",
+  term: "untargeted",
+  setup: "simple",
+  config: "simple",
+} satisfies Record<RoomVerb, RoomVerbFamily>;
+
+const AGENT_VERBS = new Set<AgentVerb>([
   "rename",
   "role",
   "mode",
@@ -223,13 +254,23 @@ const AGENT_VERBS = new Set([
   "ff",
 ]);
 
+function isAgentVerb(verb: string): verb is AgentVerb {
+  return AGENT_VERBS.has(verb as AgentVerb);
+}
+
+function roomVerbFamily(verb: string): RoomVerbFamily | undefined {
+  return Object.hasOwn(ROOM_VERB_FAMILY, verb)
+    ? ROOM_VERB_FAMILY[verb as RoomVerb]
+    : undefined;
+}
+
 function formOptions(verb: "new" | "add" | "chat") {
   if (verb === "new") return ["cmd", "name", "model", "title", "cwd"];
   if (verb === "chat") return ["cmd", "name", "mode", "model", "cwd"];
   return ["cmd", "name", "role", "mode", "model", "base", "cwd"];
 }
 
-function changeFor(verb: string, value: string): PatchChange {
+function changeFor(verb: ChangeVerb, value: string): PatchChange {
   if (verb === "rename") return { name: value };
   if (verb === "role") return { role: value === "none" ? null : value };
   if (verb === "model") return { model: value };
@@ -332,17 +373,6 @@ export const CHAT_GONE = "the chat's agent is gone; /leave to exit";
 
 type ParsedCommand = Command | { error: string };
 
-const UNTARGETED_VERBS = new Set([
-  "leave",
-  "dismiss",
-  "delete",
-  "help",
-  "term",
-]);
-const ROOM_SETTING_VERBS = new Set(["title", "cap"]);
-const SIMPLE_ROOM_VERBS = new Set(["setup", "config", "loop"]);
-const AGENT_FORM_VERBS = new Set(["new", "add", "chat"]);
-
 function parseUntargeted(
   verb: string,
   args: string[],
@@ -352,25 +382,11 @@ function parseUntargeted(
   if (verb === "dismiss") return { verb };
   if (verb === "delete") return { verb };
   if (verb === "help") return { verb };
-  return { verb: "term" };
+  if (verb === "term") return { verb };
+  return undefined;
 }
 
-function parseSimpleRoom(
-  verb: "setup" | "config" | "loop",
-  args: string[],
-): ParsedCommand {
-  if (verb === "setup") {
-    // `/setup done` says "done" without the list.
-    if (args.length > 1 || (args[0] !== undefined && args[0] !== "done")) {
-      return { error: USAGE.setup as string };
-    }
-    return { verb, done: args[0] === "done" };
-  }
-  if (verb === "config") {
-    return args.length
-      ? { error: USAGE.config as string }
-      : { verb: "form", form: "config" };
-  }
+function parseLoop(args: string[]): ParsedCommand {
   if (!args.length) return { verb: "form", form: "loop" };
   const o = options(args, ["agent", "cmd", "model", "cwd"]);
   if ("error" in o) return { error: `${o.error}; usage: ${USAGE.loop}` };
@@ -384,8 +400,30 @@ function parseSimpleRoom(
   return loopCommand({ ...o.values, recipe, task, note, cwd });
 }
 
+function parseSimpleRoom(
+  verb: string,
+  args: string[],
+): ParsedCommand | undefined {
+  if (verb !== "setup" && verb !== "config" && verb !== "loop") {
+    return undefined;
+  }
+  if (verb === "setup") {
+    // `/setup done` says "done" without the list.
+    if (args.length > 1 || (args[0] !== undefined && args[0] !== "done")) {
+      return { error: USAGE.setup as string };
+    }
+    return { verb, done: args[0] === "done" };
+  }
+  if (verb === "config") {
+    return args.length
+      ? { error: USAGE.config as string }
+      : { verb: "form", form: "config" };
+  }
+  return parseLoop(args);
+}
+
 interface RoomSettingInput {
-  verb: "title" | "cap";
+  verb: string;
   args: string[];
   rest: string;
   head: string;
@@ -398,7 +436,8 @@ function parseRoomSetting({
   rest,
   head,
   hall,
-}: RoomSettingInput): ParsedCommand {
+}: RoomSettingInput): ParsedCommand | undefined {
+  if (verb !== "title" && verb !== "cap") return undefined;
   // A chat has no visible room title and no orchestrator cap (#517).
   if (hall && verb === "title") return { error: TITLE_IN_CHAT };
   if (hall && verb === "cap") return { error: CAP_IN_CHAT };
@@ -467,10 +506,11 @@ function parseNewRoom(
 }
 
 function parseAgentForm(
-  verb: "new" | "add" | "chat",
+  verb: string,
   args: string[],
   hall: boolean,
-): ParsedCommand {
+): ParsedCommand | undefined {
+  if (verb !== "new" && verb !== "add" && verb !== "chat") return undefined;
   if (verb === "add" && hall) return { error: ADD_IN_CHAT };
   if (!args.length) return { verb: "form", form: verb };
   const names = formOptions(verb);
@@ -513,7 +553,7 @@ function parseForward(
 }
 
 interface TargetInput {
-  verb: string;
+  verb: AgentVerb;
   args: string[];
   rest: string;
   text: string;
@@ -545,12 +585,15 @@ function parseDiff(args: string[], id: string, name: string): ParsedCommand {
 }
 
 function parseSimpleTarget(
-  { verb, args }: TargetInput,
+  { verb, args }: TargetInput & { verb: SimpleTargetVerb },
   id: string,
   name: string,
 ): ParsedCommand {
-  if (verb === "cancel" || verb === "remove") {
-    return args.length ? { error: USAGE[verb] as string } : { verb, id, name };
+  if (verb === "cancel") {
+    return args.length ? { error: USAGE.cancel as string } : { verb, id, name };
+  }
+  if (verb === "remove") {
+    return args.length ? { error: USAGE.remove as string } : { verb, id, name };
   }
   // The live list with no id (M9-6, M9-9).
   if (verb === "model" && !args.length) return { verb: "models", id, name };
@@ -569,7 +612,7 @@ function parseTargeted(input: TargetInput): ParsedCommand {
   const id = t.id;
   if (verb === "ff") return parseForward(args, roster, id, name);
   if (verb === "diff") return parseDiff(args, id, name);
-  return parseSimpleTarget(input, id, name);
+  return parseSimpleTarget({ ...input, verb }, id, name);
 }
 
 /**
@@ -590,24 +633,15 @@ export function parseCommand(
   const [head = "", ...args] = words(rest);
   if (!head.startsWith("/")) return undefined;
   const verb = head.slice(1);
-  if (!ROOM_VERBS.has(verb) && !AGENT_VERBS.has(verb)) return undefined;
 
-  if (UNTARGETED_VERBS.has(verb)) return parseUntargeted(verb, args);
-  if (ROOM_SETTING_VERBS.has(verb)) {
-    return parseRoomSetting({
-      verb: verb as "title" | "cap",
-      args,
-      rest,
-      head,
-      hall,
-    });
+  const family = roomVerbFamily(verb);
+  if (family === "untargeted") return parseUntargeted(verb, args);
+  if (family === "setting") {
+    return parseRoomSetting({ verb, args, rest, head, hall });
   }
-  if (SIMPLE_ROOM_VERBS.has(verb)) {
-    return parseSimpleRoom(verb as "setup" | "config" | "loop", args);
-  }
-  if (AGENT_FORM_VERBS.has(verb)) {
-    return parseAgentForm(verb as "new" | "add" | "chat", args, hall);
-  }
+  if (family === "simple") return parseSimpleRoom(verb, args);
+  if (family === "form") return parseAgentForm(verb, args, hall);
+  if (!isAgentVerb(verb)) return undefined;
   return parseTargeted({
     verb,
     args,
@@ -1035,9 +1069,6 @@ async function runRosterCommand(
       ok: true,
       line: `moved ${c.name} up to ${c.fromName}'s commit`,
     };
-  }
-  if (c.verb !== "patch") {
-    return refused("unknown room command", "invalid_request");
   }
   const r = await call<ParticipantDto>(d, `${room}/agents/${c.id}`, {
     method: "PATCH",
