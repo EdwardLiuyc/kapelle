@@ -4560,10 +4560,18 @@ project file sets its window: it is `KAPELLE_RETENTION_MS`, or else the default.
 `docs/CONFIG.md` says so in its precedence row for `retentionMs`, and in "Where each
 config is read", where `sweepBoot` reads the project file per repository. The old
 hall's record is still read, so its checkouts stay safe.
+**Added 2026-11-26 (#569 review), and decided at pickup 2026-11-27 (#557), with the
+person:** an open that fails after it tried to start a harness is archived at once: its
+folder, with the stderr log, moves to `chats/archive/<id>/` with an `archived` record,
+and its error names that folder and a kept checkout. Retention then reaps it as any
+archive. A chat checkout with no `chat.json` follows the orphan rule: a dirty one, or
+one on a detached HEAD, is kept and named; a clean one loses its checkout and keeps
+its branch.
 *Done when* tests cover a live chat's checkout kept, an archive inside retention kept,
 one past it reaped once with its branch, a dirty one kept and named, a `removing` chat
-finished, a chats folder that cannot be read skipping orphan cleanup, and the old
-hall's checkouts untouched.
+finished, a chats folder that cannot be read skipping orphan cleanup, the old
+hall's checkouts untouched, and a failed open that kept work archived and named, with
+its stderr log there and the boot sweep keeping it.
 
 **M11-15 · The screens use chats, and the hall room goes · L · needs M11-13, M11-14**
 `chat.ts`, the TUI and the pipe follow rooms and chats as two kinds, each with its own

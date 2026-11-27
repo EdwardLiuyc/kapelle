@@ -47,7 +47,7 @@ Legend: **✅ happy** · **⚠ warning** · **❌ bad**.
 | --- | --- | --- |
 | User file | the daemon's start, however it is reached: `kapelle daemon start` or bare `kapelle` starting one (M9-2) | in-process CLI, merge, sweep |
 | Client file | `cli.ts` for daemon-facing HTTP calls and the bare-client auto-start decision; `chat.ts` and `chat/`; the non-detached `run --file` and `kapelle demo` checks read it only to refuse | the daemon process, explicit `kapelle daemon start`/`stop`, `merge`, `workspace`, sweep |
-| Project file | `POST /repos`, `POST /runs` (each request), `POST /rooms` and each room the daemon restores at start (its stall limits and turn cap), `kapelle run --file`, `sweepBoot` per repository, `GET /config`, `PATCH /config` and `PUT /config` | plain `kapelle "prompt"`, `merge` |
+| Project file | `POST /repos`, `POST /runs` (each request), `POST /rooms` and each room the daemon restores at start (its stall limits and turn cap), `kapelle run --file`, `sweepBoot` per repository (not for a removed chat, which is in no repository), `GET /config`, `PATCH /config` and `PUT /config` | plain `kapelle "prompt"`, `merge` |
 | `KAPELLE_*` env | the daemon's start (including bare `kapelle`), every run-default and room-cap resolution, `kapelle run --file` | plain prompt, merge |
 
 ## User file — `$XDG_CONFIG_HOME/kapelle/config.json`
@@ -248,7 +248,7 @@ Known name → knob → accepted values:
 | --- | --- | --- |
 | `stallIdleMs`, `stallRepeatCount`, `ttlMs`, `maxConcurrency` | task value → run-file run-level → `KAPELLE_*` → project config → default | 300 000 ms / 8 / 3 600 000 ms / 4 |
 | `port`, `permissionTimeoutMs` | CLI flag → `KAPELLE_*` → user config → default | 4719 / 120 000 ms |
-| `retentionMs` | `sweepBoot` option (tests) → `KAPELLE_RETENTION_MS` → project config → default | 30 days |
+| `retentionMs` | `sweepBoot` option (tests) → `KAPELLE_RETENTION_MS` → project config → default; a removed chat skips the project config (M11-14) | 30 days |
 | `orchestratorTurnCap` | room PATCH → `KAPELLE_ORCHESTRATOR_TURN_CAP` → project config → default | 40 |
 | `linkPaths` | project config only (no env, no run-file field) | no links |
 | `daemonAddress`, `accessKey` | client config only (no env or flag) | none; use `daemon.json` when the client file is absent or empty |
@@ -263,7 +263,7 @@ Notes:
 - The client connection is read by each client command that needs a daemon;
   it has no environment or command-line override.
 - `0` is a meaningful watchdog value (signal disabled) and a meaningful
-  `retentionMs` (reap every terminal run and dismissed room on the next sweep); `port: 0` means
+  `retentionMs` (reap every terminal run, dismissed room and removed chat on the next sweep); `port: 0` means
   an OS-chosen port.
 
 ## Where this lives
