@@ -46,6 +46,7 @@ import {
   headAt,
   LEAVE,
   listRooms,
+  liveRoomLog,
   MOCK_AGENT,
   noPty,
   only,
@@ -54,7 +55,6 @@ import {
   REMEMBER,
   REPO,
   type RoomReply,
-  roomLog,
   rowOf,
   screenRows,
   scrollback,
@@ -1735,7 +1735,7 @@ test("the status line shows the level after a revive (#510)", {
   const participant = only(full.body);
   let pid: number | undefined;
   await until("the harness pid on the room log", async () => {
-    const lines = await roomLog(cwd, room.id).catch(() => []);
+    const lines = await liveRoomLog(cwd, room.id);
     const spawned = lines.find(
       (line) => line.update.sessionUpdate === "_client_harness_spawned",
     );

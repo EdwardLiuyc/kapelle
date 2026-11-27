@@ -67,6 +67,7 @@ import {
   hasBranch,
   headAt,
   listRooms,
+  liveRoomLog,
   MOCK_AGENT,
   only,
   type Pending,
@@ -1198,17 +1199,14 @@ test("a harness that dies leaves its participant exited, the room active, and a 
   const { id } = open.body;
 
   // The harness pid is on the room's log; the SSE stream would not end
-  // while the room lives, so the file is read directly.
-  const log = join(stateDirFor(root), "rooms", id, "events.jsonl");
+  // while the room lives, so poll the file through liveRoomLog.
   let pid: number | undefined;
   for (const until = Date.now() + 10_000; !pid && Date.now() < until; ) {
-    const lines = (await readFile(log, "utf8").catch(() => ""))
-      .split("\n")
-      .filter(Boolean)
-      .map((l) => JSON.parse(l));
-    pid = lines.find(
+    const lines = await liveRoomLog(root, id);
+    const spawned = lines.find(
       (e) => e.update.sessionUpdate === "_client_harness_spawned",
-    )?.update.pid;
+    );
+    if (typeof spawned?.update.pid === "number") pid = spawned.update.pid;
     if (!pid) await new Promise((ok) => setTimeout(ok, 25));
   }
   assert.ok(pid, "the harness pid is on the log");

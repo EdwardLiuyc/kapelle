@@ -1,15 +1,18 @@
 /**
  * Shared subprocess cleanup (#428): graceful exits flush V8 coverage, and a
  * stuck process still meets the bounded SIGKILL fallback. Also the wait
- * helpers' budgets (#442): a spent budget still checks once. And
- * `countedGit`'s log (#322): a slice after a snapshot keeps every new call.
+ * helpers' budgets (#442): a spent budget still checks once. `roomLog` ignores
+ * an unterminated last line (#572), `liveRoomLog` treats only a missing file
+ * as empty, and `countedGit`'s log (#322) keeps every new call after a
+ * snapshot.
  */
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
+import { stateDirFor } from "../core/runtime.ts";
 import {
   addRepo,
   alive,
@@ -18,6 +21,7 @@ import {
   daemonApi,
   gitRepo,
   gone,
+  liveRoomLog,
   MOCK_AGENT,
   roomLog,
   spawnCli,
@@ -161,6 +165,80 @@ test("until checks once even when its budget is already spent (#442)", async () 
     /timed out waiting for a false check/,
   );
   assert.equal(checks, 2);
+});
+
+test("roomLog ignores an unterminated last line (#572)", async (t) => {
+  const root = await tempDir(t);
+  const previousStateHome = process.env.XDG_STATE_HOME;
+  process.env.XDG_STATE_HOME = await tempDir(t);
+  t.after(() => {
+    if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = previousStateHome;
+  });
+  const state = stateDirFor(root);
+  const id = "room-partial";
+  const dir = join(state, "rooms", id);
+  const file = join(dir, "events.jsonl");
+  await mkdir(dir, { recursive: true });
+
+  const first = {
+    seq: 1,
+    at: "2026-11-26T00:00:00.000Z",
+    roomId: id,
+    participantId: "p-12345678",
+    update: { sessionUpdate: "_client_user_message", text: "one" },
+  };
+  const second = { ...first, seq: 2, update: { ...first.update, text: "two" } };
+  const firstLine = JSON.stringify(first);
+  const secondLine = JSON.stringify(second);
+  await writeFile(file, firstLine);
+  assert.deepEqual(
+    await roomLog(root, id),
+    [],
+    "a JSON object is not an event until its newline is on disk",
+  );
+
+  await appendFile(file, `\n${secondLine.slice(0, -1)}`);
+  assert.deepEqual(
+    await roomLog(root, id),
+    [first],
+    "the complete first line is an event, and the partial second line is not",
+  );
+
+  await appendFile(file, `${secondLine.slice(-1)}\n`);
+  assert.deepEqual(
+    await roomLog(root, id),
+    [first, second],
+    "the completed line appears on the next read",
+  );
+});
+
+test("liveRoomLog treats only a missing log as empty (#572)", async (t) => {
+  const root = await tempDir(t);
+  const previousStateHome = process.env.XDG_STATE_HOME;
+  process.env.XDG_STATE_HOME = await tempDir(t);
+  t.after(() => {
+    if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = previousStateHome;
+  });
+  const state = stateDirFor(root);
+  const id = "room-live-log";
+  const dir = join(state, "rooms", id);
+  const file = join(dir, "events.jsonl");
+  await mkdir(dir, { recursive: true });
+
+  assert.deepEqual(
+    await liveRoomLog(root, id),
+    [],
+    "a log not written yet is empty",
+  );
+
+  await writeFile(file, "{ not JSON }\n");
+  await assert.rejects(
+    liveRoomLog(root, id),
+    SyntaxError,
+    "a malformed complete line is still a failure",
+  );
 });
 
 test("countedGit keeps the first call after a snapshot (#322)", async (t) => {
