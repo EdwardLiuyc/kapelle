@@ -242,26 +242,30 @@ const ROOM_VERB_FAMILY = {
   config: "simple",
 } satisfies Record<RoomVerb, RoomVerbFamily>;
 
-const AGENT_VERBS = new Set<AgentVerb>([
-  "rename",
-  "role",
-  "mode",
-  "model",
-  "level",
-  "cancel",
-  "remove",
-  "diff",
-  "ff",
-]);
+const AGENT_VERB_MEMBERS = {
+  rename: true,
+  role: true,
+  mode: true,
+  model: true,
+  level: true,
+  cancel: true,
+  remove: true,
+  diff: true,
+  ff: true,
+} satisfies Record<AgentVerb, true>;
 
 function isAgentVerb(verb: string): verb is AgentVerb {
-  return AGENT_VERBS.has(verb as AgentVerb);
+  return Object.hasOwn(AGENT_VERB_MEMBERS, verb);
 }
 
 function roomVerbFamily(verb: string): RoomVerbFamily | undefined {
   return Object.hasOwn(ROOM_VERB_FAMILY, verb)
     ? ROOM_VERB_FAMILY[verb as RoomVerb]
     : undefined;
+}
+
+function unhandledRoomFamily(family: never): never {
+  throw new Error(`unhandled room-verb family: ${String(family)}`);
 }
 
 function formOptions(verb: "new" | "add" | "chat") {
@@ -635,12 +639,20 @@ export function parseCommand(
   const verb = head.slice(1);
 
   const family = roomVerbFamily(verb);
-  if (family === "untargeted") return parseUntargeted(verb, args);
-  if (family === "setting") {
-    return parseRoomSetting({ verb, args, rest, head, hall });
+  switch (family) {
+    case "untargeted":
+      return parseUntargeted(verb, args);
+    case "setting":
+      return parseRoomSetting({ verb, args, rest, head, hall });
+    case "simple":
+      return parseSimpleRoom(verb, args);
+    case "form":
+      return parseAgentForm(verb, args, hall);
+    case undefined:
+      break;
+    default:
+      return unhandledRoomFamily(family);
   }
-  if (family === "simple") return parseSimpleRoom(verb, args);
-  if (family === "form") return parseAgentForm(verb, args, hall);
   if (!isAgentVerb(verb)) return undefined;
   return parseTargeted({
     verb,

@@ -7,14 +7,14 @@
     "console-statement": {
       "ignorePaths": [
         "# Console output belongs to the CLI, chat and daemon presentation layers.",
-        "cli.ts",
-        "chat.ts",
-        "chat/",
-        "daemon/"
+        "/cli.ts",
+        "/chat.ts",
+        "/chat/",
+        "/daemon/"
       ]
     },
     "high-import-coupling": {
-      "ignorePaths": ["cli.ts"]
+      "ignorePaths": ["/cli.ts"]
     }
   }
 }
