@@ -78,7 +78,7 @@ test("a flag that is present but carries no value is a usage error", async (t) =
   const r = await runCli(t, ["hi", "--cmd", "--mode", "auto"]);
 
   assert.equal(r.code, 1);
-  assert.match(r.stderr, /--cmd needs a value/);
+  assert.match(r.stderr, /Option '--cmd' argument is ambiguous/);
 });
 
 test("bare kapelle hands off to the chat; --help is the help", async (t) => {
@@ -154,7 +154,7 @@ test("--version is not a value for a missing flag", async (t) => {
 
   assert.equal(r.code, 1);
   assert.equal(r.stdout, "");
-  assert.match(r.stderr, /--cwd needs a value/);
+  assert.match(r.stderr, /Option '--cwd' argument is ambiguous/);
 });
 
 test("merge without a run id is a usage error, not a prompt", async (t) => {

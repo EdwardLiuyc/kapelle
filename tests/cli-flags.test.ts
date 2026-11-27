@@ -1,30 +1,18 @@
 /**
- * The CLI's hand-written argv parsing, pinned before M12-10b replaces it with
- * `parseArgs` (M12-10a, issue #543).
+ * The CLI's argv parsing after M12-10b (#544).
  *
  * Every command leaf in `kapelle --help`, plus `workspace`, gets the same
  * cases: a flag before the verb, a missing value, a repeated value flag, a
  * token after a boolean flag, `--`, and an unknown flag. The usage-error
  * section covers every argument refusal `cli.ts` owns before side effects.
  *
- * Unknown flags today:
- * - ignored, not named: one prompt, `--version`, `--help`, `run`, `attach`,
- *   `setup`, `ps`, `merge`, `workspace`, `workspace move`, `daemon stop`,
- *   `daemon add`;
- * - generic help or usage, not the unknown name: a bare `--bogus`, `demo`;
- * - refused by name: `loop`, `loop list`, each `room` verb, `daemon start`
- *   (through `daemon/main.ts`'s `parseArgs`) and `chat` (through `chat.ts`).
+ * `cli.ts` parses its own leaves with strict `parseArgs`. An unknown flag is
+ * refused by name and followed by that leaf's usage. `chat` and
+ * `daemon start` are still parsed in their own files, so this suite pins their
+ * handoff and existing strict parser messages.
  *
- * `chat` subverbs are delegated to `chat.ts`; this file pins the handoff, not
- * that parser. `bare kapelle` has no flags by definition, so it is covered in
- * the handoff section only. Some cases overlap `tests/cli.test.ts` on purpose:
- * this file is the M12-10b characterisation baseline.
- *
- * Current hand-parser quirks pinned here, and the cases M12-10b may change:
- * the first repeated value flag wins, a missing value is reported by `flag()`,
- * and `--` is not a separator: `positionalAt` skips it and the token after it.
- * `daemon start` and `chat` use `parseArgs`, so their repeated value flag keeps
- * the last value and `--` ends their options.
+ * Current `parseArgs` behaviour pinned here: the last repeated value flag
+ * wins, missing-value wording comes from `parseArgs`, and `--` ends options.
  */
 
 import assert from "node:assert/strict";
@@ -336,115 +324,115 @@ test("a flag with no value records today's outcome", {
       name: "prompt",
       args: ["hi", "--agent"],
       code: 1,
-      stderr: "--agent needs a value",
+      stderr: "Option '--agent <value>' argument missing",
     },
     {
       name: "help",
       args: ["--cwd", "--help"],
-      code: 0,
-      stdout: HELP,
+      code: 1,
+      stderr: /Option '--cwd' argument is ambiguous/,
     },
     {
       name: "version",
       args: ["--cwd", "--version"],
       code: 1,
-      stderr: "--cwd needs a value",
+      stderr: /Option '--cwd' argument is ambiguous/,
     },
     {
       name: "demo",
       args: ["demo", "--cwd"],
       code: 1,
-      stderr: DEMO_USAGE,
+      stderr: "Option '--cwd <value>' argument missing",
     },
     {
       name: "run",
       args: ["run", "--file"],
       code: 1,
-      stderr: "--file needs a value",
+      stderr: "Option '--file <value>' argument missing",
     },
     {
       name: "attach",
       args: ["attach", "abc", "--task"],
       code: 1,
-      stderr: "--task needs a value",
+      stderr: "Option '--task <value>' argument missing",
     },
     {
       name: "setup",
       args: ["setup", "--cwd"],
       code: 1,
-      stderr: NO_DAEMON,
+      stderr: "Option '--cwd <value>' argument missing",
     },
     {
       name: "ps",
       args: ["ps", "--cwd"],
       code: 1,
-      stderr: NO_DAEMON,
+      stderr: "Option '--cwd <value>' argument missing",
     },
     {
       name: "merge",
       args: ["merge", "20260909-120000-abcd", "--cwd"],
       code: 1,
-      stderr: "--cwd needs a value",
+      stderr: "Option '--cwd <value>' argument missing",
     },
     {
       name: "workspace",
       args: ["workspace", "--cwd"],
       code: 1,
-      stderr: "--cwd needs a value",
+      stderr: "Option '--cwd <value>' argument missing",
     },
     {
       name: "workspace move",
       args: ["workspace", "move", "--cwd"],
       code: 1,
-      stderr: MOVE_USAGE,
+      stderr: "Option '--cwd <value>' argument missing",
     },
     {
       name: "loop",
       args: ["loop", "recipe", "task", "--cwd"],
       code: 1,
-      stderr: "--cwd needs a value",
+      stderr: "Option '--cwd <value>' argument missing",
     },
     {
       name: "loop list",
       args: ["loop", "list", "--cwd"],
       code: 1,
-      stderr: "--cwd needs a value",
+      stderr: "Option '--cwd <value>' argument missing",
     },
     {
       name: "room info",
       args: ["room", "info", "--room"],
       code: 1,
-      stderr: NO_DAEMON,
+      stderr: "Option '--room <value>' argument missing",
     },
     {
       name: "room send",
       args: ["room", "send", "ann", "hi", "--as"],
       code: 1,
-      stderr: NO_DAEMON,
+      stderr: "Option '--as <value>' argument missing",
     },
     {
       name: "room add",
       args: ["room", "add", "mock", "--model"],
       code: 1,
-      stderr: "--model needs a value",
+      stderr: "Option '--model <value>' argument missing",
     },
     {
       name: "room ff",
       args: ["room", "ff", "ann", "--from"],
       code: 1,
-      stderr: "--from needs a value",
+      stderr: "Option '--from <value>' argument missing",
     },
     {
       name: "room diff",
       args: ["room", "diff", "ann", "--room"],
       code: 1,
-      stderr: NO_DAEMON,
+      stderr: "Option '--room <value>' argument missing",
     },
     {
       name: "room remove",
       args: ["room", "remove", "ann", "--room"],
       code: 1,
-      stderr: NO_DAEMON,
+      stderr: "Option '--room <value>' argument missing",
     },
     {
       name: "daemon start",
@@ -455,14 +443,14 @@ test("a flag with no value records today's outcome", {
     {
       name: "daemon stop",
       args: ["daemon", "stop", "--cwd"],
-      code: 0,
-      stdout: "no daemon is running",
+      code: 1,
+      stderr: "Option '--cwd <value>' argument missing",
     },
     {
       name: "daemon add",
       args: ["daemon", "add", "--cwd"],
       code: 1,
-      stderr: DAEMON_USAGE,
+      stderr: "Option '--cwd <value>' argument missing",
     },
     {
       name: "chat",
@@ -481,7 +469,7 @@ test("a repeated value flag records today's outcome", {
   await runCases(t, f, [
     {
       name: "prompt",
-      args: ["hi", "--agent", "nope", "--agent", "pi"],
+      args: ["hi", "--agent", "pi", "--agent", "nope"],
       code: 1,
       stderr: /unknown agent "nope"/,
     },
@@ -507,7 +495,7 @@ test("a repeated value flag records today's outcome", {
       name: "run",
       args: ["run", "--file", f.missing1, "--file", f.missing2],
       code: 1,
-      stderr: /cannot read run file .*missing1\.json/,
+      stderr: /cannot read run file .*missing2\.json/,
     },
     {
       name: "attach",
@@ -537,7 +525,7 @@ test("a repeated value flag records today's outcome", {
       name: "workspace",
       args: ["workspace", "--cwd", f.repo1, "--cwd", f.repo2],
       code: 0,
-      stdout: stateDirFor(f.repo1),
+      stdout: stateDirFor(f.repo2),
     },
     {
       name: "workspace move",
@@ -785,21 +773,21 @@ test("`--` records today's outcome", {
   await runCases(t, f, [
     {
       name: "prompt",
-      args: ["--", "hi", "--agent", "nope"],
+      args: ["--agent", "nope", "--", "hi"],
       code: 1,
-      stdout: HELP,
+      stderr: /unknown agent "nope"/,
     },
     {
       name: "help",
-      args: ["--", "--help"],
+      args: ["--help", "--"],
       code: 0,
       stdout: HELP,
     },
     {
       name: "version",
-      args: ["--", "--version"],
-      code: 1,
-      stderr: "-- needs a value",
+      args: ["--version", "--"],
+      code: 0,
+      stdout: VERSION,
     },
     {
       name: "demo",
@@ -811,19 +799,19 @@ test("`--` records today's outcome", {
       name: "run",
       args: ["run", "--file", f.missing1, "--", "prompt"],
       code: 1,
-      stderr: /cannot read run file .*missing1\.json/,
+      stderr: /a prompt does not apply with --file: .*Got "prompt"/,
     },
     {
       name: "attach",
       args: ["attach", "--", "abc"],
       code: 1,
-      stderr: ATTACH_USAGE,
+      stderr: NO_DAEMON,
     },
     {
       name: "setup",
       args: ["setup", "--", "extra"],
       code: 1,
-      stderr: NO_DAEMON,
+      stderr: SETUP_USAGE,
     },
     {
       name: "ps",
@@ -835,67 +823,67 @@ test("`--` records today's outcome", {
       name: "merge",
       args: ["merge", "--", "20260909-120000-abcd"],
       code: 1,
-      stderr: MERGE_USAGE,
+      stderr: /is not a git repository/,
     },
     {
       name: "workspace",
       args: ["workspace", "--", "extra"],
-      code: 0,
-      stdout: stateDirFor(f.root),
+      code: 1,
+      stderr: /unknown workspace command "extra"/,
     },
     {
       name: "workspace move",
       args: ["workspace", "move", "--", f.notRepo, f.target],
       code: 1,
-      stderr: MOVE_USAGE,
+      stderr: NOT_A_REPO,
     },
     {
       name: "loop",
       args: ["loop", "recipe", "task", "--"],
       code: 1,
-      stderr: /error: loop has no option --$/m,
+      stderr: NO_DAEMON,
     },
     {
       name: "loop list",
       args: ["loop", "list", "--"],
-      code: 1,
-      stderr: /error: loop has no option --$/m,
+      code: 0,
+      stdout: STARTER,
     },
     {
       name: "room info",
       args: ["room", "info", "--"],
       code: 1,
-      stderr: /error: room info has no option --$/m,
+      stderr: NO_DAEMON,
     },
     {
       name: "room send",
       args: ["room", "send", "ann", "hi", "--"],
       code: 1,
-      stderr: /error: room send has no option --; send such text on stdin/m,
+      stderr: NO_DAEMON,
     },
     {
       name: "room add",
       args: ["room", "add", "mock", "--"],
       code: 1,
-      stderr: /error: room add has no option --$/m,
+      stderr: NO_DAEMON,
     },
     {
       name: "room ff",
       args: ["room", "ff", "ann", "--from", "x", "--"],
       code: 1,
-      stderr: /error: room ff has no option --$/m,
+      stderr: NO_DAEMON,
     },
     {
       name: "room diff",
       args: ["room", "diff", "ann", "--"],
       code: 1,
-      stderr: /error: room diff has no option --$/m,
+      stderr: NO_DAEMON,
     },
     {
       name: "room remove",
       args: ["room", "remove", "ann", "--"],
       code: 1,
-      stderr: /error: room remove has no option --$/m,
+      stderr: NO_DAEMON,
     },
     {
       name: "daemon start",
@@ -907,14 +895,14 @@ test("`--` records today's outcome", {
     {
       name: "daemon stop",
       args: ["daemon", "stop", "--", "extra"],
-      code: 0,
-      stdout: "no daemon is running",
+      code: 1,
+      stderr: DAEMON_USAGE,
     },
     {
       name: "daemon add",
       args: ["daemon", "add", "--", f.repo1],
       code: 1,
-      stderr: DAEMON_USAGE,
+      stderr: NO_DAEMON,
     },
     {
       name: "chat",
@@ -925,7 +913,7 @@ test("`--` records today's outcome", {
   ]);
 });
 
-test("an unknown flag records today's policy", {
+test("an unknown flag is refused with its name and usage", {
   concurrency: 4,
   timeout: 60_000,
 }, async (t) => {
@@ -935,19 +923,19 @@ test("an unknown flag records today's policy", {
       name: "prompt",
       args: ["hi", "--agent", "nope", "--bogus"],
       code: 1,
-      stderr: /unknown agent "nope"/,
+      stderr: /Unknown option '--bogus'[\s\S]*usage: kapelle "<prompt>"/,
     },
     {
       name: "help",
       args: ["--help", "--bogus"],
-      code: 0,
-      stdout: HELP,
+      code: 1,
+      stderr: /Unknown option '--bogus'[\s\S]*usage: kapelle "<prompt>"/,
     },
     {
       name: "version",
       args: ["--version", "--bogus"],
-      code: 0,
-      stdout: VERSION,
+      code: 1,
+      stderr: /Unknown option '--bogus'[\s\S]*usage: kapelle "<prompt>"/,
     },
     {
       name: "demo",
@@ -959,91 +947,93 @@ test("an unknown flag records today's policy", {
       name: "run",
       args: ["run", "--file", f.missing1, "--bogus"],
       code: 1,
-      stderr: /cannot read run file .*missing1\.json/,
+      stderr: /Unknown option '--bogus'[\s\S]*run needs a run file/,
     },
     {
       name: "attach",
       args: ["attach", "abc", "--bogus"],
       code: 1,
-      stderr: NO_DAEMON,
+      stderr: /Unknown option '--bogus'[\s\S]*attach needs one run id/,
     },
     {
       name: "setup",
       args: ["setup", "--bogus"],
       code: 1,
-      stderr: NO_DAEMON,
+      stderr: /Unknown option '--bogus'[\s\S]*usage: kapelle setup/,
     },
     {
       name: "ps",
       args: ["ps", "--bogus"],
       code: 1,
-      stderr: NO_DAEMON,
+      stderr: /Unknown option '--bogus'[\s\S]*usage: kapelle ps/,
     },
     {
       name: "merge",
       args: ["merge", "abc", "--bogus"],
       code: 1,
-      stderr: /invalid run id "abc"/,
+      stderr: /Unknown option '--bogus'[\s\S]*merge needs one run id/,
     },
     {
       name: "workspace",
       args: ["workspace", "--bogus"],
-      code: 0,
-      stdout: stateDirFor(f.root),
+      code: 1,
+      stderr:
+        /Unknown option '--bogus'[\s\S]*kapelle workspace \[--cwd <dir>\]/,
     },
     {
       name: "workspace move",
       args: ["workspace", "move", f.notRepo, f.target, "--bogus"],
       code: 1,
-      stderr: NOT_A_REPO,
+      stderr:
+        /Unknown option '--bogus'[\s\S]*kapelle workspace \[--cwd <dir>\]/,
     },
     {
       name: "loop",
       args: ["loop", "recipe", "task", "--bogus"],
       code: 1,
-      stderr: "error: loop has no option --bogus",
+      stderr: /Unknown option '--bogus'[\s\S]*usage: kapelle loop/,
     },
     {
       name: "loop list",
       args: ["loop", "list", "--bogus"],
       code: 1,
-      stderr: "error: loop has no option --bogus",
+      stderr: /Unknown option '--bogus'[\s\S]*usage: kapelle loop/,
     },
     {
       name: "room info",
       args: ["room", "info", "--bogus"],
       code: 1,
-      stderr: "error: room info has no option --bogus",
+      stderr: /Unknown option '--bogus'[\s\S]*usage: kapelle room/,
     },
     {
       name: "room send",
       args: ["room", "send", "ann", "hi", "--bogus"],
       code: 1,
-      stderr: "error: room send has no option --bogus; send such text on stdin",
+      stderr: /Unknown option '--bogus'[\s\S]*usage: kapelle room/,
     },
     {
       name: "room add",
       args: ["room", "add", "mock", "--bogus"],
       code: 1,
-      stderr: "error: room add has no option --bogus",
+      stderr: /Unknown option '--bogus'[\s\S]*usage: kapelle room/,
     },
     {
       name: "room ff",
       args: ["room", "ff", "ann", "--from", "x", "--bogus"],
       code: 1,
-      stderr: "error: room ff has no option --bogus",
+      stderr: /Unknown option '--bogus'[\s\S]*usage: kapelle room/,
     },
     {
       name: "room diff",
       args: ["room", "diff", "ann", "--bogus"],
       code: 1,
-      stderr: "error: room diff has no option --bogus",
+      stderr: /Unknown option '--bogus'[\s\S]*usage: kapelle room/,
     },
     {
       name: "room remove",
       args: ["room", "remove", "ann", "--bogus"],
       code: 1,
-      stderr: "error: room remove has no option --bogus",
+      stderr: /Unknown option '--bogus'[\s\S]*usage: kapelle room/,
     },
     {
       name: "daemon start",
@@ -1054,20 +1044,47 @@ test("an unknown flag records today's policy", {
     {
       name: "daemon stop",
       args: ["daemon", "stop", "--bogus"],
-      code: 0,
-      stdout: "no daemon is running",
+      code: 1,
+      stderr: /Unknown option '--bogus'[\s\S]*usage: kapelle daemon start/,
     },
     {
       name: "daemon add",
       args: ["daemon", "add", f.repo1, "--bogus"],
       code: 1,
-      stderr: NO_DAEMON,
+      stderr: /Unknown option '--bogus'[\s\S]*usage: kapelle daemon start/,
     },
     {
       name: "chat",
       args: ["chat", "--bogus"],
       code: 1,
       stderr: /error: Unknown option '--bogus'/,
+    },
+  ]);
+});
+
+test("parseArgs accepts --name=value and refuses a short unknown flag", {
+  concurrency: 4,
+  timeout: 60_000,
+}, async (t) => {
+  const f = await fixture(t);
+  await runCases(t, f, [
+    {
+      name: "prompt --name=value",
+      args: ["hi", "--agent=nope"],
+      code: 1,
+      stderr: /unknown agent "nope"/,
+    },
+    {
+      name: "workspace --name=value",
+      args: ["workspace", `--cwd=${f.repo1}`],
+      code: 0,
+      stdout: stateDirFor(f.repo1),
+    },
+    {
+      name: "workspace short unknown flag",
+      args: ["workspace", "-x"],
+      code: 1,
+      stderr: /Unknown option '-x'[\s\S]*kapelle workspace \[--cwd <dir>\]/,
     },
   ]);
 });
@@ -1082,7 +1099,7 @@ test("every argument refusal owned by cli.ts is pinned", {
       name: "no command with an unknown flag",
       args: ["--bogus"],
       code: 1,
-      stdout: HELP,
+      stderr: /Unknown option '--bogus'[\s\S]*usage: kapelle "<prompt>"/,
     },
     {
       name: "--version beside a positional",
