@@ -1,3 +1,5 @@
+// This suite spans records, runtime state and real git for one boot pass.
+// pi-lens-ignore: high-import-coupling
 /**
  * Sweep tests — story M2-5, issue #35.
  *
@@ -1514,8 +1516,8 @@ test("the stranded notice names an exact command for each ending", async (t) => 
   const notices = await sweep(root, join(await tempDir(t), "children.json"));
   const text = notices.find((n) => n.includes(workspace)) ?? "";
 
-  assert.match(text, new RegExp(`kapelle workspace move ${root} <new-path>`));
-  assert.match(text, new RegExp(`rm -rf ${workspace}`));
+  assert.ok(text.includes(`kapelle workspace move ${root} <new-path>`));
+  assert.ok(text.includes(`rm -rf ${workspace}`));
   assert.match(text, /nothing will delete it/);
 });
 
@@ -1664,10 +1666,10 @@ test("a room left active is paused, its busy participant killed, and its log unt
 test("a killed participant's stale index.lock gets a notice, and the file stays", async (t) => {
   const root = await gitRepo(t);
   const { file, worktrees } = await writeRoom(root, "active", ["busy", "idle"]);
-  const lock = (wt: string) =>
-    git(wt, "rev-parse", "--absolute-git-dir").then((d) =>
-      join(d, "index.lock"),
-    );
+  const lock = async (wt: string) => {
+    const dir = await git(wt, "rev-parse", "--absolute-git-dir");
+    return join(dir, "index.lock");
+  };
   const killedLock = await lock(worktrees[0] as string);
   const idleLock = await lock(worktrees[1] as string);
   await writeFile(killedLock, "");
@@ -1908,10 +1910,12 @@ test("a runtime room sweep waits for the worktree queue (#203)", async (t) => {
     await gate.promise;
   });
   let done = false;
-  const work = roomWork(root, RUN_ID).then((files) => {
+  const runRoomWork = async () => {
+    const files = await roomWork(root, RUN_ID);
     done = true;
     return files;
-  });
+  };
+  const work = runRoomWork();
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(done, false, "roomWork bypassed the worktree queue");
   gate.resolve();
@@ -2042,6 +2046,28 @@ test("a removed chat past retention with uncommitted work is kept and named", as
   assert.equal(await hasBranch(root, chat.branch), true);
 });
 
+test("an archive whose chat.json cannot be read is kept, named and never reaped", async (t) => {
+  const root = await gitRepo(t);
+  const chat = await writeChat(root, "archived");
+  await writeFile(chat.file, "{ not json\n");
+
+  const notices = await sweep(
+    root,
+    join(await tempDir(t), "children.json"),
+    PAST_RETENTION,
+  );
+
+  assert.ok(
+    notices.some(
+      (n) => n.includes(chat.id) && n.includes("keeping removed chat"),
+    ),
+    notices.join("\n"),
+  );
+  assert.equal(existsSync(chat.file), true);
+  assert.equal(existsSync(chat.worktree), true);
+  assert.equal(await hasBranch(root, chat.branch), true);
+});
+
 test("a chat left removing is finished at boot", async (t) => {
   const root = await gitRepo(t);
   const chat = await writeChat(root, "removing");
@@ -2057,6 +2083,26 @@ test("a chat left removing is finished at boot", async (t) => {
   assert.equal(JSON.parse(await readFile(file, "utf8")).lifecycle, "archived");
   assert.equal(existsSync(chat.worktree), false, "the clean checkout goes");
   assert.equal(await hasBranch(root, chat.branch), false);
+});
+
+test("a chat remove does not read the project config", async (t) => {
+  const root = await gitRepo(t);
+  // A removed chat is outside every repository, so its finish must not read
+  // this file for link paths. Any read of the invalid file would throw.
+  await mkdir(join(root, ".kapelle"), { recursive: true });
+  await writeFile(join(root, ".kapelle", "config.json"), "{ not json\n");
+  const chat = await writeChat(root, "removing");
+
+  const notices = await sweep(root, join(await tempDir(t), "children.json"));
+
+  assert.ok(
+    notices.includes(`finished the remove of chat ${chat.id}`),
+    notices.join("\n"),
+  );
+  assert.equal(existsSync(chat.worktree), false);
+  assert.equal(existsSync(chatDir(chat.id)), false);
+  const file = join(archivedChatDir(chat.id), "chat.json");
+  assert.equal(JSON.parse(await readFile(file, "utf8")).lifecycle, "archived");
 });
 
 test("a chats folder that cannot be read skips orphan cleanup in every repository", async (t) => {

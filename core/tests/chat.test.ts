@@ -84,6 +84,8 @@ async function chatIn(
 
 const branchOf = (chat: Chat) => `kapelle/${chat.id}/${chat.participant.id}`;
 
+// This test drives the restart, log replay and harness memory in one scenario.
+// pi-lens-ignore: high-fan-out
 test("a chat keeps its memory across two turns and a restart, on its own log (M11-12)", async (t) => {
   const repo = await gitRepo(t);
   const chat = await chatIn(t, repo);
@@ -222,6 +224,8 @@ test("a chat's mode, model and level change, and chat.json keeps them (M11-12)",
   await back.pause();
 });
 
+// This test drives the live record, stream and archived folder in one remove.
+// pi-lens-ignore: high-fan-out
 test("a remove releases the checkout and moves the folder to the archive (M11-12)", async (t) => {
   const repo = await gitRepo(t);
   const chat = await chatIn(t, repo);
@@ -278,6 +282,8 @@ test("a remove releases the checkout and moves the folder to the archive (M11-12
   await assert.rejects(chat.setLevel("max"), { code: "room_dismissed" });
 });
 
+// This test drives the turn, queue and open question through one cancellation.
+// pi-lens-ignore: high-fan-out
 test("a remove cancels the turn, drops its queue and denies its open question (M11-12)", async (t) => {
   const repo = await gitRepo(t);
   const bus = createEventBus();
@@ -326,6 +332,8 @@ test("a remove cancels the turn, drops its queue and denies its open question (M
   );
 });
 
+// This test holds a save failure and a kept checkout in the same remove.
+// pi-lens-ignore: high-fan-out
 test("another notice during a remove does not hide the kept checkout's (M11-12)", async (t) => {
   const repo = await gitRepo(t);
   const bus = createEventBus();
@@ -602,6 +610,8 @@ test("a new chat never takes a live or an archived chat's id (M11-12)", async (t
   );
 });
 
+// This end-to-end test owns the harness, archive, sweep and notice checks.
+// pi-lens-ignore: high-fan-out
 test("an open whose harness wrote and failed is archived with its stderr log, and the boot sweep keeps it (M11-14)", async (t) => {
   const repo = await gitRepo(t);
   // A harness that writes into its checkout, says why on stderr, and dies
@@ -613,14 +623,17 @@ test("an open whose harness wrote and failed is archived with its stderr log, an
   );
   chmodSync(script, 0o755);
   const id = newChatId();
-  const err: Error = await openChat({
-    ...deps(),
-    id,
-    agent: roomAgent({ cmd: script, name: "solo", cwd: repo }),
-  }).then(
-    () => assert.fail("the open should fail"),
-    (e: Error) => e,
-  );
+  let err: unknown;
+  try {
+    await openChat({
+      ...deps(),
+      id,
+      agent: roomAgent({ cmd: script, name: "solo", cwd: repo }),
+    });
+  } catch (caught) {
+    err = caught;
+  }
+  assert.ok(err instanceof Error, "the open should fail");
 
   const archived = archivedChatDir(id);
   assert.ok(!existsSync(chatDir(id)), "the live folder moved");
@@ -650,9 +663,14 @@ test("an open whose harness wrote and failed is archived with its stderr log, an
   });
   assert.ok(existsSync(join(worktree, "work.txt")), notices.join("\n"));
   assert.ok(existsSync(join(archived, "chat.json")));
+  assert.equal(
+    notices.some((n) => n.includes("leaving orphan worktree")),
+    false,
+    `the archived chat kept its checkout: ${notices.join(" | ")}`,
+  );
 });
 
-test("a chat that cannot start keeps nothing (M11-12)", async (t) => {
+test("a chat that fails before a harness starts keeps nothing (M11-12)", async (t) => {
   const repo = await gitRepo(t);
   const agent = await loadingMock(t, "remember");
   const id = newChatId();
@@ -664,4 +682,5 @@ test("a chat that cannot start keeps nothing (M11-12)", async (t) => {
     }),
   );
   assert.ok(!existsSync(chatDir(id)));
+  assert.ok(!existsSync(archivedChatDir(id)), "no archive either");
 });
