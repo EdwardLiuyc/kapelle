@@ -237,7 +237,10 @@ test("kapelle loop --model sends the start only when po is on that model, and ke
   for (const model of [["--model"], ["--model", ""]]) {
     const r = await loop(["fix", "6", "--cmd", MODELS, ...model]);
     assert.equal(r.code, 1, model.join(" "));
-    assert.equal(r.stderr, "--model needs a value\n");
+    assert.match(
+      r.stderr,
+      /Option '--model(?: <value>)?' argument (?:is ambiguous|missing)/,
+    );
   }
   const rooms = await listRooms<RoomListEntry>(d);
   assert.equal(rooms.body.length, before, "no new room");

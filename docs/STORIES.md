@@ -5006,6 +5006,8 @@ before it.
 *Done when* M12-10a's tests pass unchanged, except the unknown-flag cases. Unknown
 flags now expect the refusal; `--`, repeated value flags and missing-value handling,
 including its wording, may change to `parseArgs`' behaviour.
+**Decided at pickup 2026-11-27 (#544):** #394 landed first, as `f64e1e8`. `chat` and
+`daemon start` keep their parsers in their own files; `cli.ts` parses the other leaves.
 
 **M12-11 · A harness's title is cut before it is kept · S · needs nothing**
 D2. A tool call's title comes from the harness, and only the 32 MiB line limit bounds it.

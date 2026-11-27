@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * The CLI, and the `kapelle` bin (M1c-5). Hand-rolled argv parsing.
+ * The CLI, and the `kapelle` bin (M1c-5). Strict `parseArgs` parsing.
  *
  * Two paths. **One prompt**: one harness, drawn live through `render.ts`,
  * which owns the cursor. **`run --file`** (a verb since M2-9; a bare `--file`
@@ -42,6 +42,8 @@ import { execFileSync } from "node:child_process";
 import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { text } from "node:stream/consumers";
+import type { ParseArgsOptionsConfig } from "node:util";
+import { parseArgs } from "node:util";
 import {
   loopCommand,
   modelConfirmed,
@@ -121,39 +123,20 @@ import { flushStream, render } from "./render.ts";
 
 const argv = process.argv.slice(2);
 
-/** One line for a value-taking flag with no value. */
-function missingValue(name: string): never {
-  console.error(`--${name} needs a value`);
-  process.exit(1);
-}
-
-/**
- * Value of `--name`, or `fallback` when the flag is absent.
- *
- * A flag that is *present* but carries no value is a usage error, not an
- * absence: `--cmd --mode auto` must not quietly launch the default harness
- * under a mode the caller never meant to pair it with. Same reason
- * `resolvePolicy` raises on a mode above the ceiling instead of downgrading —
- * running something other than what was asked for is the failure, whichever
- * direction it goes.
- */
-function flag(name: string): string | undefined;
-function flag(name: string, fallback: string): string;
-function flag(name: string, fallback?: string): string | undefined {
-  const i = argv.indexOf(`--${name}`);
-  if (i === -1) return fallback;
-  const next = argv[i + 1];
-  if (!next || next.startsWith("--")) missingValue(name);
-  return next;
-}
-
-const has = (name: string) => argv.includes(`--${name}`);
-
 /** `catch` binds `unknown`; a harness can reject with anything. */
 // This is the boundary that turns a caught value into a message.
 // pi-lens-ignore: no-unknown-parameters
 const messageOf = (err: unknown) =>
   err instanceof Error ? err.message : String(err);
+
+// `catch` binds `unknown`; this boundary checks Node's parse error code.
+// pi-lens-ignore: no-unknown-parameters
+function isUnknownOption(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err as Error & { code?: string }).code === "ERR_PARSE_ARGS_UNKNOWN_OPTION"
+  );
+}
 
 /** The package version: beside `cli.ts` in a checkout, one folder up from
  *  `dist/cli.js` in the package. */
@@ -176,22 +159,6 @@ async function packageVersion(): Promise<string> {
   throw new Error("cannot read the kapelle version from package.json");
 }
 
-/**
- * Flags that take no value. The token after one stays positional, not its
- * value: `kapelle run --file f --detach "and also do X"` must still see the
- * prompt and refuse it, rather than dropping it because `--detach` looked
- * like the value-taking half of a pair.
- */
-const BOOLEAN_FLAGS = new Set([
-  "--verbose",
-  "--quiet",
-  "--detach",
-  "--help",
-  "--version",
-  "--rebase",
-  "--squash",
-]);
-
 /** The verdicts `core/run.ts` settles a task on. A restored record may carry
  *  one it does not — `queued`, or the sweep's `killed` — and the card-derived
  *  fallback below counts those as failed, never success. Without `--task`,
@@ -208,13 +175,281 @@ const TASK_STATUSES = new Set<string>([
   "failed",
 ]);
 
-const positionalAt = argv.flatMap((a, i) => {
-  if (a.startsWith("--")) return [];
-  const prev = argv[i - 1];
-  return prev?.startsWith("--") && !BOOLEAN_FLAGS.has(prev) ? [] : [i];
-});
-const positional = positionalAt.map((i) => argv[i]);
+const stringOption = { type: "string" } as const;
+const booleanOption = { type: "boolean" } as const;
+const COMMON_OPTIONS = {
+  cwd: stringOption,
+  quiet: booleanOption,
+  verbose: booleanOption,
+  help: booleanOption,
+  version: booleanOption,
+};
+const ROOM_OPTIONS = {
+  ...COMMON_OPTIONS,
+  room: stringOption,
+  as: stringOption,
+};
+const OPTION_SETS = {
+  prompt: {
+    ...COMMON_OPTIONS,
+    agent: stringOption,
+    cmd: stringOption,
+    mode: stringOption,
+    file: stringOption,
+  },
+  demo: { ...COMMON_OPTIONS },
+  run: {
+    ...COMMON_OPTIONS,
+    file: stringOption,
+    detach: booleanOption,
+    agent: stringOption,
+    cmd: stringOption,
+    mode: stringOption,
+  },
+  attach: { ...COMMON_OPTIONS, task: stringOption },
+  setup: { ...COMMON_OPTIONS },
+  ps: { ...COMMON_OPTIONS },
+  merge: {
+    ...COMMON_OPTIONS,
+    squash: booleanOption,
+    rebase: booleanOption,
+  },
+  workspace: { ...COMMON_OPTIONS },
+  "workspace-move": { ...COMMON_OPTIONS },
+  loop: {
+    ...COMMON_OPTIONS,
+    agent: stringOption,
+    cmd: stringOption,
+    model: stringOption,
+  },
+  "loop-list": { ...COMMON_OPTIONS },
+  "room-info": { ...ROOM_OPTIONS },
+  "room-send": { ...ROOM_OPTIONS },
+  "room-add": {
+    ...ROOM_OPTIONS,
+    cmd: stringOption,
+    name: stringOption,
+    role: stringOption,
+    mode: stringOption,
+    model: stringOption,
+    level: stringOption,
+    base: stringOption,
+  },
+  "room-ff": { ...ROOM_OPTIONS, from: stringOption },
+  "room-diff": { ...ROOM_OPTIONS },
+  "room-remove": { ...ROOM_OPTIONS },
+  daemon: { ...COMMON_OPTIONS },
+  "daemon-stop": { ...COMMON_OPTIONS },
+  "daemon-add": { ...COMMON_OPTIONS },
+} satisfies Record<string, ParseArgsOptionsConfig>;
+type Leaf = keyof typeof OPTION_SETS;
 
+/**
+ * The pre-scan needs every string option, including those parsed only by the
+ * two handoff files. `chat.ts` owns agent, cmd, name and cwd;
+ * `daemon/main.ts` owns port and permission-timeout.
+ */
+const SELECTOR_OPTIONS: ParseArgsOptionsConfig = Object.assign(
+  {},
+  ...Object.values(OPTION_SETS),
+  {
+    agent: stringOption,
+    cmd: stringOption,
+    name: stringOption,
+    cwd: stringOption,
+    port: stringOption,
+    "permission-timeout": stringOption,
+  },
+);
+
+const PROMPT_USAGE =
+  'usage: kapelle "<prompt>" [options]; kapelle --help for the full usage';
+const RUN_USAGE = "run needs a run file: kapelle run --file <run.json>";
+const ATTACH_USAGE =
+  "attach needs one run id: kapelle attach <runId> [--task <taskId>]";
+const SETUP_USAGE = "usage: kapelle setup";
+const MERGE_USAGE = "merge needs one run id: kapelle merge <runId> [--squash]";
+const WORKSPACE_USAGE =
+  "kapelle workspace [--cwd <dir>] | kapelle workspace move <from> <to>";
+const DAEMON_USAGE =
+  "usage: kapelle daemon start [--port n] | kapelle daemon add <path> | " +
+  "kapelle daemon stop";
+const LOOP_USAGE = [
+  'usage: kapelle loop <recipe> <task> ["<note>"] [--agent <id>] [--cmd "<cmd>"] [--model <id>] [--cwd dir]',
+  "       kapelle loop list [--cwd dir]",
+  "A recipe is <repo>/.kapelle/loops/<recipe>.md, or else",
+  "$XDG_CONFIG_HOME/kapelle/loops/<recipe>.md, or else one kapelle ships,",
+  "such as starter. The orchestrator runs on claude unless --agent or --cmd",
+  "names another harness. With --model, it gets the start only when it is",
+  "confirmed on that model. If not, the room stays with no start, and this",
+  "exits 1.",
+].join("\n");
+
+/** Everything a child parser should see; only global flags before `--` go. */
+function handoffArgs(...removed: (number | undefined)[]): string[] {
+  const drop = new Set(removed.filter((index) => index !== undefined));
+  const rest: string[] = [];
+  let literal = false;
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i] as string;
+    if (drop.has(i)) continue;
+    if (arg === "--") literal = true;
+    else if (!literal && (arg === "--quiet" || arg === "--verbose")) continue;
+    rest.push(arg);
+  }
+  return rest;
+}
+
+/**
+ * The global flags a handoff still owns. `strict: false` leaves the child's
+ * own options alone, and `--` still ends options. Only the named flags are
+ * returned.
+ */
+function handoffFlags(
+  names: string[],
+): Map<string, string | boolean | undefined> {
+  const options: ParseArgsOptionsConfig = Object.fromEntries(
+    names.map((name) => [name, booleanOption]),
+  );
+  const { values: parsed } = parseArgs({
+    args: argv,
+    options,
+    allowPositionals: true,
+    strict: false,
+  });
+  const flags: Map<string, string | boolean | undefined> = new Map();
+  for (const name of names) {
+    if (parsed[name] === true) flags.set(name, true);
+  }
+  return flags;
+}
+
+const SIMPLE_LEAVES = new Map<string, Leaf>([
+  ["demo", "demo"],
+  ["run", "run"],
+  ["attach", "attach"],
+  ["setup", "setup"],
+  ["ps", "ps"],
+  ["merge", "merge"],
+]);
+const ROOM_LEAVES = new Map<string, Leaf>([
+  ["send", "room-send"],
+  ["add", "room-add"],
+  ["ff", "room-ff"],
+  ["diff", "room-diff"],
+  ["remove", "room-remove"],
+]);
+
+function daemonLeaf(verb: string | undefined): Leaf {
+  if (verb === "stop") return "daemon-stop";
+  if (verb === "add") return "daemon-add";
+  return "daemon";
+}
+
+/** The option list for the leaf the words select. */
+function selectLeaf(words: string[]): Leaf {
+  const [first, second, third] = words;
+  if (first === "workspace")
+    return second === "move" ? "workspace-move" : "workspace";
+  if (first === "loop")
+    return second === "list" && third === undefined ? "loop-list" : "loop";
+  if (first === "room") return ROOM_LEAVES.get(second ?? "") ?? "room-info";
+  if (first === "daemon") return daemonLeaf(second);
+  return first === undefined
+    ? "prompt"
+    : (SIMPLE_LEAVES.get(first) ?? "prompt");
+}
+
+const ROOM_USAGE = roomUsage();
+const USAGE = {
+  prompt: PROMPT_USAGE,
+  demo: "usage: kapelle demo",
+  run: RUN_USAGE,
+  attach: ATTACH_USAGE,
+  setup: SETUP_USAGE,
+  ps: "usage: kapelle ps",
+  merge: MERGE_USAGE,
+  workspace: WORKSPACE_USAGE,
+  "workspace-move": WORKSPACE_USAGE,
+  loop: LOOP_USAGE,
+  "loop-list": LOOP_USAGE,
+  "room-info": ROOM_USAGE,
+  "room-send": ROOM_USAGE,
+  "room-add": ROOM_USAGE,
+  "room-ff": ROOM_USAGE,
+  "room-diff": ROOM_USAGE,
+  "room-remove": ROOM_USAGE,
+  daemon: DAEMON_USAGE,
+  "daemon-stop": DAEMON_USAGE,
+  "daemon-add": DAEMON_USAGE,
+} satisfies Record<Leaf, string>;
+
+const { tokens } = parseArgs({
+  args: argv,
+  options: SELECTOR_OPTIONS,
+  allowPositionals: true,
+  strict: false,
+  tokens: true,
+});
+const wordEntries = (tokens ?? []).flatMap((token) =>
+  token.kind === "positional"
+    ? [{ value: token.value, index: token.index }]
+    : [],
+);
+const commandWords = wordEntries.map(({ value }) => value);
+const chatVerb = commandWords[0] === "chat";
+const daemonStartVerb =
+  commandWords[0] === "daemon" && commandWords[1] === "start";
+let values = new Map<string, string | boolean | undefined>();
+let positional: string[] = commandWords;
+if (chatVerb) {
+  values = handoffFlags(["version"]);
+} else if (daemonStartVerb) {
+  values = handoffFlags(["help", "version"]);
+} else if (argv.length !== 0) {
+  const leaf = selectLeaf(commandWords);
+  try {
+    const parsed = parseArgs({
+      args: argv,
+      options: OPTION_SETS[leaf],
+      allowPositionals: true,
+      strict: true,
+    });
+    values = new Map(
+      Object.entries(
+        parsed.values as Record<string, string | boolean | undefined>,
+      ),
+    );
+    positional = parsed.positionals;
+  } catch (err) {
+    const message = messageOf(err);
+    console.error(message);
+    if (isUnknownOption(err)) console.error(USAGE[leaf]);
+    process.exit(1);
+  }
+}
+
+// `parseArgs` accepts an empty string as a value. A flag that is present but
+// carries no value is a usage error, not an absence: `--cmd ""` must not
+// silently start the default harness.
+for (const [name, value] of values) {
+  if (value === "") {
+    console.error(`Option '--${name} <value>' argument missing`);
+    process.exit(1);
+  }
+}
+
+/**
+ * A parsed string flag's value. The option list is the source of the type, so
+ * a boolean name is never read through this helper.
+ */
+function flag(name: string): string | undefined;
+function flag(name: string, fallback: string): string;
+function flag(name: string, fallback?: string): string | undefined {
+  return (values.get(name) as string | undefined) ?? fallback;
+}
+
+const has = (name: string) => values.has(name);
 const promptText = positional.join(" ").trim();
 
 // `run --file` is the other half of this CLI: one prompt, or N of them from a
@@ -226,19 +461,11 @@ const runFilePath = flag("file");
 /** The agent a one-prompt run starts when neither --agent nor --cmd names one. */
 const DEFAULT_AGENT = "pi";
 
-// `kapelle chat` is `chat.ts` (S7a), with its own usage and its own flags.
-const chatVerb = positional[0] === "chat";
-
-const versionAt = argv.indexOf("--version");
-const previous = versionAt > 0 ? (argv[versionAt - 1] ?? "") : "";
-if (previous.startsWith("--") && !BOOLEAN_FLAGS.has(previous)) {
-  missingValue(previous.slice(2));
-}
-if (versionAt !== -1 && (positional.length > 0 || runFilePath)) {
+if (has("version") && (positional.length > 0 || runFilePath)) {
   console.error("--version takes no other arguments");
   process.exit(1);
 }
-if (versionAt !== -1) {
+if (has("version")) {
   try {
     process.stdout.write(`${await packageVersion()}\n`);
     process.exit(0);
@@ -343,18 +570,17 @@ function orExit<T>(f: () => T): T {
 // It would also beat the SIGINT handler's own 130 whenever a cancelled run
 // settles inside the two-second grace. The single-agent path below is an
 // `else` for the same reason — there is nothing left to skip past.
-// `positional[0]`, not `argv[0]`: options such as `--cwd` can precede the
-// subcommand, and `flag()`/`has()` deliberately parse flags from anywhere.
+// `positional[0]`, not `argv[0]`: `parseArgs` permits options such as `--cwd`
+// before the subcommand.
 if (chatVerb) {
   // As for `daemon start`: `chat.ts` parses `process.argv` itself and runs
   // when imported, so the word that chose it is taken out and the rest is
-  // handed over as typed. `positionalAt[0]` is that word's argv index: a
-  // flag value that happens to be `chat` must stay. The global presentation
-  // flags go too, as for `daemon start`: `chat.ts` defines neither.
-  const chatAt = positionalAt[0];
-  const rest = argv.filter(
-    (a, i) => i !== chatAt && a !== "--quiet" && a !== "--verbose",
-  );
+  // handed over as typed. `wordEntries[0]` is that word's argv index: a flag
+  // value that happens to be `chat` must stay. The global presentation
+  // flags before `--` go too, as for `daemon start`: `chat.ts` defines
+  // neither, but after `--` they are the caller's text.
+  const chatAt = wordEntries[0]?.index;
+  const rest = handoffArgs(chatAt);
   process.argv.splice(2, Infinity, ...rest);
   await import("./chat.ts");
 } else if (argv.length === 0) {
@@ -372,16 +598,14 @@ if (chatVerb) {
     }
   }
   await import("./chat.ts");
-} else if (positional[0] === "daemon" && positional[1] === "start") {
+} else if (daemonStartVerb) {
   // `daemon.ts` parses its own flags from `process.argv`, so the words that
   // chose it — by their argv index, as for `chat` — and the global
-  // presentation flags it does not define are taken out, and the rest is
-  // handed over as typed so `--port n` reaches it.
-  const [daemonAt, startAt] = positionalAt;
-  const rest = argv.filter(
-    (a, i) =>
-      i !== daemonAt && i !== startAt && a !== "--quiet" && a !== "--verbose",
-  );
+  // presentation flags before `--` are taken out, and the rest is handed
+  // over as typed so `--port n` reaches it.
+  const daemonAt = wordEntries[0]?.index;
+  const startAt = wordEntries[1]?.index;
+  const rest = handoffArgs(daemonAt, startAt);
   process.argv.splice(2, Infinity, ...rest);
   await import("./daemon.ts");
 } else if (positional[0] === "daemon") {
@@ -416,7 +640,7 @@ if (chatVerb) {
   });
 } else if (positional[0] === "run") {
   if (!runFilePath) {
-    console.error("run needs a run file: kapelle run --file <run.json>");
+    console.error(RUN_USAGE);
     process.exitCode = 1;
   } else if (has("detach")) {
     process.exitCode = await detachRun(runFilePath).catch((err) => {
@@ -428,7 +652,7 @@ if (chatVerb) {
   }
 } else if (positional[0] === "setup") {
   if (positional.length !== 1) {
-    console.error("usage: kapelle setup");
+    console.error(SETUP_USAGE);
     process.exitCode = 1;
   } else {
     process.exitCode = await runSetup().catch((err) => {
@@ -877,8 +1101,7 @@ async function runWorkspaceCommand(): Promise<number> {
   if (positional[1] !== "move") {
     if (positional.length > 1) {
       console.error(
-        `unknown workspace command "${positional[1]}": ` +
-          `kapelle workspace [--cwd <dir>] | kapelle workspace move <from> <to>`,
+        `unknown workspace command "${positional[1]}": ${WORKSPACE_USAGE}`,
       );
       return 1;
     }
@@ -907,7 +1130,7 @@ async function runMergeCommand(): Promise<number> {
 
   const ids = positional.slice(1);
   if (ids.length !== 1) {
-    console.error("merge needs one run id: kapelle merge <runId> [--squash]");
+    console.error(MERGE_USAGE);
     return 1;
   }
 
@@ -1140,9 +1363,7 @@ async function listRuns(): Promise<number> {
 async function attachRun(): Promise<number> {
   const [, id, ...extra] = positional;
   if (!id || extra.length) {
-    console.error(
-      "attach needs one run id: kapelle attach <runId> [--task <taskId>]",
-    );
+    console.error(ATTACH_USAGE);
     return 1;
   }
   const only = flag("task");
@@ -1476,10 +1697,7 @@ async function runDaemonCommand(): Promise<number> {
     return 0;
   }
   if (verb !== "add" || rest.length !== 1) {
-    console.error(
-      "usage: kapelle daemon start [--port n] | kapelle daemon add <path> | " +
-        "kapelle daemon stop",
-    );
+    console.error(DAEMON_USAGE);
     return 1;
   }
   const d = await findDaemon();
@@ -1761,9 +1979,12 @@ async function sendDemoIntro(
 }
 
 async function runDemoCommand(): Promise<number> {
-  const command = argv.filter((a) => a !== "--quiet" && a !== "--verbose");
-  if (command.length !== 1 || command[0] !== "demo") {
-    console.error("usage: kapelle demo");
+  const command = positional;
+  const hasOtherOption = [...values.keys()].some(
+    (name) => name !== "quiet" && name !== "verbose",
+  );
+  if (command.length !== 1 || command[0] !== "demo" || hasOtherOption) {
+    console.error(USAGE.demo);
     return 1;
   }
   try {
@@ -1876,31 +2097,12 @@ async function startLoopRoute(
  * opens the chat on that room on a terminal; a pipe gets the room's id.
  */
 async function runLoopCommand(): Promise<number> {
-  const usage = [
-    'usage: kapelle loop <recipe> <task> ["<note>"] [--agent <id>] [--cmd "<cmd>"] [--model <id>] [--cwd dir]',
-    "       kapelle loop list [--cwd dir]",
-    "A recipe is <repo>/.kapelle/loops/<recipe>.md, or else",
-    "$XDG_CONFIG_HOME/kapelle/loops/<recipe>.md, or else one kapelle ships,",
-    "such as starter. The orchestrator runs on claude unless --agent or --cmd",
-    "names another harness. With --model, it gets the start only when it is",
-    "confirmed on that model. If not, the room stays with no start, and this",
-    "exits 1.",
-  ].join("\n");
   const [, first, ...args] = positional as string[];
   // `list` with a task after it is a recipe named list.
   const list = first === "list" && args.length === 0;
   const [task = "", note] = args;
   if (!first || (!list && (!task.trim() || args.length > 2))) {
-    console.error(usage);
-    return 1;
-  }
-  const options = new Set(["cwd", "quiet", "verbose"]);
-  if (!list) for (const o of ["agent", "cmd", "model"]) options.add(o);
-  const unknown = argv.find(
-    (a) => a.startsWith("--") && !options.has(a.slice(2)),
-  );
-  if (unknown !== undefined) {
-    console.error(`error: loop has no option ${unknown}`);
+    console.error(LOOP_USAGE);
     return 1;
   }
   const cwd = absoluteFolder(flag("cwd"));
@@ -1977,29 +2179,9 @@ function roomTakes(): Record<string, [min: number, max: number]> {
   };
 }
 
-function roomOptions(verb: string): Set<string> {
-  const options = new Set(["room", "as", "cwd", "quiet", "verbose"]);
-  if (verb === "add") {
-    for (const o of ["cmd", "name", "role", "mode", "model", "level", "base"]) {
-      options.add(o);
-    }
-  }
-  if (verb === "ff") options.add("from");
-  return options;
-}
-
-function checkRoomOptions({ verb, args }: RoomInvocation): boolean {
-  // An option the verb does not take is refused, never dropped: in `send`,
-  // `use --force now` would lose `--force now` from the message unseen.
-  const options = roomOptions(verb);
-  const unknown = argv.find(
-    (a) => a.startsWith("--") && !options.has(a.slice(2)),
-  );
-  if (unknown !== undefined) {
-    const hint = verb === "send" ? "; send such text on stdin" : "";
-    console.error(`error: room ${verb} has no option ${unknown}${hint}`);
-    return false;
-  }
+function checkRoomInvocation({ verb, args }: RoomInvocation): boolean {
+  // The leaf parser refuses an option this verb does not take, so text such
+  // as `--force now` is never silently dropped from a message (#334).
   // On a terminal, a stdin read would wait for ^D with no word (#334).
   if (verb === "send" && args.length === 1 && process.stdin.isTTY) {
     console.error(
@@ -2027,7 +2209,7 @@ function parseRoomInvocation(): RoomInvocation | undefined {
     return undefined;
   }
   const invocation = { verb, args };
-  return checkRoomOptions(invocation) ? invocation : undefined;
+  return checkRoomInvocation(invocation) ? invocation : undefined;
 }
 
 type RoomNamed = (name: string) => ParticipantDto | undefined;
@@ -2198,8 +2380,9 @@ async function runRoomCommand(): Promise<number> {
   const invocation = parseRoomInvocation();
   if (!invocation) return 1;
   const { verb, args } = invocation;
-  // A usage error is the caller's, not the daemon's: catch a missing or empty
-  // model or level before any request (M9-5b, #392; M9-9b, #509).
+  // A usage error is the caller's, not the daemon's: the argv guard has
+  // already refused a missing or empty model or level before any request
+  // (M9-5b, #392; M9-9b, #509).
   const model = verb === "add" ? flag("model") : undefined;
   const level = verb === "add" ? flag("level") : undefined;
   const d = await findDaemon();

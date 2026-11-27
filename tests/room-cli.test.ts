@@ -345,7 +345,10 @@ test("add --model exits 1 when the agent is not on the model, and keeps it (M9-5
   ] as const) {
     const r = await add(MODELS, name, [...model]);
     assert.equal(r.code, 1, name);
-    assert.match(r.stderr, /--model needs a value/);
+    assert.match(
+      r.stderr,
+      /Option '--model(?: <value>)?' argument (?:is ambiguous|missing)/,
+    );
   }
 
   const roster = (await api<RoomDto>(f.d, "GET", `/rooms/${f.room.id}`)).body;
@@ -460,7 +463,10 @@ test("add --level sends thoughtLevel, fails loudly, and keeps the agent (M9-9b)"
     const r = await add("usage", [...level]);
     assert.equal(r.code, 1);
     assert.equal(r.stdout, "");
-    assert.equal(r.stderr, "--level needs a value\n");
+    assert.match(
+      r.stderr,
+      /Option '--level(?: <value>)?' argument (?:is ambiguous|missing)/,
+    );
   }
 
   const roster = (await api<RoomDto>(f.d, "GET", `/rooms/${f.room.id}`)).body;
@@ -747,7 +753,17 @@ test("room add checks --model and --level before it looks for a daemon", async (
       ]);
       assert.equal(r.code, 1);
       assert.equal(r.stdout, "");
-      assert.equal(r.stderr, `--${option} needs a value\n`);
+      if (args.length === 1) {
+        assert.equal(
+          r.stderr.split("\n")[0],
+          `Option '--${option}' argument is ambiguous.`,
+        );
+      } else {
+        assert.equal(
+          r.stderr,
+          `Option '--${option} <value>' argument missing\n`,
+        );
+      }
     }
   }
 });
@@ -782,11 +798,14 @@ test("a verb it does not know, or a wrong shape, prints the usage", async (t) =>
     "now",
   ]);
   assert.equal(send.code, 1);
-  assert.equal(
-    send.stderr.trim(),
-    "error: room send has no option --force; send such text on stdin",
+  assert.match(
+    send.stderr,
+    /Unknown option '--force'[\s\S]*usage: kapelle room/,
   );
   const info = await room(t, dir, dir, ["info", "--from", "po"]);
   assert.equal(info.code, 1);
-  assert.equal(info.stderr.trim(), "error: room info has no option --from");
+  assert.match(
+    info.stderr,
+    /Unknown option '--from'[\s\S]*usage: kapelle room/,
+  );
 });
