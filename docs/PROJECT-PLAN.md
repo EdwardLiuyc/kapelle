@@ -116,7 +116,8 @@ core/         run.ts        scheduler.ts     worktree.ts
               room.ts (M6)  a roster of independent participants — no graph,
                             no scheduler, one turn at a time per participant
                    │  one AcpAgent per task, and one per live participant
-protocol/     agent.ts (JSON-RPC/stdio, fs/* + #guardPath, permission)
+protocol/     agent.ts (JSON-RPC/stdio, fs/*, permission; historical #guardPath home)
+              path-guard.ts (the path guard, guardPathOnDisk)
               types.ts (session/update discriminated union) · registry.ts
                    │
               opencode acp │ claude-agent-acp │ copilot --acp
@@ -319,7 +320,8 @@ driven from a run file, fully verifiable offline.
   `render.mjs`) with nothing keeping them in sync.
 - **`protocol/agent.ts`** — today's `AcpAgent` essentially intact. Preserve both existing
   invariants: the `toolCallId → {title, kind, rawInput}` map (`protocol/agent.ts`) and
-  `#guardPath` (`protocol/agent.ts`). Type the single `onEvent` callback
+  `#guardPath` (`protocol/agent.ts`, historical; now `guardPathOnDisk` in
+  `protocol/path-guard.ts`). Type the single `onEvent` callback
   (`EventSink`, over an envelope wrapping the `AgentEvent` union) — **amended 2026-08-31**:
   a typed callback, not a multi-listener emitter, which stays M1a-6's job.
 - **`protocol/registry.ts`** — today's `AGENTS` map, plus three fields per entry beyond
