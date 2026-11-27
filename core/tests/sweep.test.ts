@@ -1926,16 +1926,18 @@ test("a runtime room sweep waits for the worktree queue (#203)", async (t) => {
 // --- chats (M11-14) ---------------------------------------------------------
 
 /** A chat's record, as `core/chat.ts` writes it, with its one agent in a
- *  checkout of `root`. Live when `lifecycle` is `active`; archived else. */
+ *  checkout of `root`. In the archive when `archived`, or when `inArchive`
+ *  puts a `removing` record there, as a crash after the move leaves it. */
 async function writeChat(
   root: string,
   lifecycle: "active" | "removing" | "archived",
   removedAt = new Date(NOW).toISOString(),
+  inArchive = lifecycle === "archived",
 ): Promise<{ id: string; file: string; worktree: string; branch: string }> {
   const id = newChatId();
   const worktree = await addWorktree(root, "p-solo", id);
   const branch = `kapelle/${id}/p-solo`;
-  const dir = lifecycle === "archived" ? archivedChatDir(id) : chatDir(id);
+  const dir = inArchive ? archivedChatDir(id) : chatDir(id);
   await mkdir(dir, { recursive: true });
   const file = join(dir, "chat.json");
   await writeFile(
@@ -2102,6 +2104,37 @@ test("a chat left removing is finished at boot", async (t) => {
   assert.equal(JSON.parse(await readFile(file, "utf8")).lifecycle, "archived");
   assert.equal(existsSync(chat.worktree), false, "the clean checkout goes");
   assert.equal(await hasBranch(root, chat.branch), false);
+});
+
+test("a chat a crash left removing after the move is finished, and reaped in the same pass", async (t) => {
+  const root = await gitRepo(t);
+  const old = await writeChat(root, "removing", undefined, true);
+  const recent = await writeChat(
+    root,
+    "removing",
+    new Date(PAST_RETENTION).toISOString(),
+    true,
+  );
+
+  const notices = await sweep(
+    root,
+    join(await tempDir(t), "children.json"),
+    PAST_RETENTION,
+  );
+
+  for (const chat of [old, recent]) {
+    assert.ok(
+      notices.includes(`finished the remove of chat ${chat.id}`),
+      notices.join("\n"),
+    );
+  }
+  assert.ok(notices.includes(`reaped chat ${old.id}`), notices.join("\n"));
+  assert.equal(existsSync(archivedChatDir(old.id)), false);
+  assert.equal(existsSync(old.worktree), false);
+  assert.equal(await hasBranch(root, old.branch), false);
+  const record = JSON.parse(await readFile(recent.file, "utf8"));
+  assert.equal(record.lifecycle, "archived", "inside its window");
+  assert.equal(await hasBranch(root, recent.branch), true);
 });
 
 test("a chat remove does not read the project config", async (t) => {
