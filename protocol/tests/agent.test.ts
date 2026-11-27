@@ -648,6 +648,21 @@ test("a turn's end cuts the title of a live call with no input", async (t) => {
   assert.equal((await ask("c1")).title, CUT_TITLE);
 });
 
+test("a non-string title from the wire is ignored, not cut", async (t) => {
+  const { send, ask, end } = await toolCallProbe(t);
+  await send({
+    sessionUpdate: "tool_call",
+    toolCallId: "c1",
+    // The wire is unchecked: a broken harness can put any JSON here, and
+    // `cutTitle` would throw on an object with a numeric `length`.
+    title: { length: 5_000 },
+    kind: "execute",
+    status: "completed",
+  });
+  assert.equal((await ask("c1")).title, "(untitled tool call)");
+  await end();
+});
+
 test("an update changes only the fields it carries", async (t) => {
   const { send, ask } = await toolCallProbe(t);
   await send({

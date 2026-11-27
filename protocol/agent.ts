@@ -263,6 +263,13 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** A title from the wire, when a broken harness sent text. The wire is
+ *  unchecked, so `title` can be any JSON value. */
+function wireTitle(value: unknown): string | undefined {
+  // pi-lens-ignore: no-runtime-typeof
+  return typeof value === "string" ? value : undefined;
+}
+
 /** The harness answered a request with a JSON-RPC error. `code` tells a
  *  caller what it was: `-32000` on `session/new` is "log in first" (M9-4). */
 export class RpcError extends Error {
@@ -969,7 +976,7 @@ export class AcpAgent {
           ? { kind: "other" }
           : (this.#toolCalls.get(update.toolCallId) ?? {});
       const call: RememberedToolCall = {
-        title: update.title ?? prev.title,
+        title: wireTitle(update.title) ?? prev.title,
         kind: update.kind ?? prev.kind,
         status: update.status ?? prev.status,
         rawInput: update.rawInput ?? prev.rawInput,
@@ -1175,7 +1182,10 @@ export class AcpAgent {
     const known = this.#toolCalls.get(toolCall?.toolCallId) ?? {};
     const detail: PolicyToolCall = {
       toolCallId: toolCall?.toolCallId,
-      title: toolCall?.title ?? known.title ?? "(untitled tool call)",
+      title:
+        wireTitle(toolCall?.title) ??
+        wireTitle(known.title) ??
+        "(untitled tool call)",
       kind: toolCall?.kind ?? known.kind ?? "other",
       rawInput: toolCall?.rawInput ?? known.rawInput,
     };
