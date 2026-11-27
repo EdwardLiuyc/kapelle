@@ -913,6 +913,36 @@ test("`--` records today's outcome", {
   ]);
 });
 
+test("a bare -- still ends demo's options", async (t) => {
+  const f = await fixture(t);
+  const configHome = join(f.root, "config");
+  await mkdir(join(configHome, "kapelle"), { recursive: true, mode: 0o700 });
+  await writeFile(
+    join(configHome, "kapelle", "client.json"),
+    JSON.stringify({
+      daemonAddress: "http://127.0.0.1:1",
+      accessKey: "remote-key",
+    }),
+    { mode: 0o600 },
+  );
+
+  for (const args of [
+    ["demo", "--"],
+    ["--", "demo"],
+    ["--quiet", "--", "demo"],
+  ]) {
+    const r = await spawnCli(t, args, "cli.ts", f.env, f.root).done;
+    assert.equal(r.code, 1, args.join(" "));
+    assert.match(r.stderr, /kapelle demo is local/, args.join(" "));
+    assert.doesNotMatch(r.stderr, /usage: kapelle demo/, args.join(" "));
+  }
+
+  const extra = await spawnCli(t, ["demo", "--", "--quiet"], "cli.ts", f.env)
+    .done;
+  assert.equal(extra.code, 1);
+  assert.match(extra.stderr, /^usage: kapelle demo$/m);
+});
+
 test("an unknown flag is refused with its name and usage", {
   concurrency: 4,
   timeout: 60_000,
@@ -941,7 +971,7 @@ test("an unknown flag is refused with its name and usage", {
       name: "demo",
       args: ["demo", "--bogus"],
       code: 1,
-      stderr: DEMO_USAGE,
+      stderr: /Unknown option '--bogus'[\s\S]*usage: kapelle demo/,
     },
     {
       name: "run",

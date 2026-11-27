@@ -1938,8 +1938,11 @@ async function sendDemoIntro(
 }
 
 async function runDemoCommand(): Promise<number> {
-  const command = argv.filter((a) => a !== "--quiet" && a !== "--verbose");
-  if (command.length !== 1 || command[0] !== "demo") {
+  const command = positional;
+  const hasOtherOption = [...values.keys()].some(
+    (name) => name !== "quiet" && name !== "verbose",
+  );
+  if (command.length !== 1 || command[0] !== "demo" || hasOtherOption) {
     console.error("usage: kapelle demo");
     return 1;
   }
