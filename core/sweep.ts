@@ -251,16 +251,12 @@ async function sweepChildren(
     // `{pid, runId, taskId}` entry — written by a daemon from before rooms
     // landed — is read as a run, so an upgrade never strands a live harness.
     const kind = raw.kind === "room" ? "room" : "run";
-    const owner = isString(raw.ownerId)
-      ? raw.ownerId
-      : isString(raw.runId)
-        ? raw.runId
-        : "unknown";
-    const unit = isString(raw.unitId)
-      ? raw.unitId
-      : isString(raw.taskId)
-        ? raw.taskId
-        : "unknown";
+    let owner = "unknown";
+    if (isString(raw.ownerId)) owner = raw.ownerId;
+    else if (isString(raw.runId)) owner = raw.runId;
+    let unit = "unknown";
+    if (isString(raw.unitId)) unit = raw.unitId;
+    else if (isString(raw.taskId)) unit = raw.taskId;
     const where =
       kind === "room"
         ? `room ${owner}, participant ${unit}`
@@ -613,7 +609,8 @@ export async function roomWork(
   root: string,
   roomId: string,
 ): Promise<string[]> {
-  return ownerWork(roomId, (await roomRepos(root, roomId)).repos.keys());
+  const { repos } = await roomRepos(root, roomId);
+  return ownerWork(roomId, repos.keys());
 }
 
 /**
@@ -722,8 +719,13 @@ async function repoDeletePreview(
 
   // `--stdin` keeps a repository with thousands of refs off the argv.
   const negative = outside.map((ref) => `^${ref}`).join("\n");
-  return await Promise.all(
-    [...branches].sort().map(async (branch) => {
+  const sorted = [...branches].sort((a, b) => {
+    if (a < b) return -1;
+    if (a > b) return 1;
+    return 0;
+  });
+  return Promise.all(
+    sorted.map(async (branch) => {
       const log = await gitWithInput(
         root,
         [
@@ -737,13 +739,11 @@ async function repoDeletePreview(
         negative,
         GIT_INPUT,
       );
-      const commits = log
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => {
-          const [sha = "", subject = ""] = line.split("\0");
-          return { sha, subject };
-        });
+      const commits = log.split("\n").flatMap((line) => {
+        if (!line) return [];
+        const [sha = "", subject = ""] = line.split("\0");
+        return [{ sha, subject }];
+      });
       const total =
         commits.length > DELETE_PREVIEW_COMMITS
           ? Number(

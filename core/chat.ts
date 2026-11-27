@@ -305,10 +305,11 @@ function keptText(p: {
   scratch?: true;
 }): string | undefined {
   if (!existsSync(p.worktree)) return undefined;
-  return p.scratch
-    ? `the scratch folder ${p.worktree} is kept: it holds work`
-    : `the checkout ${p.worktree}${p.branch ? ` on ${p.branch}` : ""} is ` +
-        "kept: it holds work";
+  if (p.scratch) {
+    return `the scratch folder ${p.worktree} is kept: it holds work`;
+  }
+  const on = p.branch ? ` on ${p.branch}` : "";
+  return `the checkout ${p.worktree}${on} is kept: it holds work`;
 }
 
 /** Names a checkout a release kept with work in it, once: a `keep` release
@@ -341,7 +342,7 @@ function archive(id: string, at: string, record: ChatRecord): void {
  * as a kept checkout. A folder that cannot move is named too, and the open
  * then deletes it: the checkout is left to the sweep's orphan rule.
  */
-function keepFailedOpen(record: ChatRecord, err: unknown): void {
+function keepFailedOpen(record: ChatRecord, err: Error | undefined): void {
   const removedAt = new Date().toISOString();
   const from = chatDir(record.id);
   const to = archivedChatDir(record.id);
@@ -354,7 +355,7 @@ function keepFailedOpen(record: ChatRecord, err: unknown): void {
       `cannot keep the chat's folder: ${moveErr instanceof Error ? moveErr.message : String(moveErr)}`,
     );
   }
-  if (!(err instanceof Error)) return;
+  if (err === undefined) return;
   // The start's help names the stderr log where it was written.
   if (existsSync(to)) err.message = err.message.replaceAll(from, to);
   for (const line of lines) err.message += `\n${line}`;
@@ -524,7 +525,7 @@ async function buildChat(
           ...(repositories.length > 0 && { repositories }),
           participant: { ...failed, status: "exited" },
         },
-        err,
+        err instanceof Error ? err : undefined,
       );
     }
     throw err;
