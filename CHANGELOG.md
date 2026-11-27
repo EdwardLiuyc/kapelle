@@ -23,6 +23,7 @@ What changed in each version that a user can see. A release writes its section;
 ### Changed
 
 - The CLI refuses an unknown flag and names it, instead of ignoring it (#544).
+- CLI flags accept `--name=value`, and `--` ends options (#544).
 - Git 2.36 is now required. Older Git skips worktree cleanup rather than guessing at
   paths (#532).
 - `/config` opens a config file whose content is not valid. It shows the error, and a

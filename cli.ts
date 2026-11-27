@@ -129,6 +129,15 @@ const argv = process.argv.slice(2);
 const messageOf = (err: unknown) =>
   err instanceof Error ? err.message : String(err);
 
+// `catch` binds `unknown`; this boundary checks Node's parse error code.
+// pi-lens-ignore: no-unknown-parameters
+function isUnknownOption(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err as Error & { code?: string }).code === "ERR_PARSE_ARGS_UNKNOWN_OPTION"
+  );
+}
+
 /** The package version: beside `cli.ts` in a checkout, one folder up from
  *  `dist/cli.js` in the package. */
 async function packageVersion(): Promise<string> {
@@ -235,19 +244,26 @@ const OPTION_SETS = {
 } satisfies Record<string, ParseArgsOptionsConfig>;
 type Leaf = keyof typeof OPTION_SETS;
 
-const ALL_OPTIONS = Object.values(OPTION_SETS) as ParseArgsOptionsConfig[];
-const VALUE_FLAGS = new Set([
-  ...ALL_OPTIONS.flatMap((options) =>
-    Object.entries(options)
-      .filter(([, option]) => option.type === "string")
-      .map(([name]) => name),
-  ),
-  // `chat` and `daemon start` parse these in their own files.
-  "port",
-  "permission-timeout",
-]);
+/**
+ * The pre-scan needs every string option, including those parsed only by the
+ * two handoff files. `chat.ts` owns agent, cmd, name and cwd;
+ * `daemon/main.ts` owns port and permission-timeout.
+ */
+const SELECTOR_OPTIONS: ParseArgsOptionsConfig = Object.assign(
+  {},
+  ...Object.values(OPTION_SETS),
+  {
+    agent: stringOption,
+    cmd: stringOption,
+    name: stringOption,
+    cwd: stringOption,
+    port: stringOption,
+    "permission-timeout": stringOption,
+  },
+);
 
-const PROMPT_USAGE = 'usage: kapelle "<prompt>" [options]';
+const PROMPT_USAGE =
+  'usage: kapelle "<prompt>" [options]; kapelle --help for the full usage';
 const RUN_USAGE = "run needs a run file: kapelle run --file <run.json>";
 const ATTACH_USAGE =
   "attach needs one run id: kapelle attach <runId> [--task <taskId>]";
@@ -268,35 +284,6 @@ const LOOP_USAGE = [
   "confirmed on that model. If not, the room stays with no start, and this",
   "exits 1.",
 ].join("\n");
-
-/** Words after options, with their argv indexes, for choosing the verb. */
-function positionalsWithIndex(
-  args: string[],
-): { value: string; index: number }[] {
-  const words: { value: string; index: number }[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i] as string;
-    if (arg === "--") {
-      for (let j = i + 1; j < args.length; j += 1) {
-        words.push({ value: args[j] as string, index: j });
-      }
-      break;
-    }
-    if (!arg.startsWith("-") || arg === "-") {
-      words.push({ value: arg, index: i });
-      continue;
-    }
-    const equals = arg.indexOf("=");
-    if (
-      arg.startsWith("--") &&
-      equals === -1 &&
-      VALUE_FLAGS.has(arg.slice(2))
-    ) {
-      i += 1;
-    }
-  }
-  return words;
-}
 
 /** Everything a child parser should see; only global flags before `--` go. */
 function handoffArgs(...removed: (number | undefined)[]): string[] {
@@ -397,7 +384,18 @@ const USAGE = {
   "daemon-add": DAEMON_USAGE,
 } satisfies Record<Leaf, string>;
 
-const wordEntries = positionalsWithIndex(argv);
+const { tokens } = parseArgs({
+  args: argv,
+  options: SELECTOR_OPTIONS,
+  allowPositionals: true,
+  strict: false,
+  tokens: true,
+});
+const wordEntries = (tokens ?? []).flatMap((token) =>
+  token.kind === "positional"
+    ? [{ value: token.value, index: token.index }]
+    : [],
+);
 const commandWords = wordEntries.map(({ value }) => value);
 const chatVerb = commandWords[0] === "chat";
 const daemonStartVerb =
@@ -426,7 +424,7 @@ if (chatVerb) {
   } catch (err) {
     const message = messageOf(err);
     console.error(message);
-    if (message.startsWith("Unknown option ")) console.error(USAGE[leaf]);
+    if (isUnknownOption(err)) console.error(USAGE[leaf]);
     process.exit(1);
   }
 }
@@ -642,7 +640,7 @@ if (chatVerb) {
   });
 } else if (positional[0] === "run") {
   if (!runFilePath) {
-    console.error("run needs a run file: kapelle run --file <run.json>");
+    console.error(RUN_USAGE);
     process.exitCode = 1;
   } else if (has("detach")) {
     process.exitCode = await detachRun(runFilePath).catch((err) => {
@@ -654,7 +652,7 @@ if (chatVerb) {
   }
 } else if (positional[0] === "setup") {
   if (positional.length !== 1) {
-    console.error("usage: kapelle setup");
+    console.error(SETUP_USAGE);
     process.exitCode = 1;
   } else {
     process.exitCode = await runSetup().catch((err) => {
@@ -1103,8 +1101,7 @@ async function runWorkspaceCommand(): Promise<number> {
   if (positional[1] !== "move") {
     if (positional.length > 1) {
       console.error(
-        `unknown workspace command "${positional[1]}": ` +
-          `kapelle workspace [--cwd <dir>] | kapelle workspace move <from> <to>`,
+        `unknown workspace command "${positional[1]}": ${WORKSPACE_USAGE}`,
       );
       return 1;
     }
@@ -1133,7 +1130,7 @@ async function runMergeCommand(): Promise<number> {
 
   const ids = positional.slice(1);
   if (ids.length !== 1) {
-    console.error("merge needs one run id: kapelle merge <runId> [--squash]");
+    console.error(MERGE_USAGE);
     return 1;
   }
 
@@ -1366,9 +1363,7 @@ async function listRuns(): Promise<number> {
 async function attachRun(): Promise<number> {
   const [, id, ...extra] = positional;
   if (!id || extra.length) {
-    console.error(
-      "attach needs one run id: kapelle attach <runId> [--task <taskId>]",
-    );
+    console.error(ATTACH_USAGE);
     return 1;
   }
   const only = flag("task");
@@ -1702,10 +1697,7 @@ async function runDaemonCommand(): Promise<number> {
     return 0;
   }
   if (verb !== "add" || rest.length !== 1) {
-    console.error(
-      "usage: kapelle daemon start [--port n] | kapelle daemon add <path> | " +
-        "kapelle daemon stop",
-    );
+    console.error(DAEMON_USAGE);
     return 1;
   }
   const d = await findDaemon();
@@ -1992,7 +1984,7 @@ async function runDemoCommand(): Promise<number> {
     (name) => name !== "quiet" && name !== "verbose",
   );
   if (command.length !== 1 || command[0] !== "demo" || hasOtherOption) {
-    console.error("usage: kapelle demo");
+    console.error(USAGE.demo);
     return 1;
   }
   try {
@@ -2188,6 +2180,8 @@ function roomTakes(): Record<string, [min: number, max: number]> {
 }
 
 function checkRoomInvocation({ verb, args }: RoomInvocation): boolean {
+  // The leaf parser refuses an option this verb does not take, so text such
+  // as `--force now` is never silently dropped from a message (#334).
   // On a terminal, a stdin read would wait for ^D with no word (#334).
   if (verb === "send" && args.length === 1 && process.stdin.isTTY) {
     console.error(

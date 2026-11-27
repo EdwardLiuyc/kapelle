@@ -998,19 +998,28 @@ test("an unknown flag is refused with its name and usage", {
       name: "prompt",
       args: ["hi", "--agent", "nope", "--bogus"],
       code: 1,
-      stderr: /Unknown option '--bogus'[\s\S]*usage: kapelle "<prompt>"/,
+      stderr:
+        /Unknown option '--bogus'[\s\S]*kapelle --help for the full usage/,
     },
     {
       name: "help",
       args: ["--help", "--bogus"],
       code: 1,
-      stderr: /Unknown option '--bogus'[\s\S]*usage: kapelle "<prompt>"/,
+      stderr:
+        /Unknown option '--bogus'[\s\S]*kapelle --help for the full usage/,
     },
     {
       name: "version",
       args: ["--version", "--bogus"],
       code: 1,
-      stderr: /Unknown option '--bogus'[\s\S]*usage: kapelle "<prompt>"/,
+      stderr:
+        /Unknown option '--bogus'[\s\S]*kapelle --help for the full usage/,
+    },
+    {
+      name: "prompt short cluster",
+      args: ["-fix", "the", "bug"],
+      code: 1,
+      stderr: /Unknown option '-f'[\s\S]*kapelle --help for the full usage/,
     },
     {
       name: "demo",
@@ -1174,7 +1183,8 @@ test("every argument refusal owned by cli.ts is pinned", {
       name: "no command with an unknown flag",
       args: ["--bogus"],
       code: 1,
-      stderr: /Unknown option '--bogus'[\s\S]*usage: kapelle "<prompt>"/,
+      stderr:
+        /Unknown option '--bogus'[\s\S]*kapelle --help for the full usage/,
     },
     {
       name: "--version beside a positional",
@@ -1419,6 +1429,42 @@ test("global options and -- still cover the handoffs", {
 }, async (t) => {
   const f = await fixture(t);
   await runCases(t, f, [
+    {
+      name: "--agent before chat",
+      args: ["--agent", "x", "chat", "--help"],
+      code: 0,
+      stdout: CHAT_USAGE,
+    },
+    {
+      name: "--cmd before chat",
+      args: ["--cmd", "x", "chat", "--help"],
+      code: 0,
+      stdout: CHAT_USAGE,
+    },
+    {
+      name: "--name before chat",
+      args: ["--name", "x", "chat", "--help"],
+      code: 0,
+      stdout: CHAT_USAGE,
+    },
+    {
+      name: "--cwd before chat",
+      args: ["--cwd", f.repo1, "chat", "--help"],
+      code: 0,
+      stdout: CHAT_USAGE,
+    },
+    {
+      name: "--port before daemon start",
+      args: ["--port", "9999", "daemon", "start", "--bogus"],
+      code: 1,
+      stderr: /Unknown option '--bogus'/,
+    },
+    {
+      name: "--permission-timeout before daemon start",
+      args: ["--permission-timeout", "12", "daemon", "start", "--bogus"],
+      code: 1,
+      stderr: /Unknown option '--bogus'/,
+    },
     {
       name: "--help before daemon start",
       args: ["--help", "daemon", "start"],
