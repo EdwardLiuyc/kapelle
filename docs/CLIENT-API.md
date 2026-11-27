@@ -7,7 +7,7 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.30** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.31** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
 rooms stable, M6-7b, #179, which added `resumed: "loaded"`, M6-7c, #235, which added
 `DELETE /rooms/:id`, M8-1, #265, which added a message's `from`, M8-2, #266, which
@@ -25,7 +25,8 @@ which added the hall scratch list and cleanup routes; and #504, which added the
 invalid-file view and `PUT /config`; a stable `GET /config` now answers `200` with
 `invalid` instead of `400` for a safe file whose content is invalid; and M12-4, #535,
 which made `_client_permission`'s `allow` false for a yes with no matching option;
-and #537, which added `run_not_owned` for a live run another process owns).
+and #537, which added `run_not_owned` for a live run another process owns; and
+M12-11, #545, which cut a closed decision's `title` in `GET /permissions/:id`).
 
 ## Contents
 
@@ -61,7 +62,7 @@ and #537, which added `run_not_owned` for a live run another process owns).
 The contract has a version with two numbers: `major.minor`.
 
 - `major` goes up when a change can break an existing client.
-- `minor` goes up when something is added. Old clients keep working.
+- `minor` goes up when something is added, or changed so that old clients keep working.
 
 These numbers track the **stable** parts. A **provisional** part changes with its named
 story and without a version step; the stability tables below say which is which.
@@ -395,7 +396,7 @@ the `GET` routes take none.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 30 },
+  "apiVersion": { "major": 1, "minor": 31 },
   "capabilities": ["repos", "runs", "events", "permissions", "rooms", "config"]
 }
 ```
@@ -1231,7 +1232,10 @@ room's event log on disk and replayed to every client that attaches.
 ### `GET /permissions/:id`
 
 **Reply `200`:** one decision. An open one looks the same as in `GET /permissions`. A
-closed one also has `allow` and `reason`:
+closed one also has `allow` and `reason`, and its `title` is cut at 1,000 characters, so
+a cut title ends with `…`. Since 1.31. A question about a tool call that has already
+ended has the cut title from the start, in `GET /permissions` and in its events. The
+`tool_call` event in the stream keeps the whole title.
 
 ```json
 {

@@ -11,7 +11,8 @@
  * no-ask refusal and its reuse of an approved edit decision bound to that
  * decision's shown text (#310), the toolCall-id lookup's parity with the
  * pre-port client, a finished call
- * that keeps its title and kind but not its input (#163), the handshake's
+ * that keeps its title and kind but not its input (#163), and its title cut
+ * (M12-11), the handshake's
  * version/auth handling, and exact read ranges.
  */
 
@@ -24,7 +25,7 @@ import { test } from "node:test";
 
 import { MOCK_AGENT } from "../../integration/helpers.ts";
 import type { Policy } from "../agent.ts";
-import { AcpAgent } from "../agent.ts";
+import { AcpAgent, KEPT_TITLE } from "../agent.ts";
 
 /**
  * The structural shape a test needs from an emitted event. Declared here
@@ -424,6 +425,7 @@ async function toolCallProbe(
   { failPrompt = false }: { failPrompt?: boolean } = {},
 ) {
   const seen: JudgedToolCall[] = [];
+  const events: CapturedEvent[] = [];
   const agent = new AcpAgent({
     name: "tool-calls",
     command: process.execPath,
@@ -431,6 +433,7 @@ async function toolCallProbe(
     cwd: await tempDir(t, "acp-calls-"),
     env: failPrompt ? { ...process.env, PROBE_FAIL_PROMPT: "1" } : process.env,
     requestTimeoutMs: 5_000,
+    onEvent: (e) => events.push(e),
     policy: (req) => {
       seen.push(req.toolCall);
       return true;
@@ -452,7 +455,7 @@ async function toolCallProbe(
     await agent.request("debug/end");
     return turn;
   };
-  return { agent, send, ask, end };
+  return { agent, send, ask, end, events };
 }
 
 const INPUT = { path: "a.txt", file_text: "new text\n" };
@@ -581,6 +584,68 @@ test("a call announced after its turn ended keeps no input", async (t) => {
   assert.equal(late.kind, "edit");
   assert.equal(late.rawInput, undefined);
   assert.equal(late.edits, undefined);
+});
+
+// --- a settled call keeps a cut title (M12-11) ---------------------------------
+
+/** A whole shell command as the title, as claude sends one (#545). */
+const LONG_TITLE = `python3 - <<'EOF'\n${"x".repeat(5_000)}\nEOF`;
+const CUT_TITLE = `${LONG_TITLE.slice(0, KEPT_TITLE - 1)}…`;
+
+test("a live call's question has its whole title, a late one the cut title, and the event keeps it whole", async (t) => {
+  const { send, ask, events } = await toolCallProbe(t);
+  await send({
+    sessionUpdate: "tool_call",
+    toolCallId: "c1",
+    title: LONG_TITLE,
+    kind: "execute",
+    status: "in_progress",
+    rawInput: { command: "python3" },
+  });
+  assert.equal((await ask("c1")).title, LONG_TITLE, "a live call: whole");
+
+  await send({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "c1",
+    status: "completed",
+  });
+  const late = await ask("c1");
+  assert.equal(late.title, CUT_TITLE, "a settled call: cut");
+  assert.equal(late.title.length, KEPT_TITLE);
+  assert.equal(late.kind, "execute");
+
+  // What goes to the event log is the harness's line, never the kept entry.
+  const announced = events.find((e) => e.update.sessionUpdate === "tool_call")
+    ?.update as { title?: string } | undefined;
+  assert.equal(announced?.title, LONG_TITLE);
+});
+
+test("a settled call keeps a title of KEPT_TITLE characters whole", async (t) => {
+  const { send, ask } = await toolCallProbe(t);
+  const title = "y".repeat(KEPT_TITLE);
+  await send({
+    sessionUpdate: "tool_call",
+    toolCallId: "c1",
+    title,
+    kind: "execute",
+    status: "completed",
+  });
+  assert.equal((await ask("c1")).title, title);
+});
+
+test("a turn's end cuts the title of a live call with no input", async (t) => {
+  const { send, ask, end } = await toolCallProbe(t);
+  // No input and no content: the turn-end loop skips such a call unless its
+  // title is too long.
+  await send({
+    sessionUpdate: "tool_call",
+    toolCallId: "c1",
+    title: LONG_TITLE,
+    kind: "execute",
+    status: "pending",
+  });
+  await end();
+  assert.equal((await ask("c1")).title, CUT_TITLE);
 });
 
 test("an update changes only the fields it carries", async (t) => {

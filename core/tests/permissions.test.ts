@@ -8,9 +8,10 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import test from "node:test";
 import { tempDir } from "../../integration/helpers.ts";
-import type {
-  AgentEventEnvelope,
-  PolicyRequest,
+import {
+  type AgentEventEnvelope,
+  KEPT_TITLE,
+  type PolicyRequest,
 } from "../../protocol/agent.ts";
 import type { ToolKind } from "../../protocol/types.ts";
 import { createEventBus } from "../events.ts";
@@ -216,6 +217,39 @@ test("a late abort or denyTask after a client answer adds nothing", async () => 
     allow: false,
     reason: "client",
   });
+});
+
+test("a settled decision keeps a cut title; an open one and its event keep it whole (M12-11)", async () => {
+  const { queue, events, policy } = setup();
+  const long = `bash -c '${"x".repeat(5_000)}'`;
+  const decided = policy({
+    agent: "task-a",
+    toolCall: { title: long, kind: "execute" },
+    options: [],
+  });
+  const [pending] = queue.list();
+  assert.ok(pending);
+  assert.equal(pending.title, long, "open: whole");
+  assert.equal(queue.get(pending.id)?.title, long);
+  const queued = events[0]?.update as { title?: string };
+  assert.equal(queued.title, long, "the queued event: whole");
+
+  assert.equal(queue.answer(pending.id, false), "ok");
+  assert.equal(await decided, false);
+  assert.deepEqual(queue.get(pending.id), {
+    ...pending,
+    title: `${long.slice(0, KEPT_TITLE - 1)}…`,
+    allow: false,
+    reason: "client",
+  });
+
+  // A short title settles whole.
+  const short = policy(req("edit"));
+  const [next] = queue.list();
+  assert.ok(next);
+  queue.answer(next.id, true);
+  await short;
+  assert.equal(queue.get(next.id)?.title, "do edit");
 });
 
 test("a question carries the tool's input as text, cut to stay under 4 KB", () => {

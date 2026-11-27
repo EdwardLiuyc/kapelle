@@ -1184,6 +1184,53 @@ test("an ask run with no client attached is denied at the timeout, and completes
   assert.doesNotMatch(attached.stderr, /waiting on/);
 });
 
+test("GET /permissions/:id cuts a closed decision's long title, and the log keeps it whole (M12-11)", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await tempDir(t));
+  const posted = await api(d, "POST", "/runs", {
+    cwd,
+    run: {
+      cmd: `node ${MOCK_AGENT} --scenario long-title`,
+      tasks: [{ id: "one", prompt: "hi" }],
+    },
+  });
+  assert.equal(posted.status, 202, posted.body.error?.message);
+  const whole = `Write ACP_TEST.md ${"#".repeat(5_000)}`;
+
+  const pending = await pendingOne(d);
+  assert.equal(pending.title, whole, "open: whole");
+  assert.equal(
+    (await api(d, "POST", `/permissions/${pending.id}`, { allow: true }))
+      .status,
+    200,
+  );
+  const done = await api(d, "GET", `/permissions/${pending.id}`);
+  assert.equal(done.status, 200);
+  assert.deepEqual(done.body, {
+    ...pending,
+    title: `${whole.slice(0, 999)}…`,
+    allow: true,
+    reason: "client",
+  });
+
+  // The mock asks once more, about a delete; deny it so the run ends.
+  const next = await pendingOne(d);
+  await api(d, "POST", `/permissions/${next.id}`, { allow: false });
+  await settled(d, posted.body.id);
+  const titles = (
+    await readFile(
+      join(stateDirFor(cwd), "runs", posted.body.id, "events.jsonl"),
+      "utf8",
+    )
+  )
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line).update)
+    .filter((u) => u.sessionUpdate === "tool_call" && u.toolCallId === "t2")
+    .map((u) => u.title);
+  assert.deepEqual(titles, [whole], "the event log line keeps the whole title");
+});
+
 /** Boots with `env`, starts an ask run with no client, and returns it settled. */
 async function unanswered(t: TestContext, env: Record<string, string>) {
   const d = await boot(t, await tempDir(t), [], undefined, env);
