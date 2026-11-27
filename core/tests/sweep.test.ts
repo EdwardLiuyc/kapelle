@@ -1976,9 +1976,17 @@ test("a live chat's checkout and branch are kept; one with no record is an orpha
   const strayId = newChatId();
   await mkdir(chatDir(strayId), { recursive: true });
   const stray = await addWorktree(root, "p-solo", strayId);
+  const husk = archivedChatDir(newChatId());
+  await mkdir(husk, { recursive: true });
 
   const notices = await sweep(root, join(await tempDir(t), "children.json"));
 
+  for (const dir of [chatDir(strayId), husk]) {
+    assert.ok(
+      notices.some((n) => n.includes(dir) && n.includes("no chat.json")),
+      `the folder with no record is named: ${notices.join(" | ")}`,
+    );
+  }
   assert.equal(existsSync(chat.worktree), true, notices.join("\n"));
   assert.equal(await hasBranch(root, chat.branch), true);
   assert.equal(
@@ -2078,12 +2086,13 @@ test("an archive whose chat.json cannot be read is kept, named and never reaped"
     PAST_RETENTION,
   );
 
-  assert.ok(
-    notices.some(
-      (n) => n.includes(chat.id) && n.includes("keeping removed chat"),
-    ),
-    notices.join("\n"),
+  const named = notices.filter((n) => n.includes(chat.id));
+  assert.equal(
+    named.length,
+    1,
+    `one notice for one cause: ${named.join(" | ")}`,
   );
+  assert.ok(named[0]?.includes("keeping removed chat"), named[0]);
   assert.equal(existsSync(chat.file), true);
   assert.equal(existsSync(chat.worktree), true);
   assert.equal(await hasBranch(root, chat.branch), true);

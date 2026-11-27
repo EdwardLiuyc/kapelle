@@ -41,20 +41,23 @@
  * 5. **Chats** (M11-14). `<stateDir>/chats/` is one folder for the whole
  *    daemon, so it is swept once, before the repositories. A chat left
  *    `removing` is finished (`finishChatRemove`). An archive past the
- *    retention window is reaped by `removeRoom`'s steps, in each
+ *    retention window is reaped by `removeOwnerWork`, in each
  *    repository its record names: checkouts, branches, then its folder.
  *    One with uncommitted work is kept and named. Every checkout under a
- *    chat with a `chat.json` is kept. The window has no project file to
- *    read, since an archive is in no repository.
+ *    chat with a `chat.json` is kept. A chat folder with no `chat.json` is
+ *    named at each boot, and its checkout follows the orphan rule. The
+ *    window has no project file to read, since an archive is in no
+ *    repository.
  *
  * **A room's checkouts can sit in other repositories** (M11-2, decided
  * 2026-11-19, #476). A participant may work in a repository other than the
  * one its room's record is in, and a hall agent's record is in the hall's
  * folder, which is no added repository. So the pass first reads which rooms
  * have a record, in every added repository and every `roomRoots` folder,
- * and which chats do, and only then names an orphan. If any of those
- * folders cannot be listed, no orphan is named in any repository. A room's removal goes to each repository
- * its record names, for its checkouts and its branches.
+ * and which chats do, and only then names an orphan. A room's removal goes
+ * to each repository its record names, for its checkouts and its branches.
+ * If a rooms or a chats folder cannot be listed, no orphan is named in any
+ * repository.
  *
  * **Whole-run reaping is ordered worktree-first.** If a checkout cannot be
  * removed, the record is kept too and the run is retried on the next boot —
@@ -879,51 +882,76 @@ interface ChatPass {
  * `removing`, then reaps each archive past retention. Answers the id of
  * every chat with a `chat.json`, live or archived, so its checkouts are not
  * taken for orphans; `null` when a chats folder cannot be listed. A chat
- * folder with no `chat.json` names no chat: its checkout follows the orphan
- * rule (decided at pickup 2026-11-27, #557).
+ * folder with no `chat.json` names no chat: it is named, and its checkout
+ * follows the orphan rule (decided at pickup 2026-11-27, #557).
  */
 async function sweepChats(pass: ChatPass): Promise<Set<string> | null> {
   const kept = new Set<string>();
   const live = listChats(chatsDir(), pass.onNotice);
   if (live === null) return null;
   for (const id of live) {
-    if (id === "archive" || !existsSync(join(chatDir(id), "chat.json"))) {
-      continue;
-    }
+    if (id === "archive") continue;
+    const record = readKept(chatDir(id), id, "chat", pass);
+    if (record === null) continue;
     kept.add(id);
-    await finishRemove(id, join(chatDir(id), "chat.json"), pass);
+    if (record?.lifecycle === "removing") await finishRemove(id, pass);
   }
   // After the finishes, which move folders here.
   const archived = listChats(join(chatsDir(), "archive"), pass.onNotice);
   if (archived === null) return null;
   for (const id of archived) {
-    const file = join(archivedChatDir(id), "chat.json");
-    if (!existsSync(file)) continue;
+    const dir = archivedChatDir(id);
+    let record = readKept(dir, id, "removed chat", pass);
+    if (record === null) continue;
     kept.add(id);
-    await finishRemove(id, file, pass);
-    let record: ChatRecord;
-    try {
-      record = readChatRecord(file, id);
-    } catch (err) {
-      pass.onNotice(`keeping removed chat ${id}: ${messageOf(err)}`);
-      continue;
+    if (record?.lifecycle === "removing") {
+      await finishRemove(id, pass);
+      // A finish writes `archived`; one that failed left `removing`.
+      record = readKept(dir, id, "removed chat", pass);
     }
+    if (!record) continue;
     const since = Date.parse(record.removedAt ?? "");
     if (Number.isNaN(since)) {
       pass.onNotice(
         `keeping removed chat ${id}: its record carries no readable ` +
           "removedAt, so it cannot be dated against retention",
       );
-    } else if (
+      continue;
+    }
+    const past =
       record.lifecycle === "archived" &&
       pass.retentionMs !== null &&
-      pass.now - since > pass.retentionMs &&
-      (await reapChat(record, pass.onNotice))
-    ) {
-      kept.delete(id);
-    }
+      pass.now - since > pass.retentionMs;
+    if (past && (await reapChat(record, pass.onNotice))) kept.delete(id);
   }
   return kept;
+}
+
+/**
+ * The `chat.json` in `dir`. `null` when there is none: the folder names no
+ * chat, and a notice names it, since nothing deletes it. `undefined` when
+ * it cannot be read: the chat is kept and named.
+ */
+function readKept(
+  dir: string,
+  id: string,
+  what: string,
+  { onNotice }: ChatPass,
+): ChatRecord | null | undefined {
+  const file = join(dir, "chat.json");
+  if (!existsSync(file)) {
+    onNotice(
+      `the chat folder ${dir} has no chat.json, so its checkout follows ` +
+        "the orphan rule; read any stderr log in it, then delete it by hand",
+    );
+    return null;
+  }
+  try {
+    return readChatRecord(file, id);
+  } catch (err) {
+    onNotice(`keeping ${what} ${id}: ${messageOf(err)}`);
+    return undefined;
+  }
 }
 
 /** The folders in `dir`, `[]` when it is missing, `null` when it cannot be
@@ -941,15 +969,10 @@ function listChats(
   }
 }
 
-/** Finishes a chat's remove when its record still says `removing`. A record
- *  that cannot be read, or a finish that throws, is named and kept. */
-async function finishRemove(
-  id: string,
-  file: string,
-  { onNotice }: ChatPass,
-): Promise<void> {
+/** Finishes a chat's remove its record says is `removing`. A finish that
+ *  throws is named, and the chat stays `removing`. */
+async function finishRemove(id: string, { onNotice }: ChatPass): Promise<void> {
   try {
-    if (readChatRecord(file, id).lifecycle !== "removing") return;
     for (const notice of await finishChatRemove(id)) {
       onNotice(`chat ${id}: ${notice.text}`);
     }
@@ -960,7 +983,7 @@ async function finishRemove(
 }
 
 /**
- * Reaps a removed chat past retention, by `removeRoom`'s steps in each
+ * Reaps a removed chat past retention, by `removeOwnerWork` in each
  * repository its record names, then its archived folder. One with
  * uncommitted work is kept and named, as a dismissed room is. A scratch
  * folder is left to `kapelle chat scratch`. Answers whether the chat is gone.

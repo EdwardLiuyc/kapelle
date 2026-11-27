@@ -47,7 +47,7 @@ Legend: **✅ happy** · **⚠ warning** · **❌ bad**.
 | --- | --- | --- |
 | User file | the daemon's start, however it is reached: `kapelle daemon start` or bare `kapelle` starting one (M9-2) | in-process CLI, merge, sweep |
 | Client file | `cli.ts` for daemon-facing HTTP calls and the bare-client auto-start decision; `chat.ts` and `chat/`; the non-detached `run --file` and `kapelle demo` checks read it only to refuse | the daemon process, explicit `kapelle daemon start`/`stop`, `merge`, `workspace`, sweep |
-| Project file | `POST /repos`, `POST /runs` (each request), `POST /rooms` and each room the daemon restores at start (its stall limits and turn cap), `kapelle run --file`, `sweepBoot` per repository; a removed chat is in no repository, so its window is `KAPELLE_RETENTION_MS` or the default, not a project file; `GET /config`, `PATCH /config` and `PUT /config` | plain `kapelle "prompt"`, `merge` |
+| Project file | `POST /repos`, `POST /runs` (each request), `POST /rooms` and each room the daemon restores at start (its stall limits and turn cap), `kapelle run --file`, `sweepBoot` per repository (not for a removed chat: see `retentionMs` under "Precedence and built-in floors"), `GET /config`, `PATCH /config` and `PUT /config` | plain `kapelle "prompt"`, `merge` |
 | `KAPELLE_*` env | the daemon's start (including bare `kapelle`), every run-default and room-cap resolution, `kapelle run --file`, a removed chat's retention window | plain prompt, merge |
 
 ## User file — `$XDG_CONFIG_HOME/kapelle/config.json`
