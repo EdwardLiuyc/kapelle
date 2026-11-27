@@ -116,7 +116,8 @@ core/         run.ts        scheduler.ts     worktree.ts
               room.ts (M6)  a roster of independent participants — no graph,
                             no scheduler, one turn at a time per participant
                    │  one AcpAgent per task, and one per live participant
-protocol/     agent.ts (JSON-RPC/stdio, fs/* + #guardPath, permission)
+protocol/     agent.ts (JSON-RPC/stdio, fs/*, permission)
+              path-guard.ts (the path guard, guardPathOnDisk)
               types.ts (session/update discriminated union) · registry.ts
                    │
               opencode acp │ claude-agent-acp │ copilot --acp
