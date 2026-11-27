@@ -267,10 +267,10 @@ The more interesting result is what they *didn't* call:
 `fs.readTextFile`/`writeTextFile: true` and all three ignore it, reading and writing
 through their own process. Files created during the write probe appeared on disk in every
 throwaway workspace without a single `fs/write_text_file` crossing the wire. Therefore
-`guardPathOnDisk` (`protocol/path-guard.ts`) currently protects **nothing in production** — it is dead code
-against these three harnesses, live only against `mock-agent.mjs`. It should stay (a
-harness may use `fs/*` tomorrow, and the MCP path may), but no containment claim may rest
-on it.
+`guardPathOnDisk` (`protocol/path-guard.ts`) currently protects **nothing in production**
+— it is dead code against these three harnesses, live only against `mock-agent.mjs`.
+It should stay (a harness may use `fs/*` tomorrow, and the MCP path may), but no
+containment claim may rest on it.
 
 How each harness reads a file, from `tool_call.kind`:
 
