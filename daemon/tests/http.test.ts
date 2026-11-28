@@ -8,7 +8,14 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -169,6 +176,28 @@ test("readBody counts a body sent without Content-Length", async () => {
   );
 });
 
+test("existingDir starts ~, ~/… and a relative path from the daemon user's home (M11-5)", (t) => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "kapelle-home-")));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  mkdirSync(join(home, "src", "app"), { recursive: true });
+  // `os.homedir()` reads `HOME` on POSIX.
+  const before = process.env.HOME;
+  process.env.HOME = home;
+  t.after(() => {
+    if (before === undefined) delete process.env.HOME;
+    else process.env.HOME = before;
+  });
+  assert.equal(existingDir("~", "cwd"), home);
+  assert.equal(existingDir(".", "cwd"), home);
+  assert.equal(existingDir("~/src/app", "cwd"), join(home, "src", "app"));
+  assert.equal(existingDir("src/app", "cwd"), join(home, "src", "app"));
+  // `~bob` is a name, not another user's home.
+  assert.throws(
+    () => existingDir("~bob", "cwd"),
+    (err) => err instanceof Refusal && err.message.includes(join(home, "~bob")),
+  );
+});
+
 test("existingDir returns the real path of a folder, else a 400", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "kapelle-http-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -179,7 +208,7 @@ test("existingDir returns the real path of a folder, else a 400", (t) => {
 
   const file = join(dir, "f");
   writeFileSync(file, "");
-  for (const bad of ["relative/path", file, join(dir, "missing"), 5]) {
+  for (const bad of ["", file, join(dir, "missing"), 5]) {
     assert.throws(
       () => existingDir(bad, "cwd"),
       (err) => err instanceof Refusal && err.status === 400,

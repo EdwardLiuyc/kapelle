@@ -154,8 +154,22 @@ async function fakeDaemon(
   const configRelease = deferred();
   let installBody: unknown;
   let posts = 0;
+  const folderPaths: string[] = [];
   const server = createServer((req, res) => {
     void (async () => {
+      const url = new URL(req.url ?? "/", "http://x");
+      if (req.method === "GET" && url.pathname === "/folders") {
+        // A remote daemon's folders (M11-5): none of them is on this disk.
+        folderPaths.push(url.searchParams.get("path") ?? "");
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            path: "/srv/kapelle-remote-only",
+            folders: [".git", "alpha", "alps", "beta"],
+          }),
+        );
+        return;
+      }
       const agent = room?.participants.find(
         (p) => req.url === `/rooms/r/agents/${p.id}`,
       );
@@ -235,6 +249,7 @@ async function fakeDaemon(
     configRelease,
     installBody: () => installBody,
     posts: () => posts,
+    folderPaths,
   };
 }
 
@@ -1392,6 +1407,22 @@ test("the loop form's folder row completes with Tab (M9-5d, #458)", async (t) =>
   pressKey(box, "\r");
   type(box, `\x15${parent}/al\t`);
   assert.match(shownOf(box), /alpha-1\/ {2}alpha-2\//);
+});
+
+test("with a daemon address set, the folder row starts at ~ and Tab asks the daemon (M11-5)", async (t) => {
+  const fake = await fakeDaemon(t);
+  const box = makeBox({ ...fake.d, fromClient: true });
+  box.newForm();
+  assert.match(shownOf(box), /folder\s+~$/m);
+
+  pressKey(box, "\r");
+  type(box, "\x15~/al\t");
+  await until("the daemon's folders", () =>
+    /alpha\/ {2}alps\//.test(shownOf(box)),
+  );
+  assert.match(shownOf(box), /~\/alp/);
+  // The typed folder goes as typed: this disk has no `/srv/...`.
+  assert.deepEqual(fake.folderPaths, ["~/"]);
 });
 
 test("the loop form keeps recipe, task, note and command values that look like form sentinels (#458)", async (t) => {

@@ -342,6 +342,7 @@ async function chatPiped(
       rosterOf(state, room.participants),
       room.hall,
       direct?.id,
+      d.fromClient,
     );
     if ("error" in c) {
       console.error(`! ${c.error}`);

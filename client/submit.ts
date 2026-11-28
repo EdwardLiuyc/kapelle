@@ -57,14 +57,16 @@ function directTarget(
 }
 
 /** What `text` is, with this roster. `hall` is the room's `hall` flag;
- *  `direct` pins a piped chat to one participant. */
+ *  `direct` pins a piped chat to one participant; `remote` is a daemon
+ *  named in `client.json` (`parseCommand`). */
 export function parseLine(
   text: string,
   roster: readonly Named[],
   hall = false,
   direct?: string,
+  remote = false,
 ): Line {
-  const command = parseCommand(text, roster, hall, direct);
+  const command = parseCommand(text, roster, hall, direct, remote);
   if (command) return command;
   return {
     verb: "message",

@@ -12,7 +12,8 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { isAbsolute } from "node:path";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
 import type { ErrorCode } from "../client/contract.ts";
 
 const messageOf = (err: unknown) =>
@@ -181,23 +182,40 @@ export async function readBody(
   return body as Record<string, unknown>;
 }
 
-/** `value` as the real path of a folder that exists, or a 400 naming `field`. */
+/** Whether `path` is a folder. A name too long, a file on the way or no
+ *  access is not one: a 400, never a 500. */
+function isFolder(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `value` as the real path of a folder that exists, or a 400 naming `field`.
+ * `~`, `~/…` and a relative path start from the daemon user's home (M11-5):
+ * a remote client sends a folder as typed, and the daemon's own current
+ * folder means nothing to the person. A local client sends absolute paths.
+ */
 export function existingDir(value: unknown, field: string): string {
-  if (typeof value !== "string" || !isAbsolute(value)) {
+  if (typeof value !== "string" || !value) {
     throw refusal(
       400,
       "invalid_request",
-      `"${field}" must be an absolute path; got ${JSON.stringify(value)}`,
+      `"${field}" must be a folder path; got ${JSON.stringify(value)}`,
     );
   }
-  if (!statSync(value, { throwIfNoEntry: false })?.isDirectory()) {
+  // `~` becomes `.`, so `resolve` puts both forms under the home folder.
+  const path = resolve(homedir(), value.replace(/^~(?=\/|$)/, "."));
+  if (!isFolder(path)) {
     throw refusal(
       400,
       "invalid_request",
-      `"${field}": ${value} does not exist as a folder`,
+      `"${field}": ${path} does not exist as a folder`,
     );
   }
-  return realpathSync(value);
+  return realpathSync(path);
 }
 
 /**

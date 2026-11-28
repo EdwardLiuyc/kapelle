@@ -1,5 +1,6 @@
 /**
- * Folder completion — `client/folder.ts`, story M4-5 (#181).
+ * Folder completion — `client/folder.ts`, story M4-5 (#181), and which disk
+ * counts with a daemon address set (M11-5, #479).
  */
 
 import assert from "node:assert/strict";
@@ -11,10 +12,19 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
-import { absoluteFolder, completeFolder, expandHome } from "../folder.ts";
+import test, { type TestContext } from "node:test";
+import type { DaemonAddress } from "../daemon.ts";
+import {
+  absoluteFolder,
+  completeDaemonFolder,
+  completeFolder,
+  expandHome,
+  folderToSend,
+} from "../folder.ts";
 
 test("~ and ~/… are the home folder; nothing else changes", () => {
   assert.equal(expandHome("~"), homedir());
@@ -84,6 +94,95 @@ test("a removed current folder gives no path, never a throw", async (t) => {
   assert.equal(absoluteFolder("~"), homedir());
   assert.deepEqual(completeFolder("sub", absoluteFolder()), {
     value: "sub",
+    options: [],
+  });
+});
+
+test("a local daemon gets a full path from this disk; a remote one gets the text as typed (M11-5)", async (t) => {
+  // Local: the folder `kapelle` was typed in, `~` from this home.
+  assert.equal(folderToSend(undefined, false), process.cwd());
+  assert.equal(folderToSend("sub", false), join(process.cwd(), "sub"));
+  assert.equal(folderToSend("~/x", false), join(homedir(), "x"));
+  // Remote: nothing is resolved here, and none is the daemon user's home.
+  for (const typed of ["sub", "~/x", "/srv/app", "."]) {
+    assert.equal(folderToSend(typed, true), typed);
+  }
+  assert.equal(folderToSend(undefined, true), "~");
+  assert.equal(folderToSend("", true), "~");
+
+  // A removed current folder matters only to a local daemon.
+  const gone = await mkdtemp(join(tmpdir(), "folder-gone-"));
+  const back = process.cwd();
+  t.after(() => process.chdir(back));
+  process.chdir(gone);
+  await rmdir(gone);
+  assert.equal(folderToSend(undefined, false), undefined);
+  assert.equal(folderToSend("sub", true), "sub");
+});
+
+/** A daemon that answers `GET /folders` from a disk this machine lacks. */
+async function remoteFolders(t: TestContext, status = 200) {
+  const asked: string[] = [];
+  const server = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://x");
+    asked.push(`${url.pathname} ${url.searchParams.get("path")}`);
+    res.writeHead(status, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify(
+        status === 200
+          ? {
+              path: "/srv/kapelle-remote-only",
+              folders: [".cache", "agent-notes", "agent-team", "apps"],
+            }
+          : { error: { code: "invalid_request", message: "no such folder" } },
+      ),
+    );
+  });
+  await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
+  t.after(() => server.close());
+  const d: DaemonAddress = {
+    port: (server.address() as AddressInfo).port,
+    token: "key",
+    fromClient: true,
+  };
+  return { d, asked };
+}
+
+test("a remote completion lists the daemon's folders, with the same rules as a local one (M11-5)", async (t) => {
+  const { d, asked } = await remoteFolders(t);
+  assert.deepEqual(await completeDaemonFolder(d, "~/src/ag"), {
+    value: "~/src/agent-",
+    options: ["agent-notes", "agent-team"],
+  });
+  assert.deepEqual(await completeDaemonFolder(d, "/srv/x/agent-t"), {
+    value: "/srv/x/agent-team/",
+    options: [],
+  });
+  assert.equal((await completeDaemonFolder(d, "/a/.c")).value, "/a/.cache/");
+  assert.ok(!(await completeDaemonFolder(d, "/a/")).options.includes(".cache"));
+  // A relative name lists the daemon user's home; a bare `~` is `~/`.
+  assert.equal((await completeDaemonFolder(d, "ap")).value, "apps/");
+  assert.equal((await completeDaemonFolder(d, "~")).options.length, 3);
+  // Each folder went as typed, for the daemon to resolve.
+  assert.deepEqual(asked, [
+    "/folders ~/src/",
+    "/folders /srv/x/",
+    "/folders /a/",
+    "/folders /a/",
+    "/folders .",
+    "/folders ~/",
+  ]);
+});
+
+test("a refused or lost remote completion leaves the text as typed (M11-5)", async (t) => {
+  const { d } = await remoteFolders(t, 400);
+  assert.deepEqual(await completeDaemonFolder(d, "~/nope/x"), {
+    value: "~/nope/x",
+    options: [],
+  });
+  const lost: DaemonAddress = { port: 1, token: "key", fromClient: true };
+  assert.deepEqual(await completeDaemonFolder(lost, "~/x"), {
+    value: "~/x",
     options: [],
   });
 });

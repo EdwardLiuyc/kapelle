@@ -3,11 +3,19 @@
  * and `PUT /config`. Both are about one added repository: adding one checks
  * its config (M2-7), and the config routes answer only for an added one.
  * `refuseUnadded` is the check that every route taking a folder shares.
+ *
+ * `GET /folders` (M11-5) lists the folders in one folder, for a remote
+ * screen's Tab completion: that screen's own disk is not the daemon's. Any
+ * folder this user can read, added or not: a person picks a repository with
+ * it before adding one, and a token holder can already run a command.
  */
 
+import { readdirSync, statSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { join } from "node:path";
 import type {
   ConfigView,
+  FolderList,
   RepoAdded,
   RepoRoots,
 } from "../../client/contract.ts";
@@ -51,6 +59,35 @@ export async function refuseUnadded(
     );
   }
   return root;
+}
+
+/** The names of the folders in `dir`, a link to a folder too, sorted. */
+function folderNames(dir: string): string[] {
+  const names: string[] = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.isDirectory()) names.push(e.name);
+    else if (e.isSymbolicLink()) {
+      try {
+        if (statSync(join(dir, e.name)).isDirectory()) names.push(e.name);
+      } catch {
+        // A broken link, or one this user cannot follow: no folder.
+      }
+    }
+  }
+  return names.sort((a, b) => a.localeCompare(b));
+}
+
+/** `GET /folders?path=…`: the folders in `path`, which may start with `~`
+ *  or be relative to the daemon user's home, as every `cwd` may. */
+function sendFolders(res: ServerResponse, query: URLSearchParams) {
+  const path = existingDir(query.get("path"), "path");
+  let folders: string[];
+  try {
+    folders = folderNames(path);
+  } catch (err) {
+    throw refusal(400, "invalid_request", `"path": ${messageOf(err)}`);
+  }
+  send(res, 200, { path, folders } satisfies FolderList);
 }
 
 /** The routes for `repos`, the added roots. `POST /repos` adds to it. */
@@ -128,6 +165,11 @@ export function repoRoutes(repos: Set<string>): Route[] {
       method: "GET",
       pattern: /^\/repos$/,
       handler: ({ res }) => send(res, 200, [...repos] satisfies RepoRoots),
+    },
+    {
+      method: "GET",
+      pattern: /^\/folders$/,
+      handler: ({ res, query }) => sendFolders(res, query),
     },
     {
       method: "GET",

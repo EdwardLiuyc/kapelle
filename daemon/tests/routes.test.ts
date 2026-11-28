@@ -21,6 +21,7 @@ const SAMPLES: [string, string][] = [
   ["GET", "/version"],
   ["POST", "/repos"],
   ["GET", "/repos"],
+  ["GET", "/folders"],
   ["GET", "/config"],
   ["PATCH", "/config"],
   ["PUT", "/config"],

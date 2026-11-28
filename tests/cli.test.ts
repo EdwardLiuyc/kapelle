@@ -26,6 +26,7 @@ import {
   readFile,
   realpath,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
@@ -41,12 +42,15 @@ const git = async (cwd: string, ...args: string[]) =>
 import { API_VERSION } from "../client/contract.ts";
 import { stateDirFor } from "../core/runtime.ts";
 import {
+  api,
   assertAbsent,
+  bootDaemon,
   gitRepo,
   HOSTILE_AGENT,
   MOCK_AGENT,
   REPO,
   runCli,
+  settled,
   spawnCli,
   tempDir,
 } from "../integration/helpers.ts";
@@ -397,6 +401,68 @@ test("a configured remote daemon accepts run --file --detach", async (t) => {
   assert.ok(
     remote.seen.every((entry) => entry.authorization === "Bearer remote-key"),
   );
+});
+
+test("run --file --detach takes its folder from the client locally, and from the daemon's home with an address set (M11-5)", async (t) => {
+  const repo = await realpath(await gitRepo(t));
+  const home = await realpath(await tempDir(t));
+  await symlink(repo, join(home, "app"));
+  const runtime = await tempDir(t);
+  // `bootDaemon` points this process's state home at the daemon's; the
+  // later tests here read their runs from this file's own.
+  const stateHome = process.env.XDG_STATE_HOME;
+  t.after(() => {
+    if (stateHome === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = stateHome;
+  });
+  const d = await bootDaemon(t, runtime, [], undefined, { HOME: home });
+  assert.equal((await api(d, "POST", "/repos", { path: repo })).status, 200);
+  const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
+  const detach = async (
+    env: Record<string, string>,
+    cwd: string,
+    ...extra: string[]
+  ) => {
+    const args = ["run", "--file", file, "--detach", "--quiet", ...extra];
+    const r = await spawnCli(t, args, "cli.ts", env, cwd).done;
+    if (r.code !== 0) return r;
+    const run = await settled(d, r.stdout.trim());
+    return { ...r, cwd: run.cwd };
+  };
+
+  // Local: no --cwd is the folder `kapelle` was typed in.
+  const local = await detach({ XDG_RUNTIME_DIR: runtime }, repo);
+  assert.equal(local.code, 0, local.stderr);
+  assert.equal("cwd" in local && local.cwd, repo);
+
+  // Remote: typed from a folder the daemon does not know, under another
+  // home. `~/app` and `app` are the daemon home's `app`.
+  const configHome = await tempDir(t);
+  await writeClientDaemon(configHome, d.url, d.token);
+  const remote = {
+    XDG_CONFIG_HOME: configHome,
+    XDG_RUNTIME_DIR: await tempDir(t),
+    HOME: await tempDir(t),
+  };
+  const elsewhere = await tempDir(t);
+  for (const typed of ["~/app", "app"]) {
+    const r = await detach(remote, elsewhere, "--cwd", typed);
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal("cwd" in r && r.cwd, repo, typed);
+  }
+  const added = await spawnCli(
+    t,
+    ["daemon", "add", "app"],
+    "cli.ts",
+    remote,
+    elsewhere,
+  ).done;
+  assert.equal(added.code, 0, added.stderr);
+  assert.equal(added.stdout, `added ${repo}\n`);
+  // No --cwd is the daemon's home, which is not an added repository.
+  const none = await detach(remote, elsewhere);
+  assert.equal(none.code, 1);
+  assert.match(none.stderr, new RegExp(`${home} has not been added`));
 });
 
 test("--file runs every task and reports each one", async (t) => {

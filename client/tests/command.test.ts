@@ -155,6 +155,26 @@ test("/chat and /add take an agent's own --cwd, made absolute; without it none i
   assert.equal("cwd" in agentOf("/add pi"), false);
 });
 
+test("with a daemon address set, a typed --cwd goes as typed and none is ~ (M11-5)", () => {
+  const remote = (line: string) =>
+    parseCommand(line, roster, false, undefined, true);
+  const folderOf = (line: string) => {
+    const c = remote(line);
+    assert.ok(c && "verb" in c, line);
+    if (c.verb === "new" || c.verb === "loop") return c.body.cwd;
+    assert.ok("agent" in c, line);
+    return c.agent.cwd;
+  };
+  assert.equal(folderOf("/new pi --cwd src/app"), "src/app");
+  assert.equal(folderOf("/new pi --cwd ~/app"), "~/app");
+  assert.equal(folderOf("/new pi"), "~");
+  assert.equal(folderOf("@bob /loop fix 269 --cwd app"), "app");
+  assert.equal(folderOf("@bob /loop fix 269"), "~");
+  assert.equal(folderOf("/chat pi --cwd ~/app"), "~/app");
+  // A chat with no folder still gets a scratch folder (M11-2).
+  assert.equal(folderOf("/chat pi"), undefined);
+});
+
 test("/title and /cap need a room in a chat; both still work in a room (#517)", () => {
   for (const line of ["/title login bug", "@bob /title login bug"]) {
     assert.deepEqual(parseCommand(line, roster, true), {

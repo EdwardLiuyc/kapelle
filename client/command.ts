@@ -57,7 +57,7 @@ import type {
   RoomDto,
 } from "./contract.ts";
 import { call, type DaemonAddress, type Reply } from "./daemon.ts";
-import { absoluteFolder, FOLDER_GONE } from "./folder.ts";
+import { FOLDER_GONE, folderToSend } from "./folder.ts";
 import { loopMessage } from "./loop.ts";
 import { fold, MENTION, type Named, targetOf } from "./mention.ts";
 import { printable } from "./room.ts";
@@ -385,7 +385,7 @@ function parseUntargeted(
   return undefined;
 }
 
-function parseLoop(args: string[]): ParsedCommand {
+function parseLoop(args: string[], remote: boolean): ParsedCommand {
   if (!args.length) return { verb: "form", form: "loop" };
   const o = options(args, ["agent", "cmd", "model", "cwd"]);
   if ("error" in o) return { error: `${o.error}; usage: ${USAGE.loop}` };
@@ -394,7 +394,7 @@ function parseLoop(args: string[]): ParsedCommand {
   if (!recipe || !task?.trim() || extra.length || o.values.model === "") {
     return { error: `usage: ${USAGE.loop}` };
   }
-  const cwd = absoluteFolder(o.values.cwd);
+  const cwd = folderToSend(o.values.cwd, remote);
   if (!cwd) return { error: FOLDER_GONE };
   return loopCommand({ ...o.values, recipe, task, note, cwd });
 }
@@ -402,6 +402,7 @@ function parseLoop(args: string[]): ParsedCommand {
 function parseSimpleRoom(
   verb: string,
   args: string[],
+  remote: boolean,
 ): ParsedCommand | undefined {
   if (verb !== "setup" && verb !== "config" && verb !== "loop") {
     return undefined;
@@ -418,7 +419,7 @@ function parseSimpleRoom(
       ? { error: USAGE.config as string }
       : { verb: "form", form: "config" };
   }
-  return parseLoop(args);
+  return parseLoop(args, remote);
 }
 
 interface RoomSettingInput {
@@ -485,13 +486,14 @@ function parseAgentSpec(
 function parseNewRoom(
   agent: string | undefined,
   values: Record<string, string | undefined>,
+  remote: boolean,
 ): ParsedCommand {
   const { cmd, name, title, cwd, model } = values;
   if (!agent && !cmd && (name || model)) {
     const flag = name ? "--name" : "--model";
     return { error: `${flag} needs a harness or --cmd; ${USAGE.new}` };
   }
-  const folder = absoluteFolder(cwd);
+  const folder = folderToSend(cwd, remote);
   if (!folder) return { error: FOLDER_GONE };
   return {
     verb: "new",
@@ -508,6 +510,7 @@ function parseAgentForm(
   verb: string,
   args: string[],
   hall: boolean,
+  remote: boolean,
 ): ParsedCommand | undefined {
   if (verb !== "new" && verb !== "add" && verb !== "chat") return undefined;
   if (verb === "add" && hall) return { error: ADD_IN_CHAT };
@@ -521,9 +524,9 @@ function parseAgentForm(
   if (extra.length) return { error: `one harness only; ${USAGE[verb]}` };
   const cwd = o.values.cwd;
   // `/chat` and `/add` send a folder only when one was typed (M11-2).
-  const own = cwd === undefined ? undefined : absoluteFolder(cwd);
+  const own = cwd === undefined ? undefined : folderToSend(cwd, remote);
   if (cwd !== undefined && !own) return { error: FOLDER_GONE };
-  if (verb === "new") return parseNewRoom(agent, o.values);
+  if (verb === "new") return parseNewRoom(agent, o.values, remote);
   return parseAgentSpec(verb, agent, o.values, own);
 }
 
@@ -619,12 +622,15 @@ function parseTargeted(input: TargetInput): ParsedCommand {
  * a command refused before any request; the screen shows it and gives the
  * text back. `hall` is the `hall` flag of the room on screen. `direct` is a
  * piped chat's pinned participant id, used by a command with no mention.
+ * `remote` is a daemon named in `client.json`: a typed `--cwd` goes as typed
+ * (`client/folder.ts`).
  */
 export function parseCommand(
   input: string,
   roster: readonly Named[],
   hall = false,
   direct?: string,
+  remote = false,
 ): ParsedCommand | undefined {
   const text = input.trim();
   const m = MENTION.exec(text);
@@ -640,9 +646,9 @@ export function parseCommand(
     case "setting":
       return parseRoomSetting({ verb, args, rest, head, hall });
     case "simple":
-      return parseSimpleRoom(verb, args);
+      return parseSimpleRoom(verb, args, remote);
     case "form":
-      return parseAgentForm(verb, args, hall);
+      return parseAgentForm(verb, args, hall, remote);
     case undefined:
       break;
     default: {

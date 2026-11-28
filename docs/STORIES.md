@@ -4658,6 +4658,12 @@ the daemon user's home and a required absolute `--cwd`.
 **Amended 2026-11-26 (#478):** with an address set, `run --file --detach` is the
 supported remote run path. This story must cover `detachRun` and resolve its `--cwd` on
 the daemon machine, not the client's disk.
+**Decided at pickup 2026-11-28 (#479), with the person:** with an address set, a relative
+path starts from the daemon user's home, as `ssh` and `scp` do, and no `--cwd` means that
+home. The daemon resolves every folder field in one place (`existingDir`), so a local
+client, which sends absolute paths, sees no change. `GET /folders` lists any folder the
+daemon's user can read: a token holder can already run a command. `kapelle daemon add`
+sends its path as typed too. Recipes stay local until M11-6.
 *Done when* tests cover a local `kapelle` that still picks the folder it was typed in;
 and, with an address set, completion and the folder check against a daemon whose folders
 the client's disk does not have, a `~` path resolved on the daemon's machine, a
