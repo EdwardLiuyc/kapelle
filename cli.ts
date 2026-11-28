@@ -520,9 +520,9 @@ Options:
   --agent <id>     ${Object.keys(AGENTS).join(" | ")}   (default: ${DEFAULT_AGENT})
   --cmd "<cmd>"    custom agent command, e.g. --cmd "opencode acp"
   --cwd <dir>      workspace root (default: current directory). With a
-                   client daemon address, run --detach, a loop start and
-                   daemon add send it as typed: the daemon user's home by
-                   default, and a relative path starts there
+                   client daemon address, run --detach, a loop start,
+                   chat new and daemon add send it as typed: the daemon
+                   user's home by default, and a relative path starts there
   --mode <mode>    ask | safe | auto      (default: the agent's own)
                      ask  = reads auto-approved, mutations prompt you
                      safe = reads only, all mutations refused
@@ -2086,10 +2086,9 @@ async function startLoopRoute(
   if (!out.ok) {
     printRefusal(out);
     if (out.code === "repo_not_added") {
-      // Quoted, so a shell does not expand a remote `~` on this machine.
-      console.error(
-        `add the repository first: kapelle daemon add ${JSON.stringify(cwd)}`,
-      );
+      // Single-quoted, so a shell expands no remote `~` or `$` here.
+      const quoted = `'${cwd.replaceAll("'", "'\\''")}'`;
+      console.error(`add the repository first: kapelle daemon add ${quoted}`);
     }
     return 1;
   }
@@ -2131,7 +2130,7 @@ async function runLoopCommand(): Promise<number> {
     return 1;
   }
 
-  if (!d) return listLoopRecipes(cwd);
+  if (list || !d) return listLoopRecipes(cwd);
 
   return startLoopRoute(
     d,

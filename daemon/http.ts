@@ -182,13 +182,19 @@ export async function readBody(
   return body as Record<string, unknown>;
 }
 
-/** Whether `path` is a folder. A name too long, a file on the way or no
- *  access is not one: a 400, never a 500. */
-function isFolder(path: string): boolean {
+/** Why `path` is no folder to use, or `undefined` when it is one. A name
+ *  too long or a parent it cannot search is a 400 too, never a 500, and
+ *  says so rather than that nothing is there. */
+function notFolder(path: string): string | undefined {
   try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
+    return statSync(path).isDirectory()
+      ? undefined
+      : "does not exist as a folder";
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR"
+      ? "does not exist as a folder"
+      : `cannot be checked as a folder (${code})`;
   }
 }
 
@@ -208,13 +214,8 @@ export function existingDir(value: unknown, field: string): string {
   }
   // `~` becomes `.`, so `resolve` puts both forms under the home folder.
   const path = resolve(homedir(), value.replace(/^~(?=\/|$)/, "."));
-  if (!isFolder(path)) {
-    throw refusal(
-      400,
-      "invalid_request",
-      `"${field}": ${path} does not exist as a folder`,
-    );
-  }
+  const why = notFolder(path);
+  if (why) throw refusal(400, "invalid_request", `"${field}": ${path} ${why}`);
   return realpathSync(path);
 }
 

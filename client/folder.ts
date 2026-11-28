@@ -97,14 +97,16 @@ export function completeFolder(
   typed: string,
   cwd: string | undefined,
 ): Completion {
-  const real = expandHome(splitTyped(typed).dir);
+  const { dir, prefix } = splitTyped(typed);
+  const real = expandHome(dir);
   const where = real.startsWith("/") ? real : cwd && join(cwd, real);
   // A relative path with the current folder removed: nothing to list.
   if (!where) return { value: typed, options: [] };
   const names: string[] = [];
   try {
     for (const e of readdirSync(where, { withFileTypes: true })) {
-      if (isFolder(e, where)) names.push(e.name);
+      // `narrow` drops these too; skipping them first saves a link's stat.
+      if (e.name.startsWith(prefix) && isFolder(e, where)) names.push(e.name);
     }
   } catch {
     return { value: typed, options: [] }; // no such folder, or no access
@@ -117,7 +119,9 @@ export function completeFolder(
 
 /** `typed` completed from the daemon's disk (M11-5), through
  *  `GET /folders`. A relative path starts from the daemon user's home.
- *  A refusal or a lost daemon completes nothing. */
+ *  A refusal or a lost daemon completes nothing. So does a daemon older
+ *  than 1.32, with no `folders` capability: its `404` leaves Tab doing
+ *  nothing, on purpose, and `checkVersion` has already warned. */
 export async function completeDaemonFolder(
   d: DaemonAddress,
   typed: string,

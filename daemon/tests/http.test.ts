@@ -9,6 +9,7 @@
 
 import assert from "node:assert/strict";
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
@@ -196,6 +197,35 @@ test("existingDir starts ~, ~/… and a relative path from the daemon user's hom
     () => existingDir("~bob", "cwd"),
     (err) => err instanceof Refusal && err.message.includes(join(home, "~bob")),
   );
+});
+
+test("existingDir says a path it cannot check is not missing (M11-5)", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "kapelle-http-"));
+  t.after(() => {
+    chmodSync(locked, 0o700);
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const locked = join(dir, "locked");
+  mkdirSync(join(locked, "inside"), { recursive: true });
+  const why = (path: string) => {
+    try {
+      existingDir(path, "cwd");
+    } catch (err) {
+      assert.ok(err instanceof Refusal && err.status === 400, path);
+      return err.message;
+    }
+    assert.fail(`${path} was accepted`);
+  };
+  assert.match(why(join(dir, "missing")), /does not exist as a folder$/);
+  assert.match(why(join(dir, "a".repeat(300))), /\(ENAMETOOLONG\)$/);
+  // Root may search any folder, so only a user meets EACCES.
+  if (process.getuid?.() !== 0) {
+    chmodSync(locked, 0o000);
+    assert.match(
+      why(join(locked, "inside")),
+      /cannot be checked as a folder \(EACCES\)$/,
+    );
+  }
 });
 
 test("existingDir returns the real path of a folder, else a 400", (t) => {
