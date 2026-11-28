@@ -264,8 +264,9 @@ path on the daemon's machine. Since 1.32 (M11-5) it is one of these:
 
 `~bob` is not another user's home: it is a relative path. An empty string is refused. The
 folder must exist. The reply names it by its real path, with every link resolved. A client
-on the daemon's machine sends an absolute path, so a relative path means its own current
-folder. A client that reaches a daemon on another machine sends what the person typed.
+on the daemon's machine resolves a typed relative path against its own current folder,
+then sends the absolute result. A client that reaches a daemon on another machine sends
+what the person typed.
 
 **Errors.** Every refusal has this body:
 
