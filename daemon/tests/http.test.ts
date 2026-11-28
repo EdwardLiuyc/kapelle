@@ -201,12 +201,12 @@ test("existingDir starts ~, ~/… and a relative path from the daemon user's hom
 
 test("existingDir says a path it cannot check is not missing (M11-5)", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "kapelle-http-"));
+  const locked = join(dir, "locked");
+  mkdirSync(join(locked, "inside"), { recursive: true });
   t.after(() => {
     chmodSync(locked, 0o700);
     rmSync(dir, { recursive: true, force: true });
   });
-  const locked = join(dir, "locked");
-  mkdirSync(join(locked, "inside"), { recursive: true });
   const why = (path: string) => {
     try {
       existingDir(path, "cwd");

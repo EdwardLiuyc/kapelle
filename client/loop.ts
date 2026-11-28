@@ -33,9 +33,12 @@
  * another machine (M11-4). That works only because a recipe is pasted, not
  * named by its path. But the folder a remote loop starts in is on the
  * daemon's machine, and `client/folder.ts` sends it as typed (M11-5). So
- * the repository's recipes are looked up on this disk: a `~` or relative
- * folder from this client's own current folder, an absolute one at that
- * path here. M11-6 (#480) moves recipe reading to the daemon.
+ * the repository's recipes are looked up on this disk. An absolute folder
+ * is looked up at that path here. A `~` or relative folder is read as a
+ * name under this client's current folder, and the search stops at that
+ * folder: `gitTop` never reaches its parents, because `dirname(".")` is
+ * `.`. So from a subfolder of a checkout, no repository recipe is found.
+ * M11-6 (#480) moves recipe reading to the daemon.
  */
 
 import { type Dirent, existsSync, realpathSync } from "node:fs";
