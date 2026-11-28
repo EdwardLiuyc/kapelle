@@ -354,7 +354,7 @@ test("a chat's cancel, model and level, and the chats' scratch folders", async (
   assert.equal(existsSync(folder), false);
 });
 
-test("of two DELETEs that wait behind a scratch listing, one removes the chat and the other is 410", async (t) => {
+test("of two DELETEs that wait behind a scratch listing, one removes the chat and the other is 410; meanwhile the list leaves it out and its name stays held", async (t) => {
   const d = await bootDaemon(t);
   const ann = await api<ChatReply>(d, "POST", "/chats", {
     cmd: REMEMBER,
@@ -378,6 +378,15 @@ test("of two DELETEs that wait behind a scratch listing, one removes the chat an
     api<Refused>(d, "DELETE", `/chats/${ann.body.id}`),
   );
   await new Promise((ok) => setTimeout(ok, 100));
+  // While the DELETEs wait, the chat is gone from the list, and its name is
+  // still held: the remove has not started, and it may yet fail.
+  const listed = await api<ChatDto[]>(d, "GET", "/chats");
+  assert.deepEqual(listed.body, []);
+  const taken = await api<Refused>(d, "POST", "/chats", {
+    cmd: REMEMBER,
+    name: "ann",
+  });
+  assert.deepEqual([taken.status, taken.body.error.code], [409, "name_taken"]);
   await writeFile(join(barrier, "release.ready"), "");
   assert.equal((await add).status, 201);
   assert.equal((await listing).status, 200);

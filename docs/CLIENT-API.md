@@ -2242,7 +2242,9 @@ repositories. The screens still use the [hall](#the-hall) until M11-15.
   that does not load refuses an add with `400 invalid_config`.
 - **Its name** is unique across the live chats. Names are compared without ASCII case. An
   add holds its name while its harness starts, so of two adds that race for one name,
-  one gets `409 name_taken`. A removed chat frees its name.
+  one gets `409 name_taken`. A chat frees its name once its remove starts. A `DELETE`
+  that still waits to start keeps the name held, though the chat already answers
+  `410 chat_removed` and is left out of `GET /chats`.
 - **A restart** keeps every live chat. Its agent waits, `paused`, `killed` or `exited`,
   and its next message revives it, with the old session where the harness keeps one. A
   chat whose agent kapelle no longer knows is archived at the restart, with a notice that

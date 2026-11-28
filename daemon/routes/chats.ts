@@ -11,7 +11,9 @@
  * **A name is unique across live chats**, under ASCII case folding (R22). An
  * add holds its name from before its harness starts until the chat is in the
  * list or the add failed, so a racing add or rename is told `name_taken`. A
- * chat that is being removed frees its name.
+ * chat frees its name once its remove starts. A `DELETE` that still waits for
+ * the scratch lock keeps the name held, as that remove may yet fail; the chat
+ * already answers `410` and is left out of `GET /chats`.
  *
  * **An id is checked before a path is made from it.** `chatDir` and
  * `archivedChatDir` join what they are given, so every route checks
@@ -503,7 +505,9 @@ export function chatRoutes({
           res,
           200,
           [...chats.values()]
-            .filter((chat) => chat.lifecycle() === "active")
+            .filter(
+              (chat) => chat.lifecycle() === "active" && !removing.has(chat.id),
+            )
             .map(toChatDto) satisfies ChatDto[],
         ),
     },
