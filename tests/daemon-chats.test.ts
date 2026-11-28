@@ -472,3 +472,46 @@ test("a restart keeps every chat, skips a folder with no chat.json, and archives
   await chatIdle(second, kept.body.id);
   assert.ok(hasBranch(root, kept.body.agent.branch ?? ""));
 });
+
+test("a chat's stall warnings follow its repository's config, and one with no folder uses the defaults", async (t) => {
+  const d = await bootDaemon(t);
+  const state = await realpath(join(d.file, ".."));
+  const root = await gitRepo(t);
+  const config = join(root, ".kapelle", "config.json");
+  // The daemon reads only a private config file.
+  await mkdir(join(root, ".kapelle"), { mode: 0o700 });
+  await writeFile(config, JSON.stringify({ stallIdleMs: 200 }), {
+    mode: 0o600,
+  });
+  const cwd = await addRepo(d, root);
+  const STALL = `node ${MOCK_AGENT} --scenario stall`;
+  const inRepo = await api<ChatReply>(d, "POST", "/chats", {
+    cmd: STALL,
+    name: "repo",
+    cwd,
+  });
+  const loose = await api<ChatReply>(d, "POST", "/chats", {
+    cmd: STALL,
+    name: "loose",
+  });
+  for (const chat of [inRepo, loose]) {
+    assert.equal(chat.status, 201, JSON.stringify(chat.body));
+    await api(d, "POST", `/chats/${chat.body.id}/messages`, { text: "hang" });
+  }
+  const warnings = async (id: string) =>
+    (await readFile(join(state, "chats", id, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((line) => line.includes('"_client_stall_warning"')).length;
+  await until(
+    "the repository chat's stall warning",
+    async () => (await warnings(inRepo.body.id)) > 0,
+    10_000,
+  );
+  // The default is 300 s, so the chat with no folder, quiet as long, has none.
+  assert.equal(await warnings(loose.body.id), 0);
+
+  // A config that does not load refuses an add in that repository.
+  await writeFile(config, JSON.stringify({ stallIdle: 1 }));
+  const bad = await api<Refused>(d, "POST", "/chats", { cmd: STALL, cwd });
+  assert.deepEqual([bad.status, bad.body.error.code], [400, "invalid_config"]);
+});

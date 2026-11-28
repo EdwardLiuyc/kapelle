@@ -2235,6 +2235,9 @@ repositories. The screens still use the [hall](#the-hall) until M11-15.
   its own checkout and branch, `kapelle/<chatId>/<participantId>`. A folder with no git,
   or a repository with no commit, is used as it is. With no `cwd`, the agent gets an
   empty scratch folder under `<stateDir>/scratch/chats/`.
+- **Its stall warnings** follow the project config of the repository it works in
+  (`stallIdleMs`, `stallRepeatCount`). A chat with no `cwd` uses the defaults. A config
+  that does not load refuses an add with `400 invalid_config`.
 - **Its name** is unique across the live chats. Names are compared without ASCII case. An
   add holds its name while its harness starts, so of two adds that race for one name,
   one gets `409 name_taken`. A removed chat frees its name.
@@ -2274,7 +2277,8 @@ is shutting down answers `503 shutting_down`.
 `role`. Its `notices` start with the chat's own. `seq` is the log's size, as a room's.
 `updatedAt` moves on a message, a turn's end, a revive and a change.
 
-**Refusals:** `400` `invalid_request`, also for `role`; `403` `repo_not_added`; `409`
+**Refusals:** `400` `invalid_request`, also for `role`; `400` `invalid_config`; `403`
+`repo_not_added`; `409`
 `name_taken`; `500` `chat_open_failed`; `503` `shutting_down`. An open that fails after
 its harness started is archived at once: its folder, with the stderr log, is in the
 archive, and the message names it.

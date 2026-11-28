@@ -4545,6 +4545,8 @@ not a chat id, is `404 chat_not_found`; a chat being removed, or archived, is
 live chats. A chat whose saved agent no longer resolves is archived at boot, as a remove
 does, with a notice that names the agent: a checkout with work is kept and named. The
 restore skips a folder with no `chat.json`. An archive's events are a stream that ends.
+A chat's stall warnings follow the project config of the repository it works in, as a
+room's do; a chat with no folder uses the defaults.
 *Done when* daemon tests cover each route, a name clash and a racing add, a question in
 a chat answered, a stream resumed with `Last-Event-ID`, an archive listed and read, and a
 restart that keeps every chat, skips a folder with no `chat.json`, and archives a chat

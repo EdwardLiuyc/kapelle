@@ -26,6 +26,11 @@
  * agent is no longer known is archived (`archiveChat`), with a note in its
  * record that names the agent.
  *
+ * **A chat's stall warnings follow its repository's config** (R38), as a
+ * room's do, read at its add and at each restore. A chat with no folder has
+ * no project config, so it uses the defaults. A bad config refuses an add
+ * (`400 invalid_config`); a restore warns and uses the defaults.
+ *
  * **A shutdown pauses every chat**, which the next boot restores. An add that
  * finishes once the shutdown has begun was never handed out, so it is
  * removed, as an unanswered room create is dismissed (#316).
@@ -65,13 +70,19 @@ import {
   roomAgent,
 } from "../../core/room/validate.ts";
 import { stateDir } from "../../core/runtime.ts";
+import { stateDirRoot } from "../../core/worktree.ts";
 import type { createChildren } from "../children.ts";
 import { toArchivedChat, toChatDto } from "../dto.ts";
 import { type Route, readBody, refusal, send } from "../http.ts";
 import { createScratchLock } from "../rooms.ts";
 import { cleanScratch, listScratch } from "../scratch.ts";
 import { streamLog } from "../sse.ts";
-import { agentFolder, participantDiff, placeOpener } from "./rooms.ts";
+import {
+  agentFolder,
+  participantDiff,
+  placeOpener,
+  roomLimits,
+} from "./rooms.ts";
 
 const messageOf = (err: unknown) =>
   err instanceof Error ? err.message : String(err);
@@ -128,6 +139,14 @@ export function chatRoutes({
       openPlace: placeOpener(id),
     };
   };
+
+  /** The stall limits for an agent in `cwd`: its repository's, or none for
+   *  the defaults when it has no folder. Throws for a config that does not
+   *  load. */
+  async function chatLimits(cwd: string | undefined) {
+    if (cwd === undefined) return {};
+    return { limits: roomLimits((await stateDirRoot(cwd)).root) };
+  }
 
   /** A refusal from a chat as the daemon answers it, or `err` itself when
    *  it is a failure. A shutdown pauses every chat, which then refuses as
@@ -200,6 +219,12 @@ export function chatRoutes({
       throw refusal(400, "invalid_request", messageOf(err));
     }
     await agentFolder(repos, request);
+    let limits: Awaited<ReturnType<typeof chatLimits>>;
+    try {
+      limits = await chatLimits(request.cwd);
+    } catch (err) {
+      throw refusal(400, "invalid_config", messageOf(err));
+    }
     if (stopping()) throw shuttingDown();
     refuseTaken(request.name);
     const folded = request.name.toLowerCase();
@@ -208,7 +233,7 @@ export function chatRoutes({
     let chat: Chat;
     try {
       chat = await scratch.change(() =>
-        openChat({ id, agent: request, ...chatDeps(id) }),
+        openChat({ id, agent: request, ...chatDeps(id), ...limits }),
       );
       if (stopping()) {
         await scratch.change(() => chat.remove());
@@ -422,7 +447,14 @@ export function chatRoutes({
         continue;
       }
       try {
-        chats.set(id, await restoreChat({ id, ...chatDeps(id) }));
+        const { cwd } = readChatRecord(join(dir, "chat.json"), id).participant;
+        const limits = await chatLimits(cwd).catch((err) => {
+          console.error(
+            `chat ${id}: ${messageOf(err)}; using the default limits`,
+          );
+          return {};
+        });
+        chats.set(id, await restoreChat({ id, ...chatDeps(id), ...limits }));
       } catch (err) {
         if (err instanceof UnknownAgentError) {
           await archiveUnknown(id, err.message);

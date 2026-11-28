@@ -79,6 +79,20 @@ function hallScratchDir(): string {
   return join(stateDir(), "scratch", HALL_ID);
 }
 
+/** The watchdog's warn limits for a room or a chat in repository `root`,
+ *  from the same layers as a run's (R38). Throws for a config that does not
+ *  load. */
+export function roomLimits(
+  root: string,
+): Pick<WatchdogLimits, "stallIdleMs" | "stallRepeatCount"> {
+  const defaults = resolveRunDefaults(root);
+  return {
+    stallIdleMs: defaults.stallIdleMs ?? WATCHDOG_DEFAULTS.stallIdleMs,
+    stallRepeatCount:
+      defaults.stallRepeatCount ?? WATCHDOG_DEFAULTS.stallRepeatCount,
+  };
+}
+
 /**
  * Opens a participant's own folder for owner `ownerId`, a room or a chat
  * (M11-2), as `postRoom` opens the room's: the project's links checked, then
@@ -194,19 +208,6 @@ export function roomRoutes({
       return undefined;
     }
   });
-
-  /** The watchdog's warn limits for a room, from the same layers as a run's
-   *  (R38). Throws for a config that does not load. */
-  function roomLimits(
-    root: string,
-  ): Pick<WatchdogLimits, "stallIdleMs" | "stallRepeatCount"> {
-    const defaults = resolveRunDefaults(root);
-    return {
-      stallIdleMs: defaults.stallIdleMs ?? WATCHDOG_DEFAULTS.stallIdleMs,
-      stallRepeatCount:
-        defaults.stallRepeatCount ?? WATCHDOG_DEFAULTS.stallRepeatCount,
-    };
-  }
 
   /**
    * Every added repository's rooms, back from `room.json` (M6-7a). The boot
