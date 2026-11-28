@@ -4539,9 +4539,16 @@ take it. The old hall stays as it is, and the screens do not use `/chats` yet.
 `docs/CLIENT-API.md` gets a section for chats, and the contract a minor version.
 **Gap:** the error codes for a chat route (a missing chat, a removed one). The pickup
 names them.
+**Decided at pickup 2026-11-28 (#558), with the person:** an unknown id, or one that is
+not a chat id, is `404 chat_not_found`; a chat being removed, or archived, is
+`410 chat_removed`; an open that fails is `500 chat_open_failed`. A name is unique among
+live chats. A chat whose saved agent no longer resolves is archived at boot, as a remove
+does, with a notice that names the agent: a checkout with work is kept and named. The
+restore skips a folder with no `chat.json`. An archive's events are a stream that ends.
 *Done when* daemon tests cover each route, a name clash and a racing add, a question in
 a chat answered, a stream resumed with `Last-Event-ID`, an archive listed and read, and a
-restart that keeps every chat.
+restart that keeps every chat, skips a folder with no `chat.json`, and archives a chat
+whose agent is no longer known.
 
 **M11-14 · The boot cleanup knows chats · M · needs M11-12**
 The boot sweep (`core/sweep.ts`) reads only rooms: `roomRoots`, `recordedRooms`, and a

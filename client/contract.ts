@@ -48,7 +48,7 @@ export type { AgentEvent, Diff, PermissionReason, ToolCallStatus, ToolKind };
  * (M5-2 changed one). Which rows are stable is the table in
  * `docs/CLIENT-API.md`.
  */
-export const API_VERSION = { major: 1, minor: 31 } as const;
+export const API_VERSION = { major: 1, minor: 32 } as const;
 
 /**
  * What this daemon can do (B4). Names are only ever added, never removed or
@@ -61,6 +61,8 @@ export const CAPABILITIES = [
   "permissions",
   "rooms",
   "config",
+  /** Since 1.32 (M11-13). */
+  "chats",
 ] as const;
 
 /** One entry of `GET /harnesses` (M4-5): a harness the daemon can launch by
@@ -178,6 +180,9 @@ export type ErrorCode =
   | "idempotency_in_progress"
   | "shutting_down"
   | "room_open_failed"
+  | "chat_not_found"
+  | "chat_removed"
+  | "chat_open_failed"
   | "no_diff"
   | "install_running"
   | "internal";
@@ -321,9 +326,9 @@ export interface Notice {
   kind?: "containment" | "unverified" | "version" | "advisory";
 }
 
-/** One entry of `GET /permissions`: a run's task asked, or a room
- *  participant's turn did (M6-5, S12a). `turn` is the number on that turn's
- *  `_client_user_message`. */
+/** One entry of `GET /permissions`: a run's task asked, a room
+ *  participant's turn did (M6-5, S12a), or a chat's turn did (M11-13, 1.32).
+ *  `turn` is the number on that turn's `_client_user_message`. */
 export type PendingDecision = {
   id: string;
   kind: ToolKind;
@@ -339,6 +344,7 @@ export type PendingDecision = {
 } & (
   | { runId: string; taskId: string }
   | { roomId: string; participantId: string; turn: number }
+  | { chatId: string; turn: number }
 );
 
 /** `GET /permissions/:id` (M5-4, #136): an open decision as the list shows
@@ -574,5 +580,50 @@ export interface RoomEventLine {
   at: string;
   roomId: string;
   participantId: string;
+  update: AgentEvent;
+}
+
+/** A chat (M11-13, since 1.32): one agent outside every room, from
+ *  `POST /chats`, `GET /chats`, `GET /chats/:id`, `PATCH /chats/:id` and
+ *  its cancel. */
+export interface ChatDto {
+  id: string;
+  /** ISO 8601. */
+  createdAt: string;
+  /** ISO 8601. It moves on a message, a turn's end, a revive and a change. */
+  updatedAt: string;
+  /** The chat log's size when the daemon answered, as `RoomDto.seq`. */
+  seq: number;
+  /** Its one agent. The chat's own notices come first in its `notices`. */
+  agent: ParticipantDto;
+}
+
+/** One removed chat, from `GET /chats/archive` and the answer of
+ *  `DELETE /chats/:id` (M11-13, since 1.32). Read only. */
+export interface ArchivedChat {
+  id: string;
+  /** Its agent's name when it was removed. */
+  name: string;
+  harness: string;
+  /** ISO 8601. */
+  createdAt: string;
+  removedAt: string;
+  /** The archived folder: its record, its log and its stderr logs. */
+  folder: string;
+  /** The chat's own lines, such as a checkout its remove kept. */
+  notices: Notice[];
+}
+
+/**
+ * The JSON in one SSE `data:` line of a chat (M11-13, since 1.32). `seq`
+ * counts from 1 in each chat. A chat has one agent, so the line names no
+ * participant.
+ *
+ * @public — read by clients, never built by the daemon.
+ */
+export interface ChatEventLine {
+  seq: number;
+  at: string;
+  chatId: string;
   update: AgentEvent;
 }

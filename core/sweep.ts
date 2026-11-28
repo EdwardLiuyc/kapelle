@@ -253,7 +253,7 @@ async function sweepChildren(
     // S14's shape is `{pid, kind, ownerId, unitId}`. A legacy
     // `{pid, runId, taskId}` entry — written by a daemon from before rooms
     // landed — is read as a run, so an upgrade never strands a live harness.
-    const kind = raw.kind === "room" ? "room" : "run";
+    const kind = raw.kind === "room" || raw.kind === "chat" ? raw.kind : "run";
     let owner = "unknown";
     if (isString(raw.ownerId)) owner = raw.ownerId;
     else if (isString(raw.runId)) owner = raw.runId;
@@ -263,7 +263,9 @@ async function sweepChildren(
     const where =
       kind === "room"
         ? `room ${owner}, participant ${unit}`
-        : `run ${owner}, task ${unit}`;
+        : kind === "chat"
+          ? `chat ${owner}`
+          : `run ${owner}, task ${unit}`;
     // Without the recorded identity this cannot prove the pid is the harness,
     // and a recycled pid would make the signal land on a stranger — so an
     // unverifiable pid is left alive, which is the safer of two bad answers.

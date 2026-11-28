@@ -28,10 +28,11 @@ const messageOf = (err: unknown) =>
 
 interface Child {
   pid: number;
-  /** Which kind of owner spawned it: a run's task, or a room's participant.
-   *  S14 renamed the two id fields so one file serves both; the sweep reads a
-   *  legacy `{pid, runId, taskId}` entry as a run. */
-  kind: "run" | "room";
+  /** Which kind of owner spawned it: a run's task, a room's participant, or
+   *  a chat's agent (M11-13). S14 renamed the two id fields so one file
+   *  serves them all; the sweep reads a legacy `{pid, runId, taskId}` entry
+   *  as a run. */
+  kind: "run" | "room" | "chat";
   ownerId: string;
   unitId: string;
   /** `ps`'s start time, filled in once it answers; see the spawn listener. */
@@ -81,9 +82,9 @@ export function createChildren(daemonFile: string, childrenFile: string) {
 
   /**
    * Mirrors a bus's harness pids into `children.json` for the next boot's
-   * sweep (M2-4, #34). One listener for both owners: `kind` tells a run from
-   * a room, `ownerId` is the run or room id and `unitId` the task or
-   * participant (S14).
+   * sweep (M2-4, #34). One listener for every owner: `kind` tells a run, a
+   * room and a chat apart, `ownerId` is the run, room or chat id and
+   * `unitId` the task or participant (S14).
    */
   function track(
     bus: ReturnType<typeof createEventBus>,

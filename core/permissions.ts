@@ -20,13 +20,18 @@
  * `"run_end"`, passed to `abort()` by `daemon/routes/runs.ts` — and anything
  * else reads as `cancel`.
  *
- * **A room asks through the same queue** (M6-5, S12a). `roomPolicy` hands a
+ * **A room asks through the same queue** (M6-5, S12a). `ownerPolicy` hands a
  * participant's turn a `Policy`, and its entries name the room, the
  * participant and the turn instead of a run and a task. A room closes an open
  * decision through the turn's signal, so a room path that is not an answer,
  * the timeout or a mode change reads `cancel`: cancel-turn, removal, a harness
  * that exits and a dismiss (decided 2026-09-28, #149). A mode that leaves
  * `ask` answers what waits as `mode_change` (`answerParticipant`).
+ *
+ * **A chat asks through it too** (M11-13). A chat has one agent, so its
+ * entries name the chat and the turn, `{chatId, turn}`, and no participant.
+ * `ownerPolicy` takes either form; the agent's id stays the bus's name for
+ * it.
  *
  * The queue hands `runRun` a plain `Policy` through `RunOptions.askPolicy`,
  * so neither the pool nor `protocol/` knows it exists. It knows no HTTP
@@ -41,11 +46,14 @@ import { editDiff } from "./diff.ts";
 import type { EventBus } from "./events.ts";
 import { READ_ONLY_KINDS } from "./policy.ts";
 
-/** Who asked: a run's task, or a room participant's turn. `turn` counts
- *  the participant's turns from 1, as `_client_user_message` does. */
-type Asker =
-  | { runId: string; taskId: string }
-  | { roomId: string; participantId: string; turn: number };
+/** Who asked: a run's task, a room participant's turn, or a chat's turn.
+ *  `turn` counts the agent's turns from 1, as `_client_user_message` does. */
+type Asker = { runId: string; taskId: string } | OwnerAsker;
+
+/** The asker of a room participant's or a chat's turn. */
+export type OwnerAsker =
+  | { roomId: string; participantId: string; turn: number }
+  | { chatId: string; turn: number };
 
 /** One decision waiting for an answer, as `GET /permissions` lists it. */
 export type PendingDecision = Asker & {
@@ -266,15 +274,16 @@ export function createPermissionQueue(timeoutMs: number) {
         ask({ runId, taskId: agent }, agent, bus, signal, toolCall);
     },
 
-    /** The `ask` decider for one participant's turn. `signal` is the turn's:
-     *  the room aborts it when the turn ends for any reason. */
-    roomPolicy(
-      asker: { roomId: string; participantId: string; turn: number },
+    /** The `ask` decider for one room participant's or chat's turn.
+     *  `agent` is the participant id. `signal` is the turn's: the owner
+     *  aborts it when the turn ends for any reason. */
+    ownerPolicy(
+      asker: OwnerAsker,
+      agent: string,
       bus: EventBus,
       signal: AbortSignal,
     ): Policy {
-      return ({ toolCall }) =>
-        ask(asker, asker.participantId, bus, signal, toolCall);
+      return ({ toolCall }) => ask(asker, agent, bus, signal, toolCall);
     },
 
     /** Deny everything one task left open, once that task has ended. */
@@ -290,20 +299,22 @@ export function createPermissionQueue(timeoutMs: number) {
       }
     },
 
-    /** Answers everything one room participant has open: its mode left
+    /** Answers everything one room participant, or a chat's one agent, has
+     *  open (`ownerId` is the room's or the chat's id): its mode left
      *  `ask`, so `auto` allows and `safe` denies (decided 2026-09-29, #194).
      *  The yes is `true`, a yes `once`, because the question was asked under
      *  `ask`: a menu with no `allow_once` is refused (M12-4). */
     answerParticipant(
-      roomId: string,
+      ownerId: string,
       participantId: string,
       allow: boolean,
     ): void {
       for (const { decision, settle } of [...pending.values()]) {
         if (
-          "roomId" in decision &&
-          decision.roomId === roomId &&
-          decision.participantId === participantId
+          ("chatId" in decision && decision.chatId === ownerId) ||
+          ("roomId" in decision &&
+            decision.roomId === ownerId &&
+            decision.participantId === participantId)
         ) {
           settle(allow, "mode_change");
         }

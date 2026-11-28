@@ -21,15 +21,16 @@
  *
  * **One route table** (M12-7b): each row is `{ method, pattern, handler }`
  * (`Route` in `daemon/http.ts`). The rows and their handlers live in
- * `daemon/routes/`: `repos.ts`, `runs.ts`, `rooms.ts` and `harnesses.ts`.
+ * `daemon/routes/`: `repos.ts`, `runs.ts`, `rooms.ts`, `chats.ts` and
+ * `harnesses.ts`.
  * Only `GET /version` is here, as it has no state. No two rows match the same
  * request, so their order does not matter. No row matching the method and
  * path is `404 no_route`, a wrong method too.
  *
  * **Its state sits in small owners**, each with one job: runs
  * (`daemon/run.ts`), child processes (`daemon/children.ts`), the permission
- * queue, and rooms with their scratch lock (`daemon/rooms.ts`, made by the
- * room routes). A daemon-wide cap on live harnesses, if one is ever wanted
+ * queue, rooms with their scratch lock (`daemon/rooms.ts`, made by the
+ * room routes), and the chats (made by `daemon/routes/chats.ts`). A daemon-wide cap on live harnesses, if one is ever wanted
  * (R40), goes here.
  *
  * **The token is not optional, even on 127.0.0.1.** Every account on the
@@ -66,6 +67,7 @@ import {
   refusal,
   send,
 } from "./http.ts";
+import { chatRoutes } from "./routes/chats.ts";
 import { harnessRoutes } from "./routes/harnesses.ts";
 import { repoRoutes } from "./routes/repos.ts";
 import { roomRoutes } from "./routes/rooms.ts";
@@ -95,8 +97,8 @@ export interface DaemonDeps {
   permissionTimeoutMs: number;
 }
 
-/** The app. `server` is made, not listening; `restoreRuns` and
- *  `restoreRooms` run once, before the port opens; `stop` ends it. `routes`
+/** The app. `server` is made, not listening; `restoreRuns`,
+ *  `restoreRooms` and `restoreChats` run once, before the port opens; `stop` ends it. `routes`
  *  is the live table, for a test that walks it and swaps its handlers for
  *  spies: `route` reads each row at every request. */
 export function createDaemonApp(deps: DaemonDeps) {
@@ -124,6 +126,7 @@ export function createDaemonApp(deps: DaemonDeps) {
   };
   const roomApp = roomRoutes(shared);
   const { rooms } = roomApp;
+  const chatApp = chatRoutes(shared);
   const harnessApp = harnessRoutes(shared.stopping);
 
   const routes: Route[] = [
@@ -139,6 +142,7 @@ export function createDaemonApp(deps: DaemonDeps) {
     ...repoRoutes(repos),
     ...runRoutes({ ...shared, runs }),
     ...roomApp.routes,
+    ...chatApp.routes,
     ...harnessApp.routes,
   ];
 
@@ -207,7 +211,7 @@ export function createDaemonApp(deps: DaemonDeps) {
 
   /**
    * The app's half of a shutdown (M2-4, #34): cancel every run, pause every
-   * room, and wait for each to settle. The caller closes the server, removes
+   * room and chat, and wait for each to settle. The caller closes the server, removes
    * `daemon.json` and exits (`daemon/main.ts`). An install's npm is killed
    * rather than waited for, and a check's harness is stopped and its
    * temporary folder cleaned up, so a stop leaves neither running. A second
@@ -237,6 +241,7 @@ export function createDaemonApp(deps: DaemonDeps) {
       ...runs.inFlight,
       ...rooms.changes(),
       ...rooms.built().map(({ room }) => room.pause()),
+      chatApp.stop(),
       harnessesStopped,
     ]);
   }
@@ -247,6 +252,8 @@ export function createDaemonApp(deps: DaemonDeps) {
     restoreRuns: () => runs.restore(repos),
     /** The hall, then every added repository's rooms (M6-7a, M11-1). */
     restoreRooms: roomApp.restore,
+    /** Every live chat (M11-13), after the boot sweep. */
+    restoreChats: chatApp.restore,
     stop,
     routes,
   };

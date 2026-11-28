@@ -183,7 +183,7 @@ test("toRunListEntry carries id and status per task, and no notices", () => {
   });
 });
 
-test("toPendingDecision keeps both askers, copies input, and drops unknown fields", () => {
+test("toPendingDecision keeps each asker, copies input, and drops unknown fields", () => {
   const runDecision = {
     id: "p1",
     runId: "r1",
@@ -233,6 +233,23 @@ test("toPendingDecision keeps both askers, copies input, and drops unknown field
     turn: 2,
     kind: "execute",
     title: "Run tests",
+  });
+
+  // A chat names no participant (M11-13).
+  const chatDecision = {
+    id: "p3",
+    chatId: "chat-1",
+    participantId: "participant-1",
+    turn: 4,
+    kind: "edit",
+    title: "Edit notes.md",
+  } as unknown as CorePendingDecision;
+  assert.deepEqual(toPendingDecision(chatDecision), {
+    id: "p3",
+    chatId: "chat-1",
+    turn: 4,
+    kind: "edit",
+    title: "Edit notes.md",
   });
 });
 

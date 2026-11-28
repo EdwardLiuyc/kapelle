@@ -10,6 +10,8 @@
  */
 
 import type {
+  ArchivedChat,
+  ChatDto,
   ConfigRow,
   ConfigView,
   Diff,
@@ -24,6 +26,7 @@ import type {
   RunStatus,
   TaskDto,
 } from "../client/contract.ts";
+import type { Chat, ChatRecord } from "../core/chat.ts";
 import type { projectConfigView } from "../core/config.ts";
 import { HALL_ID } from "../core/ids.ts";
 import type {
@@ -69,7 +72,7 @@ const TYPED_KEYS = {
 
 /** The contract fields these DTOs copy (M12-3). A new contract field fails
  *  `npm run check` here until the matching builder copies it. The Pending
- *  decision pin covers the shape both asker variants share; the two pins
+ *  decision pin covers the shape every asker variant shares; the three pins
  *  below cover their variant-only fields. */
 const PENDING_KEYS = {
   id: 0,
@@ -95,6 +98,14 @@ const ROOM_ASKER_KEYS = {
   participantId: 0,
   turn: 0,
 } as const satisfies Record<RoomAskerKeys, 0>;
+type ChatAskerKeys = Exclude<
+  keyof Extract<PendingDecision, { chatId: string }>,
+  keyof PendingDecision
+>;
+const CHAT_ASKER_KEYS = {
+  chatId: 0,
+  turn: 0,
+} as const satisfies Record<ChatAskerKeys, 0>;
 const DIFF_KEYS = {
   text: 0,
   files: 0,
@@ -292,12 +303,13 @@ export function toPendingDecision(
     },
     PENDING_KEYS,
   );
-  return {
-    ...shared,
-    ...("runId" in decision
-      ? pick(decision, RUN_ASKER_KEYS)
-      : pick(decision, ROOM_ASKER_KEYS)),
-  };
+  if ("runId" in decision) {
+    return { ...shared, ...pick(decision, RUN_ASKER_KEYS) };
+  }
+  if ("chatId" in decision) {
+    return { ...shared, ...pick(decision, CHAT_ASKER_KEYS) };
+  }
+  return { ...shared, ...pick(decision, ROOM_ASKER_KEYS) };
 }
 
 /** `GET /permissions/:id`: an open decision, or a closed one with its answer
@@ -423,4 +435,35 @@ function listEntry<P extends Pick<Participant, "id" | "name" | "role">>(
   if (state.title !== undefined) entry.title = state.title;
   if (state.id === HALL_ID) entry.hall = true;
   return entry;
+}
+
+/** One live chat (M11-13). Key by key, as `toRoomDto`. */
+export function toChatDto(chat: Chat): ChatDto {
+  return {
+    id: chat.id,
+    createdAt: chat.createdAt,
+    updatedAt: chat.updatedAt(),
+    seq: chat.eventLog?.size ?? 0,
+    agent: toParticipantDto(chat.participant),
+  };
+}
+
+/** One archived chat from its `chat.json`, at `folder` (M11-13). An
+ *  archived record always has `removedAt` (`readChatRecord`). */
+export function toArchivedChat(
+  record: ChatRecord,
+  folder: string,
+): ArchivedChat {
+  return {
+    id: record.id,
+    name: record.participant.name,
+    harness: record.participant.harness,
+    createdAt: record.createdAt,
+    removedAt: record.removedAt ?? record.updatedAt,
+    folder,
+    notices: record.notices.map(({ text, kind }) => ({
+      text,
+      ...(kind && { kind }),
+    })),
+  };
 }

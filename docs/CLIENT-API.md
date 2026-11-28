@@ -7,7 +7,7 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.31** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.32** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
 rooms stable, M6-7b, #179, which added `resumed: "loaded"`, M6-7c, #235, which added
 `DELETE /rooms/:id`, M8-1, #265, which added a message's `from`, M8-2, #266, which
@@ -26,7 +26,8 @@ invalid-file view and `PUT /config`; a stable `GET /config` now answers `200` wi
 `invalid` instead of `400` for a safe file whose content is invalid; and M12-4, #535,
 which made `_client_permission`'s `allow` false for a yes with no matching option;
 and #537, which added `run_not_owned` for a live run another process owns; and
-M12-11, #545, which cut a closed decision's `title` in `GET /permissions/:id`).
+M12-11, #545, which cut a closed decision's `title` in `GET /permissions/:id`; and
+M11-13, #558, which added [chats](#chats)).
 
 ## Contents
 
@@ -39,8 +40,9 @@ M12-11, #545, which cut a closed decision's `title` in `GET /permissions/:id`).
 7. [Events](#events)
 8. [Permissions](#permissions)
 9. [Rooms](#rooms)
-10. [Bridges](#bridges)
-11. [A first client, step by step](#a-first-client-step-by-step)
+10. [Chats](#chats)
+11. [Bridges](#bridges)
+12. [A first client, step by step](#a-first-client-step-by-step)
 
 ## How the daemon works, in short
 
@@ -50,6 +52,7 @@ M12-11, #545, which cut a closed decision's `title` in `GET /permissions/:id`).
 - A **run** is a list of tasks. Each task is one prompt to one harness. Each task works in
   its own copy of the repository (a git worktree).
 - A **room** is a chat with one harness that stays alive between messages.
+- A **chat** is one harness outside every room, with its own log.
 - Everything that happens in a run or a room goes into an **event log**. You read it as a
   stream.
 - Some harness actions need a yes or no from a person. These are **permissions**. You can
@@ -98,6 +101,7 @@ Check for a capability before you use its feature. Ignore names that you do not 
 | `permissions` | [Permissions](#permissions): list and answer. |
 | `rooms` | [Rooms](#rooms). Stable since 1.8. |
 | `config` | [A repository's project config](#get-config): read and save. Since 1.22. Since 1.28, a safe invalid file is viewable and replaceable. |
+| `chats` | [Chats](#chats). Since 1.32. |
 
 ### Stability
 
@@ -127,10 +131,11 @@ Not every part of this API is final yet. Each part has one of three labels:
 | Heartbeat (`: ping`) and a paused slow reader | Since 1.3 (M5-6). |
 | Event `update` values from the harness (ACP) | Stable as a pass-through. See [Events](#events). |
 | `_client_*` events | See [Events](#events). |
-| `GET /permissions`, `GET /permissions/:id`, `POST /permissions/:id` | `GET /permissions/:id` added in 1.1 (M5-4). Questions from rooms since 1.5 (M6-5). `input` since 1.6 (M4-3). `diff` since 1.7 (M4-6). |
+| `GET /permissions`, `GET /permissions/:id`, `POST /permissions/:id` | `GET /permissions/:id` added in 1.1 (M5-4). Questions from rooms since 1.5 (M6-5). `input` since 1.6 (M4-3). `diff` since 1.7 (M4-6). Questions from chats since 1.32 (M11-13). |
 | Error replies (`{error: {code, message}}`) and the error codes | Codes are only added (M5-3). |
 | Request limits: `Content-Type`, body size, unknown fields, read timeout | M5-3. |
 | Everything under `/rooms`, and the room events | Since 1.8 (M6-7a). Rooms survive a daemon restart. |
+| Everything under `/chats`, and the chat events | Since 1.32 (M11-13). Chats survive a daemon restart. |
 | `GET /harnesses`, `POST /harnesses`, `POST /harnesses/done`, `POST /harnesses/install` | Since 1.21 (M9-8). M4-5 added the list; M9-3 the find; M9-3b the install; M9-4 the login check. |
 | `GET /config`, `PATCH /config`, `PUT /config` | Since 1.22 (M10-5); `PUT` and the invalid view since 1.28 (#504). |
 
@@ -282,6 +287,8 @@ request that is not valid HTTP gets `400`.
 | `repo_not_added` | `403` | `cwd` is not inside an added repository. | `POST /repos` first. |
 | `run_not_found` | `404` | No run this daemon lists has this id. A live run another process owns is not listed; `DELETE` answers `run_not_owned` instead. | If the run is external, read its `run.json`. |
 | `room_not_found` | `404` | No room has this id. | |
+| `chat_not_found` | `404` | No live or archived chat has this id, or the id is not a chat id. Since 1.32. | Read `GET /chats`. |
+| `chat_removed` | `410` | The chat is being removed, or is archived. Since 1.32. | Stop following it. Read it with `GET /chats/archive`. |
 | `room_deleted` | `410` | A delete removed this room, or a delete is still running, in this daemon. A refused delete restores it. | Stop following it for now. A later room-list poll may show it again if the delete refused; after a restart this daemon knows no deleted id. |
 | `participant_not_found` | `404` | The room has no participant with this id. It may have been removed. | Read `GET /rooms/:id/agents`. |
 | `invalid_sender` | `400` | A message's `from` is not the room's orchestrator, or the orchestrator sent a message to itself. Since 1.11. | Only the orchestrator sends with `from`. Send without it for the person. |
@@ -306,8 +313,9 @@ request that is not valid HTTP gets `400`.
 | `idempotency_conflict` | `409` | This `Idempotency-Key` already started a run with a different body. | Use a new key for new work. |
 | `idempotency_in_progress` | `409` | A request with this `Idempotency-Key` has not answered yet. | Wait, then send the same request again. |
 | `orchestrator_exists` | `409` | The room already has an orchestrator. | Change the other participant's role first. |
-| `name_taken` | `409` | Another participant in the room has this name. Names are compared without ASCII case, so `Alice` takes `alice`. | Choose another name. |
+| `name_taken` | `409` | Another participant in the room has this name, or for a chat, another live chat, or an add still starting. Names are compared without ASCII case, so `Alice` takes `alice`. | Choose another name. |
 | `shutting_down` | `503` | The daemon is shutting down. | Try again after it restarts. |
+| `chat_open_failed` | `500` | A chat's harness or checkout could not start. As `room_open_failed`; the message also names the archived folder that keeps its stderr log. Since 1.32. | Show the message, every line. |
 | `room_open_failed` | `500` | A room's harness or checkout could not start. For example, the harness is not installed. When the harness did not start and there is a next step, the last line of the message names it: its login command, or its stderr log. | Show the message, every line. |
 | `install_running` | `409` | An install already runs (`POST /harnesses/install`). | Wait for its last line, then send again. |
 | `no_diff` | `409` | The participant's changes cannot be shown: its checkout is not a git checkout, it has no branch to compare with, or git failed for another reason. The message says which. | Show the message. |
@@ -318,18 +326,18 @@ request that is not valid HTTP gets `400`.
 | Code | Meaning |
 | --- | --- |
 | `200` | Done. |
-| `201` | Created (a room or a participant). |
+| `201` | Created (a room, a participant or a chat). |
 | `202` | Accepted. The work goes on after the reply. |
 | `400` | Your request is wrong. The message says what is wrong. |
 | `401` | Token missing or wrong. |
 | `403` | The `Host` is not allowed, or the folder is not in an added repository. |
-| `404` | No such route, run, room or permission. |
+| `404` | No such route, run, room, chat or permission. |
 | `408` | The request was not fully sent within 30 seconds. Empty body. |
 | `409` | The request is fine, but the thing is not in a state to accept it. |
-| `410` | The room was deleted since the daemon started. |
+| `410` | The room was deleted since the daemon started, or the chat was removed. |
 | `413` | The body is larger than 4 MiB. |
 | `415` | The body is not sent as `application/json`. |
-| `500` | An error the daemon did not expect, or a room could not start. |
+| `500` | An error the daemon did not expect, or a room or a chat could not start. |
 | `503` | The daemon is shutting down. |
 
 **Checks run in this order:** the `Host`, then the token, then the route, then the body
@@ -342,7 +350,9 @@ first: `POST /rooms/:id/messages`, `POST /rooms/:id/agents/:agentId/messages`,
 `POST /rooms/:id/agents`, `PATCH /rooms/:id` and `PATCH /rooms/:id/agents/:agentId`
 look the room up, so an unknown room is `404 room_not_found` even when the body would be
 refused. They look the participant up
-only after the body, so a bad body to an unknown participant is `400`, not `404`. `DELETE` carries no body, and
+only after the body, so a bad body to an unknown participant is `400`, not `404`. The chat
+routes look the chat up before the body, so an unknown chat is `404 chat_not_found`
+and a removed one `410 chat_removed`. `DELETE` carries no body, and
 the `GET` routes take none.
 
 ## Routes
@@ -389,6 +399,19 @@ the `GET` routes take none.
 | `GET /rooms/:id/agents/:agentId/diff` | What a participant changed in its checkout. |
 | `POST /rooms/:id/agents/:agentId/fast-forward` | Move a participant's branch and checkout to another participant's commit. |
 | `GET /rooms/:id/agents/:agentId/fast-forward` | The diff a fast-forward would bring. |
+| `POST /chats` | Start a chat. |
+| `GET /chats` | List the live chats. |
+| `GET /chats/:id` | One chat. |
+| `PATCH /chats/:id` | Rename a chat's agent, or change its mode, model or thinking level. |
+| `DELETE /chats/:id` | Remove a chat to the archive. |
+| `POST /chats/:id/messages` | Send a message to a chat's agent. |
+| `GET /chats/:id/events` | A chat's event stream. |
+| `POST /chats/:id/turns/current/cancel` | Cancel a chat's turn and drop its queue. |
+| `GET /chats/:id/diff` | What a chat's agent changed in its checkout. |
+| `GET /chats/scratch` | List the chats' scratch folders and what each holds. |
+| `POST /chats/scratch/clean` | Remove the named stale chat scratch folders. |
+| `GET /chats/archive` | List the archived chats. |
+| `GET /chats/archive/:id/events` | An archived chat's log, read only. |
 
 ### `GET /version`
 
@@ -396,8 +419,8 @@ the `GET` routes take none.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 31 },
-  "capabilities": ["repos", "runs", "events", "permissions", "rooms", "config"]
+  "apiVersion": { "major": 1, "minor": 32 },
+  "capabilities": ["repos", "runs", "events", "permissions", "rooms", "config", "chats"]
 }
 ```
 
@@ -1007,6 +1030,8 @@ your connection and it does not slow the run. No ping is written while it waits.
   `GET /runs/:id/events` answers `404 no_event_log`. `GET /runs/:id` carries the
   status until the daemon stops, but no record is kept.
 - For a room, the stream ends when the room closes.
+- For a chat, the stream ends when the chat is removed or the daemon stops. An
+  archived chat's stream ends after its last line.
 - For a finished run, you get the history and then the end.
 
 If the connection breaks before the end, connect again with `Last-Event-ID`.
@@ -1121,7 +1146,7 @@ Ignore a `_client_*` name that you do not know. New ones can appear.
 ## Permissions
 
 Some harness actions need a yes or no, for example "edit this file". A run in `ask` mode,
-and a room participant in `ask` mode, asks a person through the API. Reading, searching,
+a room participant in `ask` mode, and a chat in `ask` mode, ask a person through the API. Reading, searching,
 fetching and thinking never ask.
 
 **How to answer:**
@@ -1141,8 +1166,9 @@ fetching and thinking never ask.
 - **Cancel means no.** When a run is cancelled or ends, or its task stops, its open
   questions are denied. In a room, the open questions of a turn are denied when the turn
   ends for any reason: a cancel, a removal, a dismiss or a harness that exits.
-- **A mode change answers.** When a room participant leaves `ask`, its open questions
-  close: `auto` answers yes, and `safe` answers no.
+- **A mode change answers.** When a room participant or a chat leaves `ask`, its open
+  questions close: `auto` answers yes, and `safe` answers no. A chat's turn ends as a
+  room participant's does, and so do its questions.
 - A stream replay also shows old `_client_permission_queued` events. Check
   `GET /permissions` before you ask a person. If the id is not there, the question is
   already closed.
@@ -1172,9 +1198,11 @@ this does not happen.
 
 ### `GET /permissions`
 
-**Reply `200`:** every open question, from all runs and rooms. A question from a run has
-`runId` and `taskId`. A question from a room has `roomId`, `participantId` and `turn`
-instead. `turn` is the number on that turn's `_client_user_message`.
+**Reply `200`:** every open question, from all runs, rooms and chats. A question from a
+run has `runId` and `taskId`. A question from a room has `roomId`, `participantId` and
+`turn` instead. A question from a chat has `chatId` and `turn` (since 1.32): a chat has
+one agent, so it names no participant. `turn` is the number on that turn's
+`_client_user_message`.
 
 ```json
 [
@@ -1193,6 +1221,13 @@ instead. `turn` is the number on that turn's `_client_user_message`.
     "kind": "execute",
     "title": "npm test",
     "input": { "command": "npm test", "description": "Run the tests" }
+  },
+  {
+    "id": "5e2a8c41-9f03-4b7d-a6e1-3c9d0b4f7a12",
+    "chatId": "chat-20261128-101500-c3d4",
+    "turn": 1,
+    "kind": "edit",
+    "title": "Edit notes.md"
   }
 ]
 ```
@@ -2188,6 +2223,131 @@ same way:
   daemon would refuse the empty text with `400` `invalid_request`. While the person
   types, the composer only shows the resolved target, so a thread that opens with its
   `@name` pre-filled is not in an error state.
+
+## Chats
+
+Since 1.32 (M11-13). A **chat** is one agent outside every room. It has no roster, no
+orchestrator, no title and no turn cap, so a message needs no `@name`. Each chat has its
+own record and its own log. The daemon keeps one list of chats for all of your
+repositories. The screens still use the [hall](#the-hall) until M11-15.
+
+- **Where it works.** With a `cwd` in an added repository with a commit, the agent gets
+  its own checkout and branch, `kapelle/<chatId>/<participantId>`. A folder with no git,
+  or a repository with no commit, is used as it is. With no `cwd`, the agent gets an
+  empty scratch folder under `<stateDir>/scratch/chats/`.
+- **Its name** is unique across the live chats. Names are compared without ASCII case. An
+  add holds its name while its harness starts, so of two adds that race for one name,
+  one gets `409 name_taken`. A removed chat frees its name.
+- **A restart** keeps every live chat. Its agent waits, `paused`, `killed` or `exited`,
+  and its next message revives it, with the old session where the harness keeps one. A
+  chat whose agent kapelle no longer knows is archived at the restart, with a notice that
+  names the agent. Its checkout is released as at a remove.
+- **A remove** cancels the turn and the queue, denies the open questions, stops the
+  harness and releases the checkout: an untouched one goes with its branch, and one with
+  work is kept and named in a notice. Then the chat's folder moves to the archive,
+  `<stateDir>/chats/archive/<id>/`. The boot cleanup deletes an archive after
+  `retentionMs` ([`docs/CONFIG.md`](CONFIG.md)).
+
+An id that is not a chat id is `404 chat_not_found` on every chat route. A chat being
+removed, or archived, is `410 chat_removed` on every route of a live chat. A daemon that
+is shutting down answers `503 shutting_down`.
+
+### `POST /chats`
+
+**Request:** what [`POST /rooms/:id/agents`](#post-roomsidagents) takes, but `role`:
+`agent` or `cmd`, and `name`, `mode`, `model`, `thoughtLevel`, `base`, `settings` and
+`cwd`, each optional. With no `name`, the name is the harness's.
+
+**Reply `201`:** the `ChatDto`, once the harness has a session:
+
+```json
+{
+  "id": "chat-20261128-101500-c3d4",
+  "createdAt": "2026-11-28T10:15:00.000Z",
+  "updatedAt": "2026-11-28T10:15:01.000Z",
+  "seq": 2,
+  "agent": { "id": "p-4f2a9c1d", "name": "ann", "harness": "opencode", "mode": "auto", "...": "..." }
+}
+```
+
+`agent` is a [participant](#get-roomsidagents-and-get-roomsidagentsagentid), with no
+`role`. Its `notices` start with the chat's own. `seq` is the log's size, as a room's.
+`updatedAt` moves on a message, a turn's end, a revive and a change.
+
+**Refusals:** `400` `invalid_request`, also for `role`; `403` `repo_not_added`; `409`
+`name_taken`; `500` `chat_open_failed`; `503` `shutting_down`. An open that fails after
+its harness started is archived at once: its folder, with the stderr log, is in the
+archive, and the message names it.
+
+### `GET /chats` and `GET /chats/:id`
+
+**Reply `200`:** every live chat as a `ChatDto`, in the order the daemon has them, or one.
+
+### `PATCH /chats/:id`
+
+Changes the agent: `{name?, mode?, model?, thoughtLevel?}`, at least one. The mode and the
+name apply at once. The model, then the level, go last, as for a participant (see
+[`PATCH /rooms/:id/agents/:agentId`](#patch-roomsidagentsagentid)).
+
+**Reply `200`:** the `ChatDto`. **Refusals:** `400` `invalid_request`; `409`
+`name_taken`.
+
+### `DELETE /chats/:id`
+
+Removes the chat to the archive (see above). It waits for the harness to stop.
+
+**Reply `200`:** the `ArchivedChat`, as `GET /chats/archive` lists it. Its `notices`
+name a checkout the remove kept.
+
+### `POST /chats/:id/messages`
+
+**Request:** `{ "text": "…" }`. **Reply `202`:** `{seq, queued}`, as for
+[a participant](#post-roomsidagentsagentidmessages). A full queue is `429`
+`queue_full`.
+
+### `GET /chats/:id/events`
+
+The chat's [event stream](#the-event-stream). A line is `{seq, at, chatId, update}`
+(`ChatEventLine`), and `seq` counts from 1 in each chat. `Last-Event-ID` is that `seq`.
+The stream ends when the chat is removed or the daemon stops.
+
+### `POST /chats/:id/turns/current/cancel`
+
+As for [a participant](#post-roomsidagentsagentidturnscurrentcancel). **Reply `202`:**
+the `ChatDto`. **Refusal:** `409` `no_turn`.
+
+### `GET /chats/:id/diff`
+
+As for [a participant](#get-roomsidagentsagentiddiff), with `?against=head|base`.
+
+### `GET /chats/scratch` and `POST /chats/scratch/clean`
+
+As the hall's [scratch routes](#get-roomsidscratch), for the chats' scratch root,
+`<stateDir>/scratch/chats`. A chat's folder is `inUse` until its remove has released it.
+
+### `GET /chats/archive`
+
+**Reply `200`:** every archived chat, as an `ArchivedChat`, oldest id first:
+
+```json
+[
+  {
+    "id": "chat-20261128-101500-c3d4",
+    "name": "ann",
+    "harness": "opencode",
+    "createdAt": "2026-11-28T10:15:00.000Z",
+    "removedAt": "2026-11-28T12:00:00.000Z",
+    "folder": "/home/me/.local/state/kapelle/chats/archive/chat-20261128-101500-c3d4",
+    "notices": []
+  }
+]
+```
+
+### `GET /chats/archive/:id/events`
+
+An archived chat's log, as the event stream, read only. It sends every line after
+`Last-Event-ID`, then ends. **Refusals:** `404` `chat_not_found`; `404` `no_event_log`
+when the archive has no log.
 
 ## Bridges
 

@@ -244,7 +244,7 @@ export async function main(): Promise<void> {
 
   /**
    * SIGTERM, SIGINT or a lost record: the server stops accepting, the app
-   * cancels every run, pauses every room and waits for each to settle (`stop`
+   * cancels every run, pauses every room and chat and waits for each to settle (`stop`
    * in `daemon/app.ts`), then `daemon.json` is removed and the process exits 0
    * (M2-4, #34). Record loss deliberately exits 0 too: this is a clean
    * shutdown, not a crash, and a later client can start a fresh daemon.
@@ -275,6 +275,8 @@ export async function main(): Promise<void> {
   // `daemon/rooms.ts` to list their own statuses and a shutdown to wait for a
   // build in flight; do that if a repository keeps hundreds of them.
   await app.restoreRooms();
+  // After the sweep, which finished each chat remove a crash left (M11-14).
+  await app.restoreChats();
 
   server.on("error", (err) => {
     removeDaemonFiles(file);
