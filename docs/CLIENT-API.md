@@ -53,8 +53,8 @@ M11-13, #558, which added [chats](#chats)).
   its own copy of the repository (a git worktree).
 - A **room** is a chat with one harness that stays alive between messages.
 - A **chat** is one harness outside every room, with its own log.
-- Everything that happens in a run or a room goes into an **event log**. You read it as a
-  stream.
+- Everything that happens in a run, a room or a chat goes into an **event log**. You read
+  it as a stream.
 - Some harness actions need a yes or no from a person. These are **permissions**. You can
   answer them through the API.
 
@@ -293,7 +293,7 @@ request that is not valid HTTP gets `400`.
 | `participant_not_found` | `404` | The room has no participant with this id. It may have been removed. | Read `GET /rooms/:id/agents`. |
 | `invalid_sender` | `400` | A message's `from` is not the room's orchestrator, or the orchestrator sent a message to itself. Since 1.11. | Only the orchestrator sends with `from`. Send without it for the person. |
 | `permission_not_found` | `404` | The daemon never gave out this permission id, or it forgot a closed one at a restart. | |
-| `no_event_log` | `404` | The run or room exists, but it has no event log to stream. | Read `GET /runs/:id` for a run, or `GET /rooms/:id` for a room. |
+| `no_event_log` | `404` | The run, room or chat exists, but it has no event log to stream. | Read `GET /runs/:id` for a run, `GET /rooms/:id` for a room, or `GET /chats/archive` for a chat. |
 | `run_ended` | `409` | You cancelled a run that already ended. | Stop. Read its status. |
 | `run_not_owned` | `409` | The id names a live run written by another process. The daemon does not list it and cannot cancel it. Since 1.30. | Stop it where it was started, then read its `run.json`. |
 | `already_decided` | `409` | The permission was already closed, for any of the reasons in [Why a question closed](#why-a-question-closed). | Stop. Your answer was not used. `GET /permissions/:id` gives the reason. |
@@ -920,7 +920,7 @@ has no event log. `400` `invalid_request` for a bad `Last-Event-ID`.
 
 ## The event stream
 
-A run or a room writes every event into a log. You read the log as
+A run, a room or a chat writes every event into a log. You read the log as
 [Server-Sent Events](https://html.spec.whatwg.org/multipage/server-sent-events.html)
 (SSE). SSE is a plain HTTP reply that stays open. The server writes text blocks into it
 over time.
@@ -939,8 +939,9 @@ data: {"seq":7,"at":"2026-09-24T10:15:02.113Z","agent":"summarise","update":{"se
 ```
 
 - `id` is the event's `seq`.
-- `data` is one line of JSON: `{seq, at, agent, update}` for a run, and
-  `{seq, at, roomId, participantId, update}` for a room.
+- `data` is one line of JSON: `{seq, at, agent, update}` for a run,
+  `{seq, at, roomId, participantId, update}` for a room, and
+  `{seq, at, chatId, update}` for a chat.
 - A blank line ends the block.
 
 | Field | Meaning |
@@ -950,6 +951,7 @@ data: {"seq":7,"at":"2026-09-24T10:15:02.113Z","agent":"summarise","update":{"se
 | `agent` | Runs only: the task id, or `""` for `_client_run_finished`. |
 | `roomId` | Rooms only: the room. |
 | `participantId` | Rooms only: the participant's opaque id. Its name is in `GET /rooms/:id`, because a rename changes the name and never the id. |
+| `chatId` | Chats only: the chat. |
 | `update` | The event itself. See [Events](#events). |
 
 An event may carry `_meta`, an object the harness attached to it. It is passed through
@@ -2314,6 +2316,9 @@ name a checkout the remove kept.
 The chat's [event stream](#the-event-stream). A line is `{seq, at, chatId, update}`
 (`ChatEventLine`), and `seq` counts from 1 in each chat. `Last-Event-ID` is that `seq`.
 The stream ends when the chat is removed or the daemon stops.
+
+**Refusals:** `404` `chat_not_found`; `404` `no_event_log` when the chat has no log;
+`400` `invalid_request` for a bad `Last-Event-ID`.
 
 ### `POST /chats/:id/turns/current/cancel`
 

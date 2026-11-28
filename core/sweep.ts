@@ -260,12 +260,9 @@ async function sweepChildren(
     let unit = "unknown";
     if (isString(raw.unitId)) unit = raw.unitId;
     else if (isString(raw.taskId)) unit = raw.taskId;
-    const where =
-      kind === "room"
-        ? `room ${owner}, participant ${unit}`
-        : kind === "chat"
-          ? `chat ${owner}`
-          : `run ${owner}, task ${unit}`;
+    let where = `run ${owner}, task ${unit}`;
+    if (kind === "room") where = `room ${owner}, participant ${unit}`;
+    else if (kind === "chat") where = `chat ${owner}`;
     // Without the recorded identity this cannot prove the pid is the harness,
     // and a recycled pid would make the signal land on a stranger — so an
     // unverifiable pid is left alive, which is the safer of two bad answers.

@@ -18,8 +18,8 @@
  * `_client_participant_revived` and the participant reads `resumed:
  * "loaded"` or `"fresh"`. The mode is sent again either way: a load does not
  * keep it (§Mode after load). A stopped owner never revives it: the
- * participant then reads `dismissed` and refuses a send as `room_dismissed`,
- * a room's words, the one owner so far.
+ * participant then reads the owner's stopped status and refuses a send as
+ * `room_dismissed`, the shared code name.
  *
  * **A load can remember less than the files show** (§M0-9). That happened
  * only to a harness stopped during a turn, cancelled or cut: the cut turn

@@ -155,10 +155,10 @@ export function createPermissionQueue(timeoutMs: number) {
   // late answer reads 409 rather than 404 and `get` can still say how it
   // closed. Each entry is bounded: `input` and `diff` are cut, and `title` is
   // cut at `KEPT_TITLE` when it settles (M12-11). The count is not bounded: a
-  // harness that loops on requests grows the map. The daemon never drops a run
-  // or a room from memory either, so all three live equally long; an `ask`
-  // room that lives for days is the longest. Drop them with their run or room
-  // once the daemon evicts those.
+  // harness that loops on requests grows the map. The daemon never drops a
+  // run, room or chat from memory either, so they live equally long; an `ask`
+  // room or chat that lives for days is the longest. Drop them with their
+  // owner once the daemon evicts those.
   const settled = new Map<string, SettledDecision>();
 
   /**

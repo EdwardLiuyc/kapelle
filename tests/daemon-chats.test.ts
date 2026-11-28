@@ -250,7 +250,28 @@ test("a chat's cancel, model and level, and the chats' scratch folders", async (
     JSON.stringify(children),
   );
 
-  await api(d, "POST", `/chats/${sid}/messages`, { text: "wait" });
+  const liveMessage = await api<MessageAccepted>(
+    d,
+    "POST",
+    `/chats/${sid}/messages`,
+    { text: "wait" },
+  );
+  assert.equal(liveMessage.status, 202, JSON.stringify(liveMessage.body));
+  assert.equal(liveMessage.body.queued, 0);
+  for (let i = 1; i <= 16; i++) {
+    const queued = await api<MessageAccepted>(
+      d,
+      "POST",
+      `/chats/${sid}/messages`,
+      { text: `wait ${i}` },
+    );
+    assert.equal(queued.status, 202, JSON.stringify(queued.body));
+    assert.equal(queued.body.queued, i);
+  }
+  const full = await api<Refused>(d, "POST", `/chats/${sid}/messages`, {
+    text: "one too many",
+  });
+  assert.deepEqual([full.status, full.body.error.code], [429, "queue_full"]);
   const cancelled = await api<ChatReply>(
     d,
     "POST",
@@ -420,6 +441,13 @@ test("a restart keeps every chat, skips a folder with no chat.json, and archives
   for (const r of [kept, scratch, retired]) {
     assert.equal(r.status, 201, JSON.stringify(r.body));
   }
+  const changed = await api<ChatReply>(
+    first,
+    "PATCH",
+    `/chats/${kept.body.id}`,
+    { name: "kept2", mode: "safe" },
+  );
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
   await api(first, "POST", `/chats/${kept.body.id}/messages`, { text: "hi" });
   const seq = (await chatIdle(first, kept.body.id)).seq;
   await writeFile(join(retired.body.agent.worktree, "work.txt"), "work\n");
@@ -440,13 +468,14 @@ test("a restart keeps every chat, skips a folder with no chat.json, and archives
   assert.deepEqual(
     listed.body.map((c) => [c.id, c.agent.name]).sort(),
     [
-      [kept.body.id, "kept"],
+      [kept.body.id, "kept2"],
       [scratch.body.id, "loose"],
     ].sort(),
   );
-  // The log goes on from where it was: the pause added its own lines.
+  // The log and the change both go on: the pause added its own lines.
   const back = listed.body.find((c) => c.id === kept.body.id);
   assert.ok((back?.seq ?? 0) >= seq, `seq ${back?.seq} after ${seq}`);
+  assert.deepEqual([back?.agent.name, back?.agent.mode], ["kept2", "safe"]);
   assert.equal(back?.agent.worktree, kept.body.agent.worktree);
 
   const archive = (await api<ArchivedChat[]>(second, "GET", "/chats/archive"))
@@ -473,9 +502,11 @@ test("a restart keeps every chat, skips a folder with no chat.json, and archives
   assert.ok(hasBranch(root, kept.body.agent.branch ?? ""));
 });
 
-test("a chat's stall warnings follow its repository's config, and one with no folder uses the defaults", async (t) => {
-  const d = await bootDaemon(t);
-  const state = await realpath(join(d.file, ".."));
+test("a chat's stall warnings follow its repository's config on add and restore, and one with no folder uses the defaults", async (t) => {
+  const runtime = await tempDir(t);
+  const stateHome = await tempDir(t);
+  const first = await bootDaemon(t, runtime, [], stateHome);
+  const state = await realpath(join(stateHome, "kapelle"));
   const root = await gitRepo(t);
   const config = join(root, ".kapelle", "config.json");
   // The daemon reads only a private config file.
@@ -483,20 +514,22 @@ test("a chat's stall warnings follow its repository's config, and one with no fo
   await writeFile(config, JSON.stringify({ stallIdleMs: 200 }), {
     mode: 0o600,
   });
-  const cwd = await addRepo(d, root);
+  const cwd = await addRepo(first, root);
   const STALL = `node ${MOCK_AGENT} --scenario stall`;
-  const inRepo = await api<ChatReply>(d, "POST", "/chats", {
+  const inRepo = await api<ChatReply>(first, "POST", "/chats", {
     cmd: STALL,
     name: "repo",
     cwd,
   });
-  const loose = await api<ChatReply>(d, "POST", "/chats", {
+  const loose = await api<ChatReply>(first, "POST", "/chats", {
     cmd: STALL,
     name: "loose",
   });
   for (const chat of [inRepo, loose]) {
     assert.equal(chat.status, 201, JSON.stringify(chat.body));
-    await api(d, "POST", `/chats/${chat.body.id}/messages`, { text: "hang" });
+    await api(first, "POST", `/chats/${chat.body.id}/messages`, {
+      text: "hang",
+    });
   }
   const warnings = async (id: string) =>
     (await readFile(join(state, "chats", id, "events.jsonl"), "utf8"))
@@ -510,8 +543,25 @@ test("a chat's stall warnings follow its repository's config, and one with no fo
   // The default is 300 s, so the chat with no folder, quiet as long, has none.
   assert.equal(await warnings(loose.body.id), 0);
 
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+  const second = await bootDaemon(t, runtime, [], stateHome);
+  const beforeRestart = await warnings(inRepo.body.id);
+  await api(second, "POST", `/chats/${inRepo.body.id}/messages`, {
+    text: "again",
+  });
+  await until(
+    "the restored repository chat's stall warning",
+    async () => (await warnings(inRepo.body.id)) > beforeRestart,
+    10_000,
+  );
+  assert.equal(await warnings(loose.body.id), 0);
+
   // A config that does not load refuses an add in that repository.
   await writeFile(config, JSON.stringify({ stallIdle: 1 }));
-  const bad = await api<Refused>(d, "POST", "/chats", { cmd: STALL, cwd });
+  const bad = await api<Refused>(second, "POST", "/chats", {
+    cmd: STALL,
+    cwd,
+  });
   assert.deepEqual([bad.status, bad.body.error.code], [400, "invalid_config"]);
 });

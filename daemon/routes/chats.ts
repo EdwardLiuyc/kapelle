@@ -157,12 +157,12 @@ export function chatRoutes({
     if (err.code === "room_dismissed") {
       return refusal(410, "chat_removed", `chat ${id} is removed`);
     }
-    const status =
-      err.code === "invalid_request" || err.code === "invalid_config"
-        ? 400
-        : err.code === "queue_full"
-          ? 429
-          : 409;
+    let status = 409;
+    if (err.code === "invalid_request" || err.code === "invalid_config") {
+      status = 400;
+    } else if (err.code === "queue_full") {
+      status = 429;
+    }
     return refusal(status, err.code, err.message);
   }
 
@@ -361,7 +361,7 @@ export function chatRoutes({
       ids = [];
     }
     const list: ArchivedChat[] = [];
-    for (const id of ids.filter(isChatId).sort()) {
+    for (const id of ids.filter(isChatId).sort((a, b) => a.localeCompare(b))) {
       const folder = archivedChatDir(id);
       try {
         list.push(
@@ -435,7 +435,7 @@ export function chatRoutes({
       }
       return;
     }
-    for (const id of ids.sort()) {
+    for (const id of ids.sort((a, b) => a.localeCompare(b))) {
       if (id === "archive") continue;
       if (!isChatId(id)) {
         console.error(`skipping ${join(chatsDir(), id)}: not a chat id`);

@@ -320,7 +320,7 @@ export interface RunDto {
   tasks: TaskDto[];
 }
 
-/** A line a run or a room kept for the operator. @public */
+/** A line a run, a room or a chat kept for the operator. @public */
 export interface Notice {
   text: string;
   kind?: "containment" | "unverified" | "version" | "advisory";
@@ -393,13 +393,13 @@ export type ParticipantRole =
   | "reviewer";
 
 /** A participant's settings (R15, amended 2026-09-28): the run-file `Task`
- *  fields that act in a room today. @public */
+ *  fields that act in a room or a chat today. @public */
 export interface ParticipantSettings {
   allowReadOutsideRoot: boolean;
 }
 
-/** One participant in full, from `GET /rooms/:id` and the
- *  `/rooms/:id/agents` routes. */
+/** One participant in full, from `GET /rooms/:id`, the `/rooms/:id/agents`
+ *  routes and `GET /chats/:id`. */
 export interface ParticipantDto {
   /** Opaque; a rename never moves it. */
   id: string;
@@ -506,12 +506,12 @@ export interface RoomListEntry {
   }[];
 }
 
-/** One kept hall scratch folder, from `GET /rooms/:id/scratch`. `kind` is
- *  `directory` for a folder the command may remove, `symlink` or `other`
- *  for an entry it reports but never follows or removes. `entries` holds
- *  the immediate children; a child directory ends in `/` and a symlink in
- *  `@`. `files` and `bytes` count regular files below the folder, without
- *  following symlinks. Since 1.27. */
+/** One kept scratch folder, from `GET /rooms/:id/scratch` or
+ *  `GET /chats/scratch`. `kind` is `directory` for a folder the command may
+ *  remove, `symlink` or `other` for an entry it reports but never follows or
+ *  removes. `entries` holds the immediate children; a child directory ends in
+ *  `/` and a symlink in `@`. `files` and `bytes` count regular files below the
+ *  folder, without following symlinks. Since 1.27. */
 export interface ScratchFolder {
   id: string;
   path: string;
@@ -525,24 +525,27 @@ export interface ScratchFolder {
   problem?: string;
 }
 
-/** One folder's result from `POST /rooms/:id/scratch/clean`. A failure does
- *  not stop the other folders. Since 1.27. */
+/** One folder's result from `POST /rooms/:id/scratch/clean` or
+ *  `POST /chats/scratch/clean`. A failure does not stop the other folders.
+ *  Since 1.27. */
 export interface ScratchCleanResult {
   id: string;
   path: string;
   removed: boolean;
-  /** The live roster protected the folder. Not a removal failure. */
+  /** The owner's live list protected the folder. Not a removal failure. */
   protected?: true;
   error?: string;
 }
 
-/** The reply of `POST /rooms/:id/scratch/clean`. Since 1.27. */
+/** The reply of `POST /rooms/:id/scratch/clean` or
+ *  `POST /chats/scratch/clean`. Since 1.27. */
 export interface ScratchCleanReply {
   results: ScratchCleanResult[];
 }
 
-/** `POST /rooms/:id/messages` and `POST /rooms/:id/agents/:agentId/messages`.
- *  `seq` is the log's size before the message. `queued` is how many of the
+/** `POST /rooms/:id/messages`, `POST /rooms/:id/agents/:agentId/messages`
+ *  and `POST /chats/:id/messages`. `seq` is the log's size before the
+ *  message. `queued` is how many of the
  *  participant's turns come first, the live one included: 0 means it
  *  started at once. Its turn is over at the `queued + 1`th
  *  `_client_turn_ended` of that participant with a `seq` above `seq`. */

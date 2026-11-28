@@ -3,8 +3,9 @@
  * `daemon.ts`.
  *
  * Pure functions from what the daemon holds (a live `TaskRun`, a restored
- * `run.json`, a `RunState`, permission decisions and the project config view)
- * to what `client/contract.ts` promises. Kept apart from `daemon.ts` because
+ * `run.json`, a `RunState`, permission decisions, a live or archived chat and
+ * the project config view) to what `client/contract.ts` promises. Kept apart
+ * from `daemon.ts` because
  * that file starts a daemon when imported, and these need tests of their own.
  * Not in `core/`: `core/` never imports `client/`.
  */
