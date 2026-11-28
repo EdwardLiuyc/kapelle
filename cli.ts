@@ -73,7 +73,7 @@ import {
   VersionRefused,
 } from "./client/daemon.ts";
 import { agentDiff } from "./client/diff.ts";
-import { absoluteFolder, FOLDER_GONE } from "./client/folder.ts";
+import { FOLDER_GONE, folderToSend } from "./client/folder.ts";
 import { ensureDaemon, stopDaemon } from "./client/lifecycle.ts";
 import { listRecipes, loopFolders } from "./client/loop.ts";
 import { fold } from "./client/mention.ts";
@@ -519,8 +519,10 @@ kapelle — a minimal Agent Client Protocol client
 Options:
   --agent <id>     ${Object.keys(AGENTS).join(" | ")}   (default: ${DEFAULT_AGENT})
   --cmd "<cmd>"    custom agent command, e.g. --cmd "opencode acp"
-  --cwd <dir>      workspace root (default: current directory); for --detach
-                   with a remote daemon, a folder on that daemon's machine
+  --cwd <dir>      workspace root (default: current directory). With a
+                   client daemon address, run --detach, a loop start,
+                   chat new and daemon add send it as typed: the daemon
+                   user's home by default, and a relative path starts there
   --mode <mode>    ask | safe | auto      (default: the agent's own)
                      ask  = reads auto-approved, mutations prompt you
                      safe = reads only, all mutations refused
@@ -1281,9 +1283,14 @@ async function detachRun(path: string): Promise<number> {
   if (run === undefined) return 1;
   const d = await findDaemon();
   if (!d) return 1;
+  const cwd = folderToSend(flag("cwd"), d.fromClient);
+  if (!cwd) {
+    console.error(`error: ${FOLDER_GONE}`);
+    return 1;
+  }
   const r = await call<RunAccepted>(d, "/runs", {
     method: "POST",
-    body: { cwd: resolve(flag("cwd", process.cwd())), run },
+    body: { cwd, run },
   });
   if (!r.ok) {
     console.error(`error: ${r.error.message}`);
@@ -1702,9 +1709,14 @@ async function runDaemonCommand(): Promise<number> {
   }
   const d = await findDaemon();
   if (!d) return 1;
+  const path = folderToSend(rest[0], d.fromClient);
+  if (!path) {
+    console.error(`error: ${FOLDER_GONE}`);
+    return 1;
+  }
   const r = await call<RepoAdded>(d, "/repos", {
     method: "POST",
-    body: { path: resolve(rest[0] as string) },
+    body: { path },
   });
   if (!r.ok) {
     console.error(`error: ${r.error.message}`);
@@ -2066,16 +2078,17 @@ async function listLoopRecipes(cwd: string): Promise<number> {
 type LoopRouteCommand = Extract<RouteCommand, { verb: "loop" }>;
 
 async function startLoopRoute(
+  d: DaemonAddress,
   c: LoopRouteCommand,
   cwd: string,
 ): Promise<number> {
-  const d = await findDaemon();
-  if (!d) return 1;
   const out = await runCommand(d, undefined, c);
   if (!out.ok) {
     printRefusal(out);
     if (out.code === "repo_not_added") {
-      console.error(`add the repository first: kapelle daemon add ${cwd}`);
+      // Single-quoted, so a shell expands no remote `~` or `$` here.
+      const quoted = `'${cwd.replaceAll("'", "'\\''")}'`;
+      console.error(`add the repository first: kapelle daemon add ${quoted}`);
     }
     return 1;
   }
@@ -2105,17 +2118,22 @@ async function runLoopCommand(): Promise<number> {
     console.error(LOOP_USAGE);
     return 1;
   }
-  const cwd = absoluteFolder(flag("cwd"));
+  // A missing or empty model is a usage error, before any room (M9-5c).
+  const model = list ? undefined : flag("model");
+  // `list` reads this disk until M11-6; a start sends the daemon a folder
+  // (M11-5), as typed when the daemon is remote.
+  const d = list ? undefined : await findDaemon();
+  if (!list && !d) return 1;
+  const cwd = folderToSend(flag("cwd"), d?.fromClient ?? false);
   if (!cwd) {
     console.error(`error: ${FOLDER_GONE}`);
     return 1;
   }
-  // A missing or empty model is a usage error, before any room (M9-5c).
-  const model = list ? undefined : flag("model");
 
-  if (list) return listLoopRecipes(cwd);
+  if (list || !d) return listLoopRecipes(cwd);
 
   return startLoopRoute(
+    d,
     loopCommand({
       recipe: first,
       task,

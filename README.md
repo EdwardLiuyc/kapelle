@@ -195,8 +195,9 @@ kapelle rings the bell and sends a desktop notification when a run needs you.
 
 When [`client.json`](docs/CONFIG.md#client-file--xdg_config_homekapelleclientjson)
 reaches a daemon on another machine through an SSH tunnel at a local
-`127.0.0.1` port, run files must use `--detach`; until M11-5, `--cwd` must name
-an existing repository folder on that daemon's machine.
+`127.0.0.1` port, run files must use `--detach`. A folder is then a folder on
+that daemon's machine: `--cwd app` means the daemon user's `~/app`, and no
+`--cwd` means that home.
 
 ### Take the results
 

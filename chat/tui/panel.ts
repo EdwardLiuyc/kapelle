@@ -65,8 +65,10 @@ import type {
 import { call, type DaemonAddress } from "../../client/daemon.ts";
 import {
   absoluteFolder,
+  completeDaemonFolder,
   completeFolder,
   FOLDER_GONE,
+  folderToSend,
 } from "../../client/folder.ts";
 import { listRecipes, loopFolders } from "../../client/loop.ts";
 import { nameOf, printable, roster } from "../../client/room.ts";
@@ -219,6 +221,8 @@ function panelParts({
    *  dismissed it. The startup response must not reopen it after a close. */
   let setupGeneration = 0;
   let setupTouched = false;
+  /** A typed folder as the `cwd` to send (M11-5); none is the default. */
+  const folder = (typed?: string) => folderToSend(typed, d.fromClient);
   /** How many rows a list in the pop-up may show. */
   const panelRoom = () =>
     Math.max(3, Math.min(12, (process.stdout.rows || 24) - 12));
@@ -1019,11 +1023,21 @@ function panelParts({
         handleInput(key) {
           options = [];
           if (!matchesKey(key, Key.tab)) return input.handleInput(key);
-          const c = completeFolder(input.getValue(), absoluteFolder());
-          input.setValue(c.value);
-          input.handleInput("\x05"); // ctrl+e: the line's end
-          options = c.options;
-          tui.requestRender();
+          const typed = input.getValue();
+          const show = (c: { value: string; options: string[] }) => {
+            // A late answer for a line the person has changed since.
+            if (input.getValue() !== typed) return;
+            input.setValue(c.value);
+            input.handleInput("\x05"); // ctrl+e: the line's end
+            options = c.options;
+            tui.requestRender();
+          };
+          // A remote daemon's folders are on its disk, not ours (M11-5).
+          if (!d.fromClient)
+            return show(completeFolder(typed, absoluteFolder()));
+          void fresh()
+            .then(() => completeDaemonFolder(d, typed))
+            .then(show, () => {});
         },
         invalidate: () => input.invalidate(),
       };
@@ -1283,7 +1297,7 @@ function panelParts({
   /** The field's value as `cwd`: undefined when empty, `null` when it
    *  cannot be read. */
   const ownFolder = (typed: string | undefined) =>
-    typed ? (absoluteFolder(typed) ?? null) : undefined;
+    typed ? (folder(typed) ?? null) : undefined;
 
   /** A new chat (M11-1): an agent in the hidden hall, from any view. */
   const chatForm = (back: () => void = hidePanel) =>
@@ -1323,7 +1337,7 @@ function panelParts({
         {
           id: "cwd",
           label: "folder",
-          value: absoluteFolder() ?? "",
+          value: folder() ?? "",
           folder: true,
         },
         { id: "title", label: "title", value: "" },
@@ -1334,7 +1348,7 @@ function panelParts({
       ],
       "open",
       (v) => {
-        const cwd = absoluteFolder(v.cwd || ".");
+        const cwd = folder(v.cwd);
         if (!cwd) return { error: FOLDER_GONE };
         // As `/new --model` alone is refused: an empty room has no agent
         // to set it on.
@@ -1375,7 +1389,7 @@ function panelParts({
         {
           id: "cwd",
           label: "folder",
-          value: absoluteFolder() ?? "",
+          value: folder() ?? "",
           folder: true,
           verbatim: true,
         },
@@ -1386,13 +1400,13 @@ function panelParts({
           empty: "no recipes",
           verbatim: true,
           pick: async (v) => {
-            const cwd = absoluteFolder(v.cwd || ".");
+            const cwd = folder(v.cwd);
             if (!cwd) throw new Error(FOLDER_GONE);
             const found = (await listRecipes(cwd)).filter((r) => r.wins);
             const names = found.map((r) => r.name);
             // A late read for a folder the person already left must not
             // validate a submission for the folder now in the form.
-            if (absoluteFolder(v.cwd || ".") === cwd) {
+            if (folder(v.cwd) === cwd) {
               listedFolder = cwd;
               recipeNames = names;
             }
@@ -1407,7 +1421,7 @@ function panelParts({
       ],
       "start",
       (v) => {
-        const cwd = absoluteFolder(v.cwd || ".");
+        const cwd = folder(v.cwd);
         if (!cwd) return { error: FOLDER_GONE };
         if (!v.task.trim()) return { error: "a task is required" };
         if (listedFolder !== cwd) {
@@ -1488,7 +1502,7 @@ function panelParts({
       }
     };
     if (open?.hall) return fail(HALL_NO_CONFIG);
-    const cwd = open?.cwd ?? absoluteFolder();
+    const cwd = open?.cwd ?? folder();
     if (!cwd) return fail(FOLDER_GONE);
     await fresh();
     if (panelGeneration !== opening) return;

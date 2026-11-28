@@ -12,7 +12,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdir, realpath, writeFile } from "node:fs/promises";
+import { mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import type { RoomDto, RoomListEntry } from "../client/contract.ts";
@@ -167,6 +167,49 @@ test("kapelle loop starter starts the package's recipe in a repository with none
   assert.ok(
     rooms.body.some((room) => room.title === "starter-add a --version flag"),
     JSON.stringify(rooms.body),
+  );
+});
+
+test("with a daemon address set, kapelle loop starts in the daemon user's home, and quotes its add hint (M11-5)", async (t) => {
+  const repo = await realpath(await gitRepo(t));
+  const home = await realpath(await tempDir(t));
+  await symlink(repo, join(home, "app"));
+  const d = await bootDaemon(t, await tempDir(t), [], undefined, {
+    HOME: home,
+  });
+  await addRepo(d, repo);
+  const config = await realpath(await tempDir(t));
+  await mkdir(join(config, "kapelle"), { recursive: true, mode: 0o700 });
+  await writeFile(
+    join(config, "kapelle", "client.json"),
+    JSON.stringify({ daemonAddress: d.url, accessKey: d.token }),
+    { mode: 0o600 },
+  );
+  // Typed from a folder the daemon does not know, under another home.
+  const elsewhere = await tempDir(t);
+  const env = {
+    XDG_CONFIG_HOME: config,
+    XDG_RUNTIME_DIR: await tempDir(t),
+    HOME: await tempDir(t),
+  };
+  const loop = (args: string[]) =>
+    spawnCli(t, ["loop", "starter", ...args], "cli.ts", env, elsewhere).done;
+
+  const r = await loop(["remote start", "--cmd", REMEMBER, "--cwd", "app"]);
+  assert.equal(r.code, 0, r.stderr);
+  const id = /attach with: kapelle chat attach (\S+)/.exec(r.stdout)?.[1];
+  assert.ok(id, r.stdout);
+  const room = (await api<RoomDto>(d, "GET", `/rooms/${id}`)).body;
+  assert.equal(room.cwd, repo);
+
+  // No --cwd is the daemon's home, which is not added. The hint is
+  // single-quoted, so a shell here cannot expand its `~`.
+  const none = await loop(["no folder", "--cmd", REMEMBER]);
+  assert.equal(none.code, 1);
+  assert.ok(none.stderr.includes(`${home} has not been added`), none.stderr);
+  assert.match(
+    none.stderr,
+    /^add the repository first: kapelle daemon add '~'$/m,
   );
 });
 

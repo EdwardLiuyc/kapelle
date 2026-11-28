@@ -857,6 +857,95 @@ test("piped chat.ts takes /leave after an @name, as the screen does", async (t) 
   assert.doesNotMatch(r.stdout, /you → /);
 });
 
+test("chat.ts new and /new send a local folder or the daemon's home path (M11-5)", async (t) => {
+  const runtime = await tempDir(t);
+  const home = await realpath(await tempDir(t));
+  const repo = await realpath(await gitRepo(t));
+  await symlink(repo, join(home, "app"));
+  const d = await boot(t, runtime, [], undefined, { HOME: home });
+  await added(d, repo);
+
+  const open = async (
+    env: Record<string, string>,
+    cwd: string,
+    name: string,
+    extra: string[] = [],
+  ) => {
+    const c = spawnCli(
+      t,
+      ["new", "--cmd", REMEMBER, "--name", name, ...extra],
+      "chat.ts",
+      env,
+      cwd,
+    );
+    c.child.stdin.end("/leave\n");
+    return c.done;
+  };
+
+  // Local: no --cwd is the folder `kapelle chat new` was typed in.
+  const local = await open(
+    {
+      XDG_RUNTIME_DIR: runtime,
+      XDG_CONFIG_HOME: await tempDir(t),
+    },
+    repo,
+    "local",
+  );
+  assert.equal(local.code, 0, local.stderr);
+
+  // Remote: `~/app` is on the daemon's disk; `elsewhere` is not.
+  const configHome = await tempDir(t);
+  await mkdir(join(configHome, "kapelle"), { recursive: true, mode: 0o700 });
+  await writeFile(
+    join(configHome, "kapelle", "client.json"),
+    JSON.stringify({ daemonAddress: d.url, accessKey: d.token }),
+    { mode: 0o600 },
+  );
+  const elsewhere = await tempDir(t);
+  const remoteEnv = {
+    XDG_RUNTIME_DIR: await tempDir(t),
+    XDG_CONFIG_HOME: configHome,
+    HOME: await tempDir(t),
+  };
+  const remote = await open(remoteEnv, elsewhere, "remote", ["--cwd", "~/app"]);
+  assert.equal(remote.code, 0, remote.stderr);
+
+  // The same path in a piped `/new`, through `chat/piped.ts`'s remote flag.
+  const listed = await api<RoomListEntry[]>(d, "GET", "/rooms");
+  const initial = listed.body.find((r) =>
+    r.participants.some((p) => p.name === "local"),
+  );
+  assert.ok(initial);
+  const c = spawnCli(
+    t,
+    ["attach", initial.id],
+    "chat.ts",
+    remoteEnv,
+    elsewhere,
+  );
+  c.child.stdin.end(
+    `/new --cmd "${REMEMBER}" --name remote-slash --cwd app\n/leave\n`,
+  );
+  const slash = await c.done;
+  assert.equal(slash.code, 0, slash.stderr);
+  assert.match(slash.stdout, /opened room/);
+  assert.match(slash.stdout, /attach with: kapelle chat attach/);
+
+  const rooms = await api<RoomListEntry[]>(d, "GET", "/rooms");
+  assert.equal(rooms.status, 200);
+  for (const [name, cwd] of [
+    ["local", repo],
+    ["remote", repo],
+    ["remote-slash", repo],
+  ] as const) {
+    const room = rooms.body.find((r) =>
+      r.participants.some((p) => p.name === name),
+    );
+    assert.ok(room, name);
+    assert.equal(room.cwd, cwd, name);
+  }
+});
+
 test("kapelle chat takes the global --quiet and --verbose", async (t) => {
   const r = await runCli(t, ["chat", "--quiet", "--verbose", "--help"]);
   assert.equal(r.code, 0, r.stderr);

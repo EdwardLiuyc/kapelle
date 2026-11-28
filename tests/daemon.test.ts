@@ -894,12 +894,69 @@ test("POST /repos registers the repository root, once, and GET /repos lists it",
   ]);
 });
 
-test("POST /repos refuses a relative or missing path, and registers none", async (t) => {
+test("a folder path starts from the daemon user's home, and GET /folders lists one (M11-5)", async (t) => {
+  const home = await realpath(await tempDir(t));
+  const repo = await realpath(await gitRepo(t));
+  await mkdir(join(home, "src"));
+  await mkdir(join(home, ".hidden"));
+  await writeFile(join(home, "notes.md"), "");
+  await symlink(repo, join(home, "app"));
+  await symlink(join(home, "gone"), join(home, "broken"));
+  const d = await boot(t, undefined, [], undefined, { HOME: home });
+
+  // `~/…` and a relative path both start from the daemon's home.
+  for (const path of ["~/app", "app"]) {
+    const added = await api(d, "POST", "/repos", { path });
+    assert.equal(added.status, 200, path);
+    assert.equal(added.body.root, repo);
+  }
+
+  // Folders, a link to one and hidden ones; no file and no broken link.
+  for (const path of ["~", ".", home]) {
+    const listed = await api(
+      d,
+      "GET",
+      `/folders?path=${encodeURIComponent(path)}`,
+    );
+    assert.equal(listed.status, 200, path);
+    assert.deepEqual(listed.body, {
+      path: home,
+      folders: [".hidden", "app", "src"],
+    });
+  }
+  const missing = await api(d, "GET", "/folders?path=nope");
+  assert.equal(missing.status, 400);
+  assert.match(missing.body.error.message, /nope does not exist/);
+  assert.equal((await api(d, "GET", "/folders")).status, 400);
+});
+
+test("GET /folders refuses a folder it cannot read (M11-5)", {
+  skip: process.getuid?.() === 0 && "root reads any mode",
+}, async (t) => {
+  const home = await realpath(await tempDir(t));
+  const locked = join(home, "locked");
+  await mkdir(locked);
+  const d = await boot(t, undefined, [], undefined, { HOME: home });
+  await chmod(locked, 0o000);
+  try {
+    const denied = await api<ErrorReply>(
+      d,
+      "GET",
+      `/folders?path=${encodeURIComponent(locked)}`,
+    );
+    assert.equal(denied.status, 400);
+    assert.equal(denied.body.error.code, "invalid_request");
+  } finally {
+    await chmod(locked, 0o700);
+  }
+});
+
+test("POST /repos refuses an empty or missing path, and registers none", async (t) => {
   const d = await boot(t);
 
-  const relative = await api(d, "POST", "/repos", { path: "src/app" });
-  assert.equal(relative.status, 400);
-  assert.match(relative.body.error.message, /absolute/);
+  const empty = await api(d, "POST", "/repos", { path: "" });
+  assert.equal(empty.status, 400);
+  assert.match(empty.body.error.message, /must be a folder path/);
 
   const missing = await api(d, "POST", "/repos", {
     path: join(await tempDir(t), "typo"),

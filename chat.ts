@@ -53,7 +53,7 @@ import type {
   ScratchFolder,
 } from "./client/contract.ts";
 import { call, checkVersion, type DaemonAddress } from "./client/daemon.ts";
-import { absoluteFolder, FOLDER_GONE } from "./client/folder.ts";
+import { FOLDER_GONE, folderToSend } from "./client/folder.ts";
 import { fold } from "./client/mention.ts";
 import { printable } from "./client/room.ts";
 
@@ -267,21 +267,21 @@ async function main(): Promise<number> {
     console.log(USAGE);
     return values.help ? 0 : 1;
   }
-  // The screen and `new` need the current folder, and `process.cwd()`
-  // throws when it was removed. Say so before the screen opens; the screen
-  // handles a folder removed after that. `list`, `attach` and `dismiss`
-  // need no folder.
-  const cwd = absoluteFolder(values.cwd);
-  if (!cwd && (!verb || verb === "new")) {
-    console.error(`error: ${FOLDER_GONE}`);
-    return 1;
-  }
-
   const d = await address();
   // B5: a different `major` throws `VersionRefused`, which `main`'s caller
   // prints; a different `minor` is a warning.
   const warning = await checkVersion(d);
   if (warning) console.error(`! ${warning}`);
+
+  // The screen and `new` need the current folder, and `process.cwd()`
+  // throws when it was removed. Say so before the screen opens; the screen
+  // handles a folder removed after that. `list`, `attach` and `dismiss`
+  // need no folder, and a remote daemon needs none of ours (M11-5).
+  const cwd = folderToSend(values.cwd, d.fromClient);
+  if (!cwd && (!verb || verb === "new")) {
+    console.error(`error: ${FOLDER_GONE}`);
+    return 1;
+  }
 
   if (!verb) return chat(d);
 

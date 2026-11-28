@@ -7,7 +7,7 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.31** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.32** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
 rooms stable, M6-7b, #179, which added `resumed: "loaded"`, M6-7c, #235, which added
 `DELETE /rooms/:id`, M8-1, #265, which added a message's `from`, M8-2, #266, which
@@ -26,7 +26,8 @@ invalid-file view and `PUT /config`; a stable `GET /config` now answers `200` wi
 `invalid` instead of `400` for a safe file whose content is invalid; and M12-4, #535,
 which made `_client_permission`'s `allow` false for a yes with no matching option;
 and #537, which added `run_not_owned` for a live run another process owns; and
-M12-11, #545, which cut a closed decision's `title` in `GET /permissions/:id`).
+M12-11, #545, which cut a closed decision's `title` in `GET /permissions/:id`; and
+M11-5, #479, which added `GET /folders` and folder paths from the daemon user's home).
 
 ## Contents
 
@@ -98,6 +99,7 @@ Check for a capability before you use its feature. Ignore names that you do not 
 | `permissions` | [Permissions](#permissions): list and answer. |
 | `rooms` | [Rooms](#rooms). Stable since 1.8. |
 | `config` | [A repository's project config](#get-config): read and save. Since 1.22. Since 1.28, a safe invalid file is viewable and replaceable. |
+| `folders` | [The folders in a folder](#get-folders), for a remote client's folder completion. Since 1.32. |
 
 ### Stability
 
@@ -133,6 +135,7 @@ Not every part of this API is final yet. Each part has one of three labels:
 | Everything under `/rooms`, and the room events | Since 1.8 (M6-7a). Rooms survive a daemon restart. |
 | `GET /harnesses`, `POST /harnesses`, `POST /harnesses/done`, `POST /harnesses/install` | Since 1.21 (M9-8). M4-5 added the list; M9-3 the find; M9-3b the install; M9-4 the login check. |
 | `GET /config`, `PATCH /config`, `PUT /config` | Since 1.22 (M10-5); `PUT` and the invalid view since 1.28 (#504). |
+| `GET /folders`, and folder paths from the daemon user's home | Since 1.32 (M11-5). |
 
 **Provisional.** These will change. The last column names the story that changes each
 one.
@@ -251,6 +254,20 @@ must follow these rules:
 
 `GET` and `DELETE` have no body and need no `Content-Type`.
 
+**Folders.** A field or query parameter that names a folder (`path`, `cwd`) is a folder
+path on the daemon's machine. Since 1.32 (M11-5) it is one of these:
+
+- an absolute path, such as `/home/me/src/app`;
+- `~` or `~/…`, the daemon user's home and a path under it;
+- a relative path, such as `src/app`. It starts from the daemon user's home, as `ssh` and
+  `scp` do, never from the daemon's own current folder.
+
+`~bob` is not another user's home: it is a relative path. An empty string is refused. The
+folder must exist. The reply names it by its real path, with every link resolved. A client
+on the daemon's machine resolves a typed relative path against its own current folder,
+then sends the absolute result. A client that reaches a daemon on another machine sends
+what the person typed.
+
 **Errors.** Every refusal has this body:
 
 ```json
@@ -352,6 +369,7 @@ the `GET` routes take none.
 | `GET /version` | The contract version and the capabilities. |
 | `POST /repos` | Add a repository. |
 | `GET /repos` | List the added repositories. |
+| `GET /folders?path=…` | List the folders in one folder on the daemon's machine. |
 | `GET /config?cwd=…` | A repository's project config: every key, its value in use, and where that comes from. |
 | `PATCH /config?cwd=…` | Save changed keys of a repository's project config. |
 | `PUT /config?cwd=…` | Replace a repository's whole project config. |
@@ -396,8 +414,8 @@ the `GET` routes take none.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 31 },
-  "capabilities": ["repos", "runs", "events", "permissions", "rooms", "config"]
+  "apiVersion": { "major": 1, "minor": 32 },
+  "capabilities": ["repos", "runs", "events", "permissions", "rooms", "config", "folders"]
 }
 ```
 
@@ -417,8 +435,8 @@ The daemon remembers the list after a restart.
 { "path": "/home/me/src/app" }
 ```
 
-`path` must be an absolute path to a folder that exists. It can be any folder inside the
-repository. The daemon finds the repository root for you.
+`path` is a [folder path](#rules-for-every-request) to a folder that exists. It can be
+any folder inside the repository. The daemon finds the repository root for you.
 
 **Reply `200`:**
 
@@ -428,7 +446,7 @@ repository. The daemon finds the repository root for you.
 
 `root` is the real path of the repository root. Adding the same repository twice is fine.
 
-**Refusals:** `400` `invalid_request` when `path` is not absolute or does not exist.
+**Refusals:** `400` `invalid_request` when `path` is empty or does not exist.
 `400` `invalid_config` when the repository's `.kapelle/config.json` is not valid.
 
 #### `GET /repos`
@@ -439,13 +457,33 @@ repository. The daemon finds the repository root for you.
 ["/home/me/src/app", "/home/me/src/lib"]
 ```
 
+#### `GET /folders`
+
+The folders in one folder on the daemon's machine (M11-5, since 1.32). A client that
+reaches a daemon on another machine completes a typed folder with it, because its own disk
+is not the daemon's. `path` is a query parameter: a
+[folder path](#rules-for-every-request). It can be any folder the daemon's user can read,
+in an added repository or not.
+
+**Reply `200`:** the real path it listed, and the names of the folders in it, sorted.
+Hidden folders are listed too. A link to a folder counts as a folder; a file or a broken
+link does not.
+
+```json
+{ "path": "/home/me/src", "folders": [".cache", "app", "lib"] }
+```
+
+**Refusals:** `400` `invalid_request` when `path` is missing, empty, does not exist, or
+cannot be read.
+
 ### `GET /config`
 
 A repository's project config, `<root>/.kapelle/config.json` (M10-5, since 1.22). The
 keys and their rules are in [`docs/CONFIG.md`](CONFIG.md). The daemon-wide `port` and
 `permissionTimeoutMs` are not here.
 
-`cwd` is a query parameter: an absolute path to a folder in an added repository.
+`cwd` is a query parameter: a [folder path](#rules-for-every-request) to a folder in an
+added repository.
 
 **Reply `200`:** every project key, also the ones the file does not name, in this
 order.
@@ -477,7 +515,7 @@ order.
 A saved value applies to later runs, new rooms, the next sweep and new checkouts. Work
 already underway keeps what it read.
 
-**Refusals:** `400` `invalid_request` when `cwd` is not absolute or does not exist.
+**Refusals:** `400` `invalid_request` when `cwd` is empty or does not exist.
 `403` `repo_not_added` when `cwd` is not in an added repository. `400`
 `invalid_config` when the config path is unsafe: a symlink, non-file, another owner, a
 file this process cannot read, a group/other-writable file, or a linked `.kapelle`.
@@ -717,7 +755,7 @@ Starts a run. The reply comes at once. The run goes on after it.
 
 | Field | Meaning |
 | --- | --- |
-| `cwd` | Absolute path to a folder inside an added repository. The tasks work there. |
+| `cwd` | A [folder path](#rules-for-every-request) to a folder inside an added repository. The tasks work there. |
 | `run` | A run file. Its format is in `schema/run.schema.json`. `tasks.json` is an example. |
 
 **Reply `202`:**
@@ -730,7 +768,7 @@ Treat the id as an opaque string. Do not parse it.
 
 **Refusals, in this order:**
 
-1. `400` `invalid_request`: `cwd` is not an absolute path, or does not exist.
+1. `400` `invalid_request`: `cwd` is empty, or does not exist.
 2. `403` `repo_not_added`: `cwd` is not inside an added repository. Add it with
    `POST /repos` first.
 3. `400` `invalid_config`: the repository's `.kapelle/config.json` is not valid.
@@ -1379,7 +1417,8 @@ An agent takes:
   or a reset leaves it unchanged. The
   [`?against=base` diff route](#get-roomsidagentsagentiddiff) owns how its comparison is
   chosen.
-- `cwd`: optional, since 1.26. An absolute path to the agent's own folder. It must be
+- `cwd`: optional, since 1.26. A [folder path](#rules-for-every-request) to the agent's
+  own folder. It must be
   inside an added repository, as the room's `cwd` must. In a git repository with a
   commit, the agent gets its own checkout and branch in that repository, as described
   above for the room's. In a folder with no git, or a repository with no commit, it works
@@ -1488,7 +1527,7 @@ the current topology, independently of the saved `baseSha`.
 bad `title`, a bad or missing harness, a bad `name`, `role`, `mode`, `model`,
 `thoughtLevel` or `settings`, or an unknown agent field; `409` `name_taken` or
 `orchestrator_exists` when two agents in the list clash; `400` `invalid_request` for an
-agent's `cwd` that is not an absolute folder, and `403` `repo_not_added` for one outside
+agent's `cwd` that is not a folder, and `403` `repo_not_added` for one outside
 every added repository; `400` `invalid_config` when the
 repository's `.kapelle/config.json` is not valid, because the room reads its watchdog
 limits, turn cap and `linkPaths` from it; `400` `invalid_request` for a bad `base`; `503`

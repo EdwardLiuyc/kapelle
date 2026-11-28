@@ -8,7 +8,15 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -169,6 +177,57 @@ test("readBody counts a body sent without Content-Length", async () => {
   );
 });
 
+test("existingDir starts ~, ~/… and a relative path from the daemon user's home (M11-5)", (t) => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "kapelle-home-")));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  mkdirSync(join(home, "src", "app"), { recursive: true });
+  // `os.homedir()` reads `HOME` on POSIX.
+  const before = process.env.HOME;
+  process.env.HOME = home;
+  t.after(() => {
+    if (before === undefined) delete process.env.HOME;
+    else process.env.HOME = before;
+  });
+  assert.equal(existingDir("~", "cwd"), home);
+  assert.equal(existingDir(".", "cwd"), home);
+  assert.equal(existingDir("~/src/app", "cwd"), join(home, "src", "app"));
+  assert.equal(existingDir("src/app", "cwd"), join(home, "src", "app"));
+  // `~bob` is a name, not another user's home.
+  assert.throws(
+    () => existingDir("~bob", "cwd"),
+    (err) => err instanceof Refusal && err.message.includes(join(home, "~bob")),
+  );
+});
+
+test("existingDir says a path it cannot check is not missing (M11-5)", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "kapelle-http-"));
+  const locked = join(dir, "locked");
+  mkdirSync(join(locked, "inside"), { recursive: true });
+  t.after(() => {
+    chmodSync(locked, 0o700);
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const why = (path: string) => {
+    try {
+      existingDir(path, "cwd");
+    } catch (err) {
+      assert.ok(err instanceof Refusal && err.status === 400, path);
+      return err.message;
+    }
+    assert.fail(`${path} was accepted`);
+  };
+  assert.match(why(join(dir, "missing")), /does not exist as a folder$/);
+  assert.match(why(join(dir, "a".repeat(300))), /\(ENAMETOOLONG\)$/);
+  // Root may search any folder, so only a user meets EACCES.
+  if (process.getuid?.() !== 0) {
+    chmodSync(locked, 0o000);
+    assert.match(
+      why(join(locked, "inside")),
+      /cannot be checked as a folder \(EACCES\)$/,
+    );
+  }
+});
+
 test("existingDir returns the real path of a folder, else a 400", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "kapelle-http-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -179,7 +238,7 @@ test("existingDir returns the real path of a folder, else a 400", (t) => {
 
   const file = join(dir, "f");
   writeFileSync(file, "");
-  for (const bad of ["relative/path", file, join(dir, "missing"), 5]) {
+  for (const bad of ["", file, join(dir, "missing"), 5]) {
     assert.throws(
       () => existingDir(bad, "cwd"),
       (err) => err instanceof Refusal && err.status === 400,

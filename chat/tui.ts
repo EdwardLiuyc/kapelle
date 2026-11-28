@@ -1396,7 +1396,7 @@ function chatTui(
         const back = bare ? `${text} ` : text;
         if (editor.getText() !== back) editor.setText(back);
       };
-      const c = parseLine(text, roster, r?.entry.hall);
+      const c = parseLine(text, roster, r?.entry.hall, undefined, d.fromClient);
       if ("error" in c) {
         flash = `! ${c.error}`;
         setStatus();

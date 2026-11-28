@@ -29,8 +29,17 @@
  * (`core/config.ts`), because `client/` never imports `core/`;
  * `client/tests/loop.test.ts` checks that they agree.
  *
- * It reads the local disk, as `client/folder.ts` does: the daemon listens on
- * loopback only, so the screen and the daemon share it.
+ * It reads this client's disk, even when `client.json` names a daemon on
+ * another machine (M11-4). That works only because a recipe is pasted, not
+ * named by its path. But the folder a remote loop starts in is on the
+ * daemon's machine, and `client/folder.ts` sends it as typed (M11-5). So
+ * the repository's recipes are looked up on this disk. An absolute folder
+ * is looked up at that path here. A `~` or relative folder starts at this
+ * client's current folder; if it exists here, `gitTop` uses its real path.
+ * If it does not, it is walked as typed, and when it reaches `.` the walk
+ * stops there because `dirname(".")` is `.`. So a client in a checkout
+ * subfolder gets no repository recipe for a remote `--cwd app` unless `app`
+ * exists here. M11-6 (#480) moves recipe reading to the daemon.
  */
 
 import { type Dirent, existsSync, realpathSync } from "node:fs";

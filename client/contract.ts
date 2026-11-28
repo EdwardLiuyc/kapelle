@@ -48,7 +48,7 @@ export type { AgentEvent, Diff, PermissionReason, ToolCallStatus, ToolKind };
  * (M5-2 changed one). Which rows are stable is the table in
  * `docs/CLIENT-API.md`.
  */
-export const API_VERSION = { major: 1, minor: 31 } as const;
+export const API_VERSION = { major: 1, minor: 32 } as const;
 
 /**
  * What this daemon can do (B4). Names are only ever added, never removed or
@@ -61,6 +61,7 @@ export const CAPABILITIES = [
   "permissions",
   "rooms",
   "config",
+  "folders",
 ] as const;
 
 /** One entry of `GET /harnesses` (M4-5): a harness the daemon can launch by
@@ -196,6 +197,13 @@ export interface RepoAdded {
 
 /** `GET /repos` answers every added repository root. */
 export type RepoRoots = string[];
+
+/** `GET /folders?path=…` (M11-5, 1.32): the real path it listed, and the
+ *  names of the folders in it, sorted. Hidden folders too. */
+export interface FolderList {
+  path: string;
+  folders: string[];
+}
 
 /** A project config value: a number, or the `linkPaths` list. */
 type ConfigValue = number | string[];
