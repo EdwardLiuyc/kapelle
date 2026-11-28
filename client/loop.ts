@@ -29,8 +29,13 @@
  * (`core/config.ts`), because `client/` never imports `core/`;
  * `client/tests/loop.test.ts` checks that they agree.
  *
- * It reads the local disk, as `client/folder.ts` does: the daemon listens on
- * loopback only, so the screen and the daemon share it.
+ * It reads this client's disk, even when `client.json` names a daemon on
+ * another machine (M11-4). That works only because a recipe is pasted, not
+ * named by its path. But the folder a remote loop starts in is on the
+ * daemon's machine, and `client/folder.ts` sends it as typed (M11-5). So
+ * the repository's recipes are looked up on this disk: a `~` or relative
+ * folder from this client's own current folder, an absolute one at that
+ * path here. M11-6 (#480) moves recipe reading to the daemon.
  */
 
 import { type Dirent, existsSync, realpathSync } from "node:fs";
