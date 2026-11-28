@@ -10,7 +10,7 @@
 
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import type {
@@ -154,6 +154,14 @@ test("a chat's routes: add, list, get, message, stream, change, cancel, diff, re
     const bad = await api<Refused>(d, "PATCH", `/chats/${id}`, body);
     assert.deepEqual([bad.status, bad.body.error.code], [400, code]);
   }
+  const role = await api<Refused>(d, "POST", "/chats", {
+    cmd: REMEMBER,
+    role: "tester",
+  });
+  assert.deepEqual(
+    [role.status, role.body.error.code],
+    [400, "invalid_request"],
+  );
 
   const noTurn = await api<Refused>(
     d,
@@ -178,12 +186,16 @@ test("a chat's routes: add, list, get, message, stream, change, cancel, diff, re
     removed.body.notices.some((n) => n.text.includes(ann.worktree)),
     JSON.stringify(removed.body.notices),
   );
-  for (const [method, path] of [
-    ["GET", `/chats/${id}`],
-    ["POST", `/chats/${id}/turns/current/cancel`],
-    ["DELETE", `/chats/${id}`],
+  for (const [method, path, body] of [
+    ["GET", `/chats/${id}`, undefined],
+    ["PATCH", `/chats/${id}`, { name: "bea" }],
+    ["POST", `/chats/${id}/messages`, { text: "one more" }],
+    ["POST", `/chats/${id}/turns/current/cancel`, undefined],
+    ["GET", `/chats/${id}/events`, undefined],
+    ["GET", `/chats/${id}/diff`, undefined],
+    ["DELETE", `/chats/${id}`, undefined],
   ] as const) {
-    const gone = await api<Refused>(d, method, path);
+    const gone = await api<Refused>(d, method, path, body);
     assert.deepEqual(
       [gone.status, gone.body.error.code],
       [410, "chat_removed"],
@@ -203,6 +215,12 @@ test("a chat's routes: add, list, get, message, stream, change, cancel, diff, re
   assert.deepEqual(
     (await frames(d, `/chats/archive/${id}/events`, 2)).map((f) => f.id),
     all.slice(2).map((f) => f.id),
+  );
+  await rm(join(removed.body.folder, "events.jsonl"));
+  const noLog = await api<Refused>(d, "GET", `/chats/archive/${id}/events`);
+  assert.deepEqual(
+    [noLog.status, noLog.body.error.code],
+    [404, "no_event_log"],
   );
 
   // An id that is not a chat id is never made into a path.
@@ -329,6 +347,42 @@ test("a chat's cancel, model and level, and the chats' scratch folders", async (
   assert.equal(existsSync(folder), false);
 });
 
+test("a chat's change moves updatedAt before its reply", async (t) => {
+  const d = await bootDaemon(t);
+  const added = await api<ChatDto>(d, "POST", "/chats", {
+    cmd: REMEMBER,
+    name: "ann",
+  });
+  assert.equal(added.status, 201, JSON.stringify(added.body));
+
+  const changed = await api<ChatDto>(d, "PATCH", `/chats/${added.body.id}`, {
+    name: "bea",
+  });
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+  assert.ok(
+    Date.parse(changed.body.updatedAt) > Date.parse(added.body.updatedAt),
+    `${changed.body.updatedAt} is after ${added.body.updatedAt}`,
+  );
+});
+
+test("a chat whose harness cannot start is 500 chat_open_failed and is archived", async (t) => {
+  const d = await bootDaemon(t);
+  const failed = await api<Refused>(d, "POST", "/chats", {
+    cmd: "definitely-not-a-command",
+  });
+  assert.deepEqual(
+    [failed.status, failed.body.error.code],
+    [500, "chat_open_failed"],
+  );
+
+  const archive = await api<ArchivedChat[]>(d, "GET", "/chats/archive");
+  assert.equal(archive.body.length, 1);
+  assert.ok(
+    failed.body.error.message.includes(archive.body[0]?.folder ?? ""),
+    failed.body.error.message,
+  );
+});
+
 test("a chat's name is unique across chats under case folding, and two racing adds cannot both take one", async (t) => {
   const d = await bootDaemon(t);
   const ann = await api<ChatReply>(d, "POST", "/chats", {
@@ -417,7 +471,7 @@ test("a chat's question is {chatId, turn}: answered by a person, then by a mode 
   );
 });
 
-test("a restart keeps every chat, skips a folder with no chat.json, and archives a chat whose agent is no longer known", async (t) => {
+test("a restart keeps every chat, skips a folder with no chat.json or an unreadable record, and archives a chat whose agent is no longer known", async (t) => {
   const runtime = await tempDir(t);
   const stateHome = await tempDir(t);
   const first = await bootDaemon(t, runtime, [], stateHome);
@@ -462,6 +516,11 @@ test("a restart keeps every chat, skips a folder with no chat.json, and archives
   await writeFile(file, JSON.stringify(record));
   // An open whose archive failed leaves a folder with no record.
   await mkdir(join(state, "chats", "chat-20260101-000000-aaaa"));
+  // A crash can leave an unreadable record; it is skipped without stopping
+  // the chats after it.
+  const broken = join(state, "chats", "chat-20260101-000000-bbbb");
+  await mkdir(broken);
+  await writeFile(join(broken, "chat.json"), "{not json");
 
   const second = await bootDaemon(t, runtime, [], stateHome);
   const listed = await api<ChatDto[]>(second, "GET", "/chats");
@@ -477,6 +536,12 @@ test("a restart keeps every chat, skips a folder with no chat.json, and archives
   assert.ok((back?.seq ?? 0) >= seq, `seq ${back?.seq} after ${seq}`);
   assert.deepEqual([back?.agent.name, back?.agent.mode], ["kept2", "safe"]);
   assert.equal(back?.agent.worktree, kept.body.agent.worktree);
+
+  const clash = await api<Refused>(second, "POST", "/chats", {
+    cmd: REMEMBER,
+    name: "KEPT2",
+  });
+  assert.deepEqual([clash.status, clash.body.error.code], [409, "name_taken"]);
 
   const archive = (await api<ArchivedChat[]>(second, "GET", "/chats/archive"))
     .body;

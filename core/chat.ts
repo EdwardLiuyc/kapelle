@@ -13,10 +13,10 @@
  * repository. `chat.json` is saved as `room.json` is: whole, a moment after
  * each line that changes it. It names the repository root of each folder
  * the chat opened (#476), so the sweep and a remove find its checkout and
- * branch. Its `updatedAt` moves at each of those saves while the chat is
- * live (a message, a turn's end, a revive, a mode, model or level change),
- * never at a pause or a restore. A remove sets it to `removedAt`, which
- * dates the remove.
+ * branch. Its `updatedAt` moves at each of those changes while the chat is
+ * live (a message, a turn's end, a revive, a rename, or a mode, model or
+ * level change), never at a pause or a restore. A remove sets it to
+ * `removedAt`, which dates the remove.
  *
  * **Where it works.** In a repository it gets the checkout
  * `wt/<chatId>/<participantId>` on the branch `kapelle/<chatId>/<participantId>`,
@@ -526,12 +526,15 @@ async function buildChat(
   // sets the clock itself, to `removedAt`.
   let saveQueued = false;
   const saveSoon = () => {
-    if (saveQueued || !saving) return;
+    if (!saving) return;
+    // Move the timestamp now, so a reply sent before the coalesced write
+    // already carries the change its `ChatDto` describes.
+    if (!removing && !pausing) meta.updatedAt = new Date().toISOString();
+    if (saveQueued) return;
     saveQueued = true;
     setImmediate(() => {
       saveQueued = false;
       if (!saving) return;
-      if (!removing && !pausing) meta.updatedAt = new Date().toISOString();
       save();
     });
   };

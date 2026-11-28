@@ -3,7 +3,8 @@
  * messages, turns, diffs and fast-forwards, the hall's scratch folders, and
  * the room log streams. It also owns what builds a room: the boot's restore,
  * the hall (M11-1) and a dismissed room built on first use (#451), because a
- * route and a restore build a room the same way.
+ * route and a restore build a room the same way. It also exports the helpers a
+ * participant's own folder, diff and stall limits share with the chat routes.
  */
 
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
