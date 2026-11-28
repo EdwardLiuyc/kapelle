@@ -3608,7 +3608,7 @@ cut turn, the room still `active`, and the command in both screens.
 
 **M8-7 · A cap on the orchestrator's worker turns · S · needs M8-2**
 A project config key, `orchestratorTurnCap`, 40 by default; spike 3 used 12. `POST
-/rooms` already reads the project config for the room's watchdog limits (`roomLimits`),
+/rooms` already reads the project config for the room's watchdog limits (`stallLimits`),
 so the key joins that read. Like every project key, it gets a `KAPELLE_*` twin and a row
 in `docs/CONFIG.md`, and the unknown-key message lists it. The daemon counts each message
 `from` the orchestrator. At the cap it refuses the next one with `429` `turn_cap` and
@@ -4539,9 +4539,18 @@ take it. The old hall stays as it is, and the screens do not use `/chats` yet.
 `docs/CLIENT-API.md` gets a section for chats, and the contract a minor version.
 **Gap:** the error codes for a chat route (a missing chat, a removed one). The pickup
 names them.
+**Decided at pickup 2026-11-28 (#558), with the person:** an unknown id, or one that is
+not a chat id, is `404 chat_not_found`; a chat being removed, or archived, is
+`410 chat_removed`; an open that fails is `500 chat_open_failed`. A name is unique among
+live chats. A chat whose saved agent no longer resolves is archived at boot, as a remove
+does, with a notice that names the agent: a checkout with work is kept and named. The
+restore skips a folder with no `chat.json`. An archive's events are a stream that ends.
+A chat's stall warnings follow the project config of the repository it works in, as a
+room's do; a chat with no folder uses the defaults.
 *Done when* daemon tests cover each route, a name clash and a racing add, a question in
 a chat answered, a stream resumed with `Last-Event-ID`, an archive listed and read, and a
-restart that keeps every chat.
+restart that keeps every chat, skips a folder with no `chat.json`, and archives a chat
+whose agent is no longer known.
 
 **M11-14 · The boot cleanup knows chats · M · needs M11-12**
 The boot sweep (`core/sweep.ts`) reads only rooms: `roomRoots`, `recordedRooms`, and a

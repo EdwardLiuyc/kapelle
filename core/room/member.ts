@@ -40,7 +40,7 @@ import {
 import type { Seen } from "../check.ts";
 import type { EventBus } from "../events.ts";
 import { newParticipantId } from "../ids.ts";
-import type { PermissionQueue } from "../permissions.ts";
+import type { OwnerAsker, PermissionQueue } from "../permissions.ts";
 import {
   createWatchdog,
   sweepIntervalMs,
@@ -187,6 +187,9 @@ export interface Owner {
   bus: EventBus;
   /** Where an `ask` participant's requests wait for a person. */
   permissions: PermissionQueue;
+  /** Who a question names; a room's participant when absent. A chat names
+   *  itself, `{chatId, turn}` (M11-13). */
+  asker?: (turn: number) => OwnerAsker;
   places: Places;
   /** Where an add with no `cwd` gets an empty folder of its own (M11-2). */
   scratchDir?: string;
@@ -251,6 +254,7 @@ function makeMember(
   const made = createParticipant({
     id,
     ownerId: owner.id,
+    ...(owner.asker && { asker: owner.asker }),
     permissions: owner.permissions,
     request,
     worktree,

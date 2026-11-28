@@ -166,6 +166,27 @@ test("a chat keeps its memory across two turns and a restart, on its own log (M1
   }
 });
 
+test("a remove or a pause during a live turn keeps the clock where it stopped (M11-13)", async (t) => {
+  for (const stop of ["remove", "pause"] as const) {
+    const chat = await chatIn(t, undefined, "slow");
+    const live = chat.participant.send("wait");
+    live.catch(() => {});
+    const file = join(chatDir(chat.id), "chat.json");
+    await new Promise((ok) => setTimeout(ok, 20));
+    const before = readJson(file).updatedAt;
+    // The stop cancels the turn and the queue: each line it causes is no
+    // activity.
+    if (stop === "remove") {
+      await chat.remove();
+      const record = readJson(join(archivedChatDir(chat.id), "chat.json"));
+      assert.equal(record.updatedAt, record.removedAt, stop);
+    } else {
+      await chat.pause();
+      assert.equal(readJson(file).updatedAt, before, stop);
+    }
+  }
+});
+
 test("chat.json's updatedAt moves on activity, not on a pause or a restore (M11-12)", async (t) => {
   const repo = await gitRepo(t);
   const chat = await chatIn(t, repo);

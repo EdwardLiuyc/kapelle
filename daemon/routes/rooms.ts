@@ -3,7 +3,8 @@
  * messages, turns, diffs and fast-forwards, the hall's scratch folders, and
  * the room log streams. It also owns what builds a room: the boot's restore,
  * the hall (M11-1) and a dismissed room built on first use (#451), because a
- * route and a restore build a room the same way.
+ * route and a restore build a room the same way. It also exports the helpers a
+ * participant's own folder, diff and stall limits share with the chat routes.
  */
 
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
@@ -36,6 +37,7 @@ import { HALL_ID, newRoomId } from "../../core/ids.ts";
 import type { createPermissionQueue } from "../../core/permissions.ts";
 import { readRoomRecord, roomFile } from "../../core/room/record.ts";
 import {
+  type Participant,
   type Room,
   type RoomRecord,
   RoomRefusal,
@@ -78,6 +80,105 @@ function hallScratchDir(): string {
   return join(stateDir(), "scratch", HALL_ID);
 }
 
+/** The watchdog's warn limits for a room or a chat in repository `root`,
+ *  from the same layers as a run's (R38). Throws for a config that does not
+ *  load. */
+export function stallLimits(
+  root: string,
+): Pick<WatchdogLimits, "stallIdleMs" | "stallRepeatCount"> {
+  const defaults = resolveRunDefaults(root);
+  return {
+    stallIdleMs: defaults.stallIdleMs ?? WATCHDOG_DEFAULTS.stallIdleMs,
+    stallRepeatCount:
+      defaults.stallRepeatCount ?? WATCHDOG_DEFAULTS.stallRepeatCount,
+  };
+}
+
+/**
+ * Opens a participant's own folder for owner `ownerId`, a room or a chat
+ * (M11-2), as `postRoom` opens the room's: the project's links checked, then
+ * `openWorktrees`. A bad link config refuses an add, and a restore opens
+ * without links.
+ */
+export function placeOpener(kind: "room" | "chat", ownerId: string) {
+  return async (cwd: string, restoring: boolean): Promise<WorktreeSetup> => {
+    const { root } = await stateDirRoot(cwd);
+    let linkPaths: string[] = [];
+    try {
+      linkPaths = readProjectLinkPaths(root);
+      await validateWorktreeLinks(root, linkPaths);
+    } catch (err) {
+      if (!restoring) throw new RoomRefusal("invalid_config", messageOf(err));
+      console.error(
+        `${kind} ${ownerId}: ${messageOf(err)}; opening ${cwd} without links`,
+      );
+      linkPaths = [];
+    }
+    return openWorktrees(cwd, ownerId, {
+      linkPaths,
+      linksChecked: true,
+      advisory: false,
+    });
+  };
+}
+
+/** An agent's own folder (M11-2), real and absolute, inside an added
+ *  repository, as `POST /rooms` checks its `cwd`. */
+export async function agentFolder(
+  repos: ReadonlySet<string>,
+  request: { cwd?: string },
+) {
+  if (request.cwd === undefined) return;
+  request.cwd = existingDir(request.cwd, "cwd");
+  await refuseUnadded(repos, request.cwd);
+}
+
+/**
+ * What participant `p` changed in its checkout (M4-6), in any mode, for
+ * `?against=head|base`: `head` (the default) is what is not committed,
+ * `base` the whole branch from its current merge base with the configured
+ * base ref. New files git does not track are in it. A snapshot: nothing is
+ * kept.
+ */
+export async function participantDiff(
+  p: Participant,
+  against: string | null,
+): Promise<Diff> {
+  if (against !== null && against !== "head" && against !== "base") {
+    throw refusal(
+      400,
+      "invalid_request",
+      `"against" must be head or base; got ${against}`,
+    );
+  }
+  let ref = against === "base" ? p.baseSha : "HEAD";
+  if (!ref) {
+    throw refusal(409, "no_diff", `${p.name} has no branch to compare with`);
+  }
+  try {
+    if (against === "base" && p.baseRef) {
+      const candidate = await mergeBase(p.worktree, p.baseRef, "HEAD");
+      if (candidate !== undefined) {
+        // A rewound base must not claim a saved base commit still on HEAD.
+        // If the participant reset off that SHA, the current merge base wins.
+        // For an unresolvable saved SHA, HEAD ancestry is false and clears keepSaved.
+        const keepSaved =
+          candidate !== ref &&
+          !(await isAncestor(p.worktree, ref, candidate)) &&
+          (await isAncestor(p.worktree, ref, "HEAD"));
+        if (!keepSaved) ref = candidate;
+      }
+    }
+    return await checkoutDiff(p.worktree, ref);
+  } catch (err) {
+    throw refusal(
+      409,
+      "no_diff",
+      `no diff for ${p.name}: ${(err as Error).message.split("\n")[0]}`,
+    );
+  }
+}
+
 /** What the room routes share with the rest of the app. */
 interface RoomRouteDeps {
   repos: ReadonlySet<string>;
@@ -108,19 +209,6 @@ export function roomRoutes({
       return undefined;
     }
   });
-
-  /** The watchdog's warn limits for a room, from the same layers as a run's
-   *  (R38). Throws for a config that does not load. */
-  function roomLimits(
-    root: string,
-  ): Pick<WatchdogLimits, "stallIdleMs" | "stallRepeatCount"> {
-    const defaults = resolveRunDefaults(root);
-    return {
-      stallIdleMs: defaults.stallIdleMs ?? WATCHDOG_DEFAULTS.stallIdleMs,
-      stallRepeatCount:
-        defaults.stallRepeatCount ?? WATCHDOG_DEFAULTS.stallRepeatCount,
-    };
-  }
 
   /**
    * Every added repository's rooms, back from `room.json` (M6-7a). The boot
@@ -208,7 +296,7 @@ export function roomRoutes({
         permissions,
         noteSession,
         scratchDir: hallScratchDir(),
-        openPlace: placeOpener(HALL_ID),
+        openPlace: placeOpener("room", HALL_ID),
       };
       const path = roomFile(cwd, HALL_ID);
       let room: Room;
@@ -252,41 +340,6 @@ export function roomRoutes({
     }
   }
 
-  /**
-   * Opens a participant's own folder for room `roomId` (M11-2), as `postRoom`
-   * opens the room's: the project's links checked, then `openWorktrees`. A
-   * bad link config refuses an add, and a restore opens without links.
-   */
-  function placeOpener(roomId: string) {
-    return async (cwd: string, restoring: boolean): Promise<WorktreeSetup> => {
-      const { root } = await stateDirRoot(cwd);
-      let linkPaths: string[] = [];
-      try {
-        linkPaths = readProjectLinkPaths(root);
-        await validateWorktreeLinks(root, linkPaths);
-      } catch (err) {
-        if (!restoring) throw new RoomRefusal("invalid_config", messageOf(err));
-        console.error(
-          `room ${roomId}: ${messageOf(err)}; opening ${cwd} without links`,
-        );
-        linkPaths = [];
-      }
-      return openWorktrees(cwd, roomId, {
-        linkPaths,
-        linksChecked: true,
-        advisory: false,
-      });
-    };
-  }
-
-  /** An agent's own folder (M11-2), real and absolute, inside an added
-   *  repository, as `POST /rooms` checks its `cwd`. */
-  async function agentFolder(request: { cwd?: string }) {
-    if (request.cwd === undefined) return;
-    request.cwd = existingDir(request.cwd, "cwd");
-    await refuseUnadded(repos, request.cwd);
-  }
-
   /** The hall's one refusal for a dismiss, a delete and its preview. */
   function refuseHall(id: string) {
     if (id === HALL_ID) {
@@ -311,7 +364,7 @@ export function roomRoutes({
     /** Shared by every room of the repository at boot, so never changed. */
     linkPaths: readonly string[];
     roomNotice?: string;
-    limits?: ReturnType<typeof roomLimits>;
+    limits?: ReturnType<typeof stallLimits>;
     turnCap?: number;
   }
 
@@ -336,7 +389,7 @@ export function roomRoutes({
       );
     }
     try {
-      preflight.limits = roomLimits(root);
+      preflight.limits = stallLimits(root);
       preflight.turnCap = resolveOrchestratorTurnCap(root);
     } catch (err) {
       console.error(
@@ -375,7 +428,7 @@ export function roomRoutes({
       bus,
       permissions,
       noteSession,
-      openPlace: placeOpener(id),
+      openPlace: placeOpener("room", id),
       ...(limits && { limits }),
       ...(turnCap !== undefined && { turnCap }),
       ...(roomNotice && { roomNotice }),
@@ -434,7 +487,7 @@ export function roomRoutes({
     } catch (err) {
       throw roomRefused(err) ?? refusal(400, "invalid_request", messageOf(err));
     }
-    for (const agent of agents) await agentFolder(agent);
+    for (const agent of agents) await agentFolder(repos, agent);
 
     let linkPaths: string[];
     try {
@@ -461,10 +514,10 @@ export function roomRoutes({
       linksChecked: true,
       advisory: false,
     });
-    let limits: ReturnType<typeof roomLimits>;
+    let limits: ReturnType<typeof stallLimits>;
     let turnCap: number | undefined;
     try {
-      limits = roomLimits(setup.root);
+      limits = stallLimits(setup.root);
       turnCap = resolveOrchestratorTurnCap(setup.root);
     } catch (err) {
       throw refusal(400, "invalid_config", messageOf(err));
@@ -488,7 +541,7 @@ export function roomRoutes({
         bus,
         permissions,
         noteSession,
-        openPlace: placeOpener(id),
+        openPlace: placeOpener("room", id),
         limits,
         turnCap,
       });
@@ -544,7 +597,7 @@ export function roomRoutes({
       throw roomRefused(err) ?? refusal(400, "invalid_request", messageOf(err));
     }
     refuseHallOrchestrator(id, request.role);
-    await agentFolder(request);
+    await agentFolder(repos, request);
     const shuttingDown = () =>
       refusal(503, "shutting_down", "the daemon is shutting down");
     if (stopping()) throw shuttingDown();
@@ -871,13 +924,8 @@ export function roomRoutes({
     send(res, 202, toParticipantDto(p) satisfies ParticipantDto);
   }
 
-  /**
-   * `GET /rooms/:id/agents/:agentId/diff?against=head|base` — what the
-   * participant changed in its checkout (M4-6), in any mode: `head` (the
-   * default) is what is not committed, `base` the whole branch from its current
-   * merge base with the configured base ref. New files git does not track are
-   * in it. A snapshot: nothing is kept.
-   */
+  /** `GET /rooms/:id/agents/:agentId/diff?against=head|base`: see
+   *  `participantDiff`. */
   async function agentDiff(
     id: string,
     agentId: string,
@@ -885,41 +933,7 @@ export function roomRoutes({
     res: ServerResponse,
   ) {
     const p = await participantEntry(id, agentId);
-    if (against !== null && against !== "head" && against !== "base") {
-      throw refusal(
-        400,
-        "invalid_request",
-        `"against" must be head or base; got ${against}`,
-      );
-    }
-    let ref = against === "base" ? p.baseSha : "HEAD";
-    if (!ref) {
-      throw refusal(409, "no_diff", `${p.name} has no branch to compare with`);
-    }
-    let diff: Diff;
-    try {
-      if (against === "base" && p.baseRef) {
-        const candidate = await mergeBase(p.worktree, p.baseRef, "HEAD");
-        if (candidate !== undefined) {
-          // A rewound base must not claim a saved base commit still on HEAD.
-          // If the participant reset off that SHA, the current merge base wins.
-          // For an unresolvable saved SHA, HEAD ancestry is false and clears keepSaved.
-          const keepSaved =
-            candidate !== ref &&
-            !(await isAncestor(p.worktree, ref, candidate)) &&
-            (await isAncestor(p.worktree, ref, "HEAD"));
-          if (!keepSaved) ref = candidate;
-        }
-      }
-      diff = await checkoutDiff(p.worktree, ref);
-    } catch (err) {
-      throw refusal(
-        409,
-        "no_diff",
-        `no diff for ${p.name}: ${(err as Error).message.split("\n")[0]}`,
-      );
-    }
-    send(res, 200, diff satisfies Diff);
+    send(res, 200, (await participantDiff(p, against)) satisfies Diff);
   }
 
   /**

@@ -18,8 +18,8 @@
  * `_client_participant_revived` and the participant reads `resumed:
  * "loaded"` or `"fresh"`. The mode is sent again either way: a load does not
  * keep it (§Mode after load). A stopped owner never revives it: the
- * participant then reads `dismissed` and refuses a send as `room_dismissed`,
- * a room's words, the one owner so far.
+ * participant then reads the owner's stopped status and refuses a send as
+ * `room_dismissed`, the shared code name.
  *
  * **A load can remember less than the files show** (§M0-9). That happened
  * only to a harness stopped during a turn, cancelled or cut: the cut turn
@@ -124,7 +124,7 @@ import {
   startHelp,
 } from "../check.ts";
 import type { EventBus } from "../events.ts";
-import type { PermissionQueue } from "../permissions.ts";
+import type { OwnerAsker, PermissionQueue } from "../permissions.ts";
 import { harnessModeId, modeLine, policyFor } from "../policy.ts";
 import type { Watchdog, WatchdogLimits } from "../watchdog.ts";
 import { checkoutIdentity } from "../worktree.ts";
@@ -176,6 +176,9 @@ interface Seat {
   info: { branch: string; baseSha: string; baseRef?: string } | undefined;
   /** A restored participant's record; absent for a new one. */
   saved?: ParticipantRecord;
+  /** Who a question names for turn `turn`; a room's participant when
+   *  absent. A chat names itself (M11-13). */
+  asker?: (turn: number) => OwnerAsker;
 }
 
 /** What its owner lends it. */
@@ -254,6 +257,7 @@ export interface ParticipantControl {
 export function createParticipant({
   id,
   ownerId,
+  asker,
   permissions,
   request: {
     spec,
@@ -308,8 +312,9 @@ export function createParticipant({
   // Read live, so a mode change applies to the next request.
   const policy: Policy = (req) =>
     mode === "ask"
-      ? permissions.roomPolicy(
-          { roomId: ownerId, participantId: id, turn: turns },
+      ? permissions.ownerPolicy(
+          asker?.(turns) ?? { roomId: ownerId, participantId: id, turn: turns },
+          id,
           bus,
           turnAbort.signal,
         )(req)

@@ -13,10 +13,10 @@
  * repository. `chat.json` is saved as `room.json` is: whole, a moment after
  * each line that changes it. It names the repository root of each folder
  * the chat opened (#476), so the sweep and a remove find its checkout and
- * branch. Its `updatedAt` moves at each of those saves while the chat is
- * live (a message, a turn's end, a revive, a mode, model or level change),
- * never at a pause or a restore. A remove sets it to `removedAt`, which
- * dates the remove.
+ * branch. Its `updatedAt` moves at each of those changes while the chat is
+ * live (a message, a turn's end, a revive, a rename, or a mode, model or
+ * level change), never at a pause or a restore. A remove sets it to
+ * `removedAt`, which dates the remove.
  *
  * **Where it works.** In a repository it gets the checkout
  * `wt/<chatId>/<participantId>` on the branch `kapelle/<chatId>/<participantId>`,
@@ -48,7 +48,14 @@
  * the stderr log, and its checkout follows the sweep's orphan rule. An open
  * that fails before a harness starts keeps nothing.
  *
- * Nothing reaches the API yet: M11-13 adds the routes.
+ * **A saved agent that no longer resolves is archived at boot** (M11-13,
+ * decided with the person 2026-11-28). A chat has no roster to keep a
+ * tombstone in (#312). So `restoreChat` throws `UnknownAgentError`, and the
+ * boot calls `archiveChat`: the record says `removing` with a note that
+ * names the agent, then `finishChatRemove` releases the checkout and moves
+ * the folder, as for any remove. The person finds it in the archive list.
+ *
+ * The routes are `daemon/routes/chats.ts` (M11-13).
  */
 
 import {
@@ -60,7 +67,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 
-import type { ClientMode } from "../protocol/registry.ts";
+import { type ClientMode, resolveAgent } from "../protocol/registry.ts";
 import type { Seen } from "./check.ts";
 import { createEventLog, type EventLog, reopenEventLog } from "./eventlog.ts";
 import type { EventBus } from "./events.ts";
@@ -129,6 +136,9 @@ export const chatDir = (id: string) => join(chatsDir(), id);
 /** A removed chat's folder. */
 export const archivedChatDir = (id: string) => join(chatsDir(), "archive", id);
 
+/** Where each chat's agent with no folder gets its scratch folder (M11-2). */
+export const chatScratchDir = () => join(stateDir(), "scratch", "chats");
+
 /** What `openChat` and `restoreChat` both take. */
 interface ChatDeps {
   /** The chat's own bus: its log writes every event on it. */
@@ -149,10 +159,15 @@ interface ChatDeps {
 
 export interface Chat {
   readonly id: string;
+  readonly createdAt: string;
   /** Its one agent. `send` and `cancel` are the chat's own. */
   readonly participant: Participant;
   readonly eventLog: EventLog | undefined;
   lifecycle(): ChatLifecycle;
+  updatedAt(): string;
+  /** A new name for its agent. The caller checks it: the name is unique
+   *  across chats, which one chat cannot see. */
+  rename(name: string): void;
   setMode(mode: ClientMode): void;
   setModel(model: string): Promise<void>;
   setLevel(level: string): Promise<void>;
@@ -219,11 +234,9 @@ export async function openChat({
  * The chat `chat.json` names, as an earlier daemon left it. No harness
  * starts: its agent waits, `paused`, `killed` or `exited`, for its next
  * message. Its checkout is held again, never created, and its log reopened
- * with `seq` carried on. A chat that is not `active` throws. So does one
- * whose harness no longer resolves: a room keeps such a participant as a
- * tombstone (#312), and a chat has no roster to keep it in. M11-13 restores
- * chats at boot and decides what it does with that chat; the boot sweep
- * only finishes removes and reaps archives (M11-14).
+ * with `seq` carried on. A chat that is not `active` throws. One whose
+ * agent no longer resolves throws `UnknownAgentError` before anything is
+ * opened, for the boot to archive it (`archiveChat`).
  */
 export async function restoreChat({
   id,
@@ -234,6 +247,16 @@ export async function restoreChat({
   if (record.lifecycle !== "active") {
     throw new Error(`chat ${id} is ${record.lifecycle}, not active`);
   }
+  const saved = record.participant;
+  try {
+    resolveAgent(saved.agent ?? "", saved.cmd);
+  } catch {
+    // Only an agent id can fail: a `cmd` always resolves.
+    throw new UnknownAgentError(
+      `the agent ${JSON.stringify(saved.agent ?? "")} is no longer known, ` +
+        "so the chat is archived",
+    );
+  }
   const { createdAt, updatedAt } = record;
   return buildChat(
     deps,
@@ -243,6 +266,37 @@ export async function restoreChat({
       participant: crashedParticipant(record.participant),
     },
   );
+}
+
+/** A saved agent that no longer resolves; its message names the agent. */
+export class UnknownAgentError extends Error {}
+
+/**
+ * Archives a live chat the boot cannot bring back, as a remove does, with
+ * `note` added to its record. The record says `removing` first, so a crash
+ * part way is finished by the next boot. Answers the notices the release
+ * added, such as a kept checkout. Throws as `finishChatRemove` does.
+ */
+export async function archiveChat(
+  id: string,
+  note: string,
+  deps: Pick<ChatDeps, "openPlace"> = {},
+): Promise<readonly RoomNotice[]> {
+  assertChatId(id);
+  const path = join(chatDir(id), "chat.json");
+  const record = readChatRecord(path, id);
+  if (record.lifecycle !== "active") {
+    throw new Error(`chat ${id} is ${record.lifecycle}, not active`);
+  }
+  const removedAt = new Date().toISOString();
+  writeRecord(path, {
+    ...record,
+    lifecycle: "removing",
+    removedAt,
+    updatedAt: removedAt,
+    notices: [...record.notices, { text: note }],
+  });
+  return finishChatRemove(id, deps);
 }
 
 /**
@@ -475,12 +529,15 @@ async function buildChat(
   // sets the clock itself, to `removedAt`.
   let saveQueued = false;
   const saveSoon = () => {
-    if (saveQueued || !saving) return;
+    if (!saving) return;
+    // Move the timestamp now, so a reply sent before the coalesced write
+    // already carries the change its `ChatDto` describes.
+    if (!removing && !pausing) meta.updatedAt = new Date().toISOString();
+    if (saveQueued) return;
     saveQueued = true;
     setImmediate(() => {
       saveQueued = false;
       if (!saving) return;
-      if (!removing && !pausing) meta.updatedAt = new Date().toISOString();
       save();
     });
   };
@@ -494,8 +551,10 @@ async function buildChat(
     id,
     bus,
     permissions,
+    // One agent, so a question names the chat and the turn (M11-13).
+    asker: (turn) => ({ chatId: id, turn }),
     places,
-    scratchDir: join(stateDir(), "scratch", "chats"),
+    scratchDir: chatScratchDir(),
     notices: () => notices,
     onNotice,
     stderrLog: (pid) => (eventLog ? nextStderr(pid) : undefined),
@@ -590,9 +649,19 @@ async function buildChat(
 
   const chat: Chat = {
     id,
+    createdAt: meta.createdAt,
     participant: m.participant,
     eventLog,
     lifecycle: () => lifecycle,
+    updatedAt: () => meta.updatedAt,
+    rename(name) {
+      if (ended()) throw removed();
+      m.participant.name = name;
+      bus.emit({
+        agent: pid,
+        update: { sessionUpdate: "_client_participant_changed", name },
+      });
+    },
     setMode(mode) {
       if (ended()) throw removed();
       try {

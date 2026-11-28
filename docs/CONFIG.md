@@ -26,7 +26,9 @@ M11-4, #478):
   A room reads it from the repository of its own `cwd`. One exception: a
   participant with its own `cwd` (M11-2) gets the `linkPaths` of the
   repository it works in. The room's watchdog limits, turn cap and retention
-  still come from the room's repository.
+  still come from the room's repository. A chat (M11-13) reads its stall limits
+  from the repository of its own `cwd`; a chat with no `cwd` has no project
+  file, so it uses the defaults.
 - **Environment** — `KAPELLE_*`. Overrides the user and project files; it does
   not set the client connection. For the run knobs an explicit run-file value
   still wins.
@@ -47,7 +49,7 @@ Legend: **✅ happy** · **⚠ warning** · **❌ bad**.
 | --- | --- | --- |
 | User file | the daemon's start, however it is reached: `kapelle daemon start` or bare `kapelle` starting one (M9-2) | in-process CLI, merge, sweep |
 | Client file | `cli.ts` for daemon-facing HTTP calls and the bare-client auto-start decision; `chat.ts` and `chat/`; the non-detached `run --file` and `kapelle demo` checks read it only to refuse | the daemon process, explicit `kapelle daemon start`/`stop`, `merge`, `workspace`, sweep |
-| Project file | `POST /repos`, `POST /runs` (each request), `POST /rooms` and each room the daemon restores at start (its stall limits and turn cap), `kapelle run --file`, `sweepBoot` per repository (not for a removed chat: see `retentionMs` under "Precedence and built-in floors"), `GET /config`, `PATCH /config` and `PUT /config` | plain `kapelle "prompt"`, `merge` |
+| Project file | `POST /repos`, `POST /runs` (each request), `POST /rooms` and each room the daemon restores at start (its stall limits and turn cap), `POST /chats` and each chat the daemon restores at start (its stall limits), `kapelle run --file`, `sweepBoot` per repository (not for a removed chat: see `retentionMs` under "Precedence and built-in floors"), `GET /config`, `PATCH /config` and `PUT /config` | plain `kapelle "prompt"`, `merge` |
 | `KAPELLE_*` env | the daemon's start (including bare `kapelle`), every run-default and room-cap resolution, `kapelle run --file`, a removed chat's retention window | plain prompt, merge |
 
 ## User file — `$XDG_CONFIG_HOME/kapelle/config.json`

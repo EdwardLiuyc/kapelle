@@ -126,11 +126,12 @@ export function createRooms(
   };
 }
 
-/** Hall adds and removes are readers of the scratch tree, through `change`;
- *  listing and cleaning are writers, through `snapshot`. Readers may run
- *  together, but a writer waits for every in-flight reader and keeps new
- *  readers out until it finishes. An add makes a folder before its participant
- *  joins the roster, so a scratch snapshot must not run beside it. */
+/** Hall and chat adds and removes are readers of the scratch tree, through
+ *  `change`; listing and cleaning are writers, through `snapshot`. Readers
+ *  may run together, but a writer waits for every in-flight reader and keeps
+ *  new readers out until it finishes. An add makes a folder before its
+ *  participant joins the live list, so a scratch snapshot must not run beside
+ *  it. */
 export function createScratchLock() {
   let scratchReaders = 0;
   let scratchWriting = false;

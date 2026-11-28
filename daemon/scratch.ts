@@ -1,12 +1,12 @@
 /**
- * The kept hall scratch folders: list what each holds, and remove only the
- * folders no live participant owns.
+ * The kept scratch folders for the hall and chats: list what each holds,
+ * and remove only the folders no live participant owns.
  *
- * The daemon serializes every add and remove against a snapshot (list or
- * clean) with its scratch lock (`daemon/rooms.ts`). That is what protects a
- * folder an add has just made before its participant joins the roster.
- * `cleanScratch` checks the supplied roster for each id before removing that
- * folder.
+ * The daemon serializes every hall or chat add and remove against a snapshot
+ * (list or clean) with its scratch lock (`daemon/rooms.ts`). That is what
+ * protects a folder an add has just made before its participant joins the
+ * owner's live list. `cleanScratch` checks that list for each id before
+ * removing that folder.
  *
  * Symlinks are never followed. A symlink at a folder path is listed as a
  * problem and left alone; a symlink inside a folder is an entry and is

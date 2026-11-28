@@ -48,7 +48,7 @@ export type { AgentEvent, Diff, PermissionReason, ToolCallStatus, ToolKind };
  * (M5-2 changed one). Which rows are stable is the table in
  * `docs/CLIENT-API.md`.
  */
-export const API_VERSION = { major: 1, minor: 31 } as const;
+export const API_VERSION = { major: 1, minor: 32 } as const;
 
 /**
  * What this daemon can do (B4). Names are only ever added, never removed or
@@ -61,6 +61,8 @@ export const CAPABILITIES = [
   "permissions",
   "rooms",
   "config",
+  /** Since 1.32 (M11-13). */
+  "chats",
 ] as const;
 
 /** One entry of `GET /harnesses` (M4-5): a harness the daemon can launch by
@@ -178,6 +180,9 @@ export type ErrorCode =
   | "idempotency_in_progress"
   | "shutting_down"
   | "room_open_failed"
+  | "chat_not_found"
+  | "chat_removed"
+  | "chat_open_failed"
   | "no_diff"
   | "install_running"
   | "internal";
@@ -315,15 +320,15 @@ export interface RunDto {
   tasks: TaskDto[];
 }
 
-/** A line a run or a room kept for the operator. @public */
+/** A line a run, a room or a chat kept for the operator. @public */
 export interface Notice {
   text: string;
   kind?: "containment" | "unverified" | "version" | "advisory";
 }
 
-/** One entry of `GET /permissions`: a run's task asked, or a room
- *  participant's turn did (M6-5, S12a). `turn` is the number on that turn's
- *  `_client_user_message`. */
+/** One entry of `GET /permissions`: a run's task asked, a room
+ *  participant's turn did (M6-5, S12a), or a chat's turn did (M11-13, 1.32).
+ *  `turn` is the number on that turn's `_client_user_message`. */
 export type PendingDecision = {
   id: string;
   kind: ToolKind;
@@ -339,6 +344,7 @@ export type PendingDecision = {
 } & (
   | { runId: string; taskId: string }
   | { roomId: string; participantId: string; turn: number }
+  | { chatId: string; turn: number }
 );
 
 /** `GET /permissions/:id` (M5-4, #136): an open decision as the list shows
@@ -387,13 +393,13 @@ export type ParticipantRole =
   | "reviewer";
 
 /** A participant's settings (R15, amended 2026-09-28): the run-file `Task`
- *  fields that act in a room today. @public */
+ *  fields that act in a room or a chat today. @public */
 export interface ParticipantSettings {
   allowReadOutsideRoot: boolean;
 }
 
-/** One participant in full, from `GET /rooms/:id` and the
- *  `/rooms/:id/agents` routes. */
+/** One participant in full, from `GET /rooms/:id`, the `/rooms/:id/agents`
+ *  routes and `GET /chats/:id`. */
 export interface ParticipantDto {
   /** Opaque; a rename never moves it. */
   id: string;
@@ -500,12 +506,12 @@ export interface RoomListEntry {
   }[];
 }
 
-/** One kept hall scratch folder, from `GET /rooms/:id/scratch`. `kind` is
- *  `directory` for a folder the command may remove, `symlink` or `other`
- *  for an entry it reports but never follows or removes. `entries` holds
- *  the immediate children; a child directory ends in `/` and a symlink in
- *  `@`. `files` and `bytes` count regular files below the folder, without
- *  following symlinks. Since 1.27. */
+/** One kept scratch folder, from `GET /rooms/:id/scratch` or
+ *  `GET /chats/scratch`. `kind` is `directory` for a folder the command may
+ *  remove, `symlink` or `other` for an entry it reports but never follows or
+ *  removes. `entries` holds the immediate children; a child directory ends in
+ *  `/` and a symlink in `@`. `files` and `bytes` count regular files below the
+ *  folder, without following symlinks. Since 1.27. */
 export interface ScratchFolder {
   id: string;
   path: string;
@@ -519,27 +525,30 @@ export interface ScratchFolder {
   problem?: string;
 }
 
-/** One folder's result from `POST /rooms/:id/scratch/clean`. A failure does
- *  not stop the other folders. Since 1.27. */
+/** One folder's result from `POST /rooms/:id/scratch/clean` or
+ *  `POST /chats/scratch/clean`. A failure does not stop the other folders.
+ *  Since 1.27. */
 export interface ScratchCleanResult {
   id: string;
   path: string;
   removed: boolean;
-  /** The live roster protected the folder. Not a removal failure. */
+  /** The owner's live list protected the folder. Not a removal failure. */
   protected?: true;
   error?: string;
 }
 
-/** The reply of `POST /rooms/:id/scratch/clean`. Since 1.27. */
+/** The reply of `POST /rooms/:id/scratch/clean` or
+ *  `POST /chats/scratch/clean`. Since 1.27. */
 export interface ScratchCleanReply {
   results: ScratchCleanResult[];
 }
 
-/** `POST /rooms/:id/messages` and `POST /rooms/:id/agents/:agentId/messages`.
- *  `seq` is the log's size before the message. `queued` is how many of the
- *  participant's turns come first, the live one included: 0 means it
- *  started at once. Its turn is over at the `queued + 1`th
- *  `_client_turn_ended` of that participant with a `seq` above `seq`. */
+/** `POST /rooms/:id/messages`, `POST /rooms/:id/agents/:agentId/messages`
+ *  and `POST /chats/:id/messages`. `seq` is the log's size before the
+ *  message. `queued` is how many of the participant's turns come first, the
+ *  live one included: 0 means it started at once. Its turn is over at the
+ *  `queued + 1`th `_client_turn_ended` of that participant with a `seq`
+ *  above `seq`. */
 export interface MessageAccepted {
   seq: number;
   queued: number;
@@ -574,5 +583,50 @@ export interface RoomEventLine {
   at: string;
   roomId: string;
   participantId: string;
+  update: AgentEvent;
+}
+
+/** A chat (M11-13, since 1.32): one agent outside every room, from
+ *  `POST /chats`, `GET /chats`, `GET /chats/:id`, `PATCH /chats/:id` and
+ *  its cancel. */
+export interface ChatDto {
+  id: string;
+  /** ISO 8601. */
+  createdAt: string;
+  /** ISO 8601. It moves on a message, a turn's end, a revive and a change. */
+  updatedAt: string;
+  /** The chat log's size when the daemon answered, as `RoomDto.seq`. */
+  seq: number;
+  /** Its one agent. The chat's own notices come first in its `notices`. */
+  agent: ParticipantDto;
+}
+
+/** One removed chat, from `GET /chats/archive` and the answer of
+ *  `DELETE /chats/:id` (M11-13, since 1.32). Read only. */
+export interface ArchivedChat {
+  id: string;
+  /** Its agent's name when it was removed. */
+  name: string;
+  harness: string;
+  /** ISO 8601. */
+  createdAt: string;
+  removedAt: string;
+  /** The archived folder: its record, its log and its stderr logs. */
+  folder: string;
+  /** The chat's own lines, such as a checkout its remove kept. */
+  notices: Notice[];
+}
+
+/**
+ * The JSON in one SSE `data:` line of a chat (M11-13, since 1.32). `seq`
+ * counts from 1 in each chat. A chat has one agent, so the line names no
+ * participant.
+ *
+ * @public — read by clients, never built by the daemon.
+ */
+export interface ChatEventLine {
+  seq: number;
+  at: string;
+  chatId: string;
   update: AgentEvent;
 }
