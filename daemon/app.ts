@@ -30,8 +30,8 @@
  * **Its state sits in small owners**, each with one job: runs
  * (`daemon/run.ts`), child processes (`daemon/children.ts`), the permission
  * queue, rooms with their scratch lock (`daemon/rooms.ts`, made by the
- * room routes), and the chats (made by `daemon/routes/chats.ts`). A daemon-wide cap on live harnesses, if one is ever wanted
- * (R40), goes here.
+ * room routes), and the chats (made by `daemon/routes/chats.ts`). A
+ * daemon-wide cap on live harnesses, if one is ever wanted (R40), goes here.
  *
  * **The token is not optional, even on 127.0.0.1.** Every account on the
  * machine can reach the loopback address, and a run file is a command line —
@@ -98,9 +98,9 @@ export interface DaemonDeps {
 }
 
 /** The app. `server` is made, not listening; `restoreRuns`,
- *  `restoreRooms` and `restoreChats` run once, before the port opens; `stop` ends it. `routes`
- *  is the live table, for a test that walks it and swaps its handlers for
- *  spies: `route` reads each row at every request. */
+ *  `restoreRooms` and `restoreChats` run once, before the port opens; `stop`
+ *  ends it. `routes` is the live table, for a test that walks it and swaps
+ *  its handlers for spies: `route` reads each row at every request. */
 export function createDaemonApp(deps: DaemonDeps) {
   const repos = new Set<string>(deps.repos);
   const runs = createRuns();
@@ -211,9 +211,9 @@ export function createDaemonApp(deps: DaemonDeps) {
 
   /**
    * The app's half of a shutdown (M2-4, #34): cancel every run, pause every
-   * room and chat, and wait for each to settle. The caller closes the server, removes
-   * `daemon.json` and exits (`daemon/main.ts`). An install's npm is killed
-   * rather than waited for, and a check's harness is stopped and its
+   * room and chat, and wait for each to settle. The caller closes the server,
+   * removes `daemon.json` and exits (`daemon/main.ts`). An install's npm is
+   * killed rather than waited for, and a check's harness is stopped and its
    * temporary folder cleaned up, so a stop leaves neither running. A second
    * call answers at once.
    *

@@ -52,6 +52,7 @@ import {
   archivedChatDir,
   type Chat,
   chatDir,
+  chatScratchDir,
   chatsDir,
   openChat,
   readChatRecord,
@@ -69,7 +70,6 @@ import {
   participantChanges,
   roomAgent,
 } from "../../core/room/validate.ts";
-import { stateDir } from "../../core/runtime.ts";
 import { stateDirRoot } from "../../core/worktree.ts";
 import type { createChildren } from "../children.ts";
 import { toArchivedChat, toChatDto } from "../dto.ts";
@@ -81,20 +81,19 @@ import {
   agentFolder,
   participantDiff,
   placeOpener,
-  roomLimits,
+  stallLimits,
 } from "./rooms.ts";
 
 const messageOf = (err: unknown) =>
   err instanceof Error ? err.message : String(err);
 
-/** A chat's add takes a room agent's fields but a role (`core/chat.ts`). */
+/** A chat's add takes a room agent's fields but `role` (`core/chat.ts`).
+ *  A field added to `AGENT_FIELDS` reaches chats too, on purpose: a chat's
+ *  agent is a room participant's parts. Exclude it here if it is room-only. */
 const CHAT_FIELDS = AGENT_FIELDS.filter((field) => field !== "role");
 
 /** What a `PATCH /chats/:id` may change. */
 const CHANGE_FIELDS = ["name", "mode", "model", "thoughtLevel"];
-
-/** Where the chats keep each agent's scratch folder (`core/chat.ts`). */
-const chatScratchDir = () => join(stateDir(), "scratch", "chats");
 
 /** What the chat routes share with the rest of the app. */
 interface ChatRouteDeps {
@@ -139,7 +138,7 @@ export function chatRoutes({
       bus,
       permissions,
       noteSession,
-      openPlace: placeOpener(id),
+      openPlace: placeOpener("chat", id),
     };
   };
 
@@ -148,7 +147,7 @@ export function chatRoutes({
    *  load. */
   async function chatLimits(cwd: string | undefined) {
     if (cwd === undefined) return {};
-    return { limits: roomLimits((await stateDirRoot(cwd)).root) };
+    return { limits: stallLimits((await stateDirRoot(cwd)).root) };
   }
 
   /** A refusal from a chat as the daemon answers it, or `err` itself when
@@ -476,7 +475,7 @@ export function chatRoutes({
   async function archiveUnknown(id: string, note: string) {
     try {
       const lines = await archiveChat(id, note, {
-        openPlace: placeOpener(id),
+        openPlace: placeOpener("chat", id),
       });
       console.error(`chat ${id}: ${note}, in ${archivedChatDir(id)}`);
       for (const line of lines) console.error(`chat ${id}: ${line.text}`);

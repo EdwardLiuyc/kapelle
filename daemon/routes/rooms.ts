@@ -83,7 +83,7 @@ function hallScratchDir(): string {
 /** The watchdog's warn limits for a room or a chat in repository `root`,
  *  from the same layers as a run's (R38). Throws for a config that does not
  *  load. */
-export function roomLimits(
+export function stallLimits(
   root: string,
 ): Pick<WatchdogLimits, "stallIdleMs" | "stallRepeatCount"> {
   const defaults = resolveRunDefaults(root);
@@ -100,7 +100,7 @@ export function roomLimits(
  * `openWorktrees`. A bad link config refuses an add, and a restore opens
  * without links.
  */
-export function placeOpener(ownerId: string) {
+export function placeOpener(kind: "room" | "chat", ownerId: string) {
   return async (cwd: string, restoring: boolean): Promise<WorktreeSetup> => {
     const { root } = await stateDirRoot(cwd);
     let linkPaths: string[] = [];
@@ -110,7 +110,7 @@ export function placeOpener(ownerId: string) {
     } catch (err) {
       if (!restoring) throw new RoomRefusal("invalid_config", messageOf(err));
       console.error(
-        `${ownerId}: ${messageOf(err)}; opening ${cwd} without links`,
+        `${kind} ${ownerId}: ${messageOf(err)}; opening ${cwd} without links`,
       );
       linkPaths = [];
     }
@@ -296,7 +296,7 @@ export function roomRoutes({
         permissions,
         noteSession,
         scratchDir: hallScratchDir(),
-        openPlace: placeOpener(HALL_ID),
+        openPlace: placeOpener("room", HALL_ID),
       };
       const path = roomFile(cwd, HALL_ID);
       let room: Room;
@@ -364,7 +364,7 @@ export function roomRoutes({
     /** Shared by every room of the repository at boot, so never changed. */
     linkPaths: readonly string[];
     roomNotice?: string;
-    limits?: ReturnType<typeof roomLimits>;
+    limits?: ReturnType<typeof stallLimits>;
     turnCap?: number;
   }
 
@@ -389,7 +389,7 @@ export function roomRoutes({
       );
     }
     try {
-      preflight.limits = roomLimits(root);
+      preflight.limits = stallLimits(root);
       preflight.turnCap = resolveOrchestratorTurnCap(root);
     } catch (err) {
       console.error(
@@ -428,7 +428,7 @@ export function roomRoutes({
       bus,
       permissions,
       noteSession,
-      openPlace: placeOpener(id),
+      openPlace: placeOpener("room", id),
       ...(limits && { limits }),
       ...(turnCap !== undefined && { turnCap }),
       ...(roomNotice && { roomNotice }),
@@ -514,10 +514,10 @@ export function roomRoutes({
       linksChecked: true,
       advisory: false,
     });
-    let limits: ReturnType<typeof roomLimits>;
+    let limits: ReturnType<typeof stallLimits>;
     let turnCap: number | undefined;
     try {
-      limits = roomLimits(setup.root);
+      limits = stallLimits(setup.root);
       turnCap = resolveOrchestratorTurnCap(setup.root);
     } catch (err) {
       throw refusal(400, "invalid_config", messageOf(err));
@@ -541,7 +541,7 @@ export function roomRoutes({
         bus,
         permissions,
         noteSession,
-        openPlace: placeOpener(id),
+        openPlace: placeOpener("room", id),
         limits,
         turnCap,
       });

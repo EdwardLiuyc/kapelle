@@ -244,10 +244,11 @@ export async function main(): Promise<void> {
 
   /**
    * SIGTERM, SIGINT or a lost record: the server stops accepting, the app
-   * cancels every run, pauses every room and chat and waits for each to settle (`stop`
-   * in `daemon/app.ts`), then `daemon.json` is removed and the process exits 0
-   * (M2-4, #34). Record loss deliberately exits 0 too: this is a clean
-   * shutdown, not a crash, and a later client can start a fresh daemon.
+   * cancels every run, pauses every room and chat and waits for each to
+   * settle (`stop` in `daemon/app.ts`), then `daemon.json` is removed and the
+   * process exits 0 (M2-4, #34). Record loss deliberately exits 0 too: this
+   * is a clean shutdown, not a crash, and a later client can start a fresh
+   * daemon.
    */
   async function shutdown(signal: string): Promise<void> {
     if (stopping) return;

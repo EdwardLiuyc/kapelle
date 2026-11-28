@@ -136,6 +136,9 @@ export const chatDir = (id: string) => join(chatsDir(), id);
 /** A removed chat's folder. */
 export const archivedChatDir = (id: string) => join(chatsDir(), "archive", id);
 
+/** Where each chat's agent with no folder gets its scratch folder (M11-2). */
+export const chatScratchDir = () => join(stateDir(), "scratch", "chats");
+
 /** What `openChat` and `restoreChat` both take. */
 interface ChatDeps {
   /** The chat's own bus: its log writes every event on it. */
@@ -551,7 +554,7 @@ async function buildChat(
     // One agent, so a question names the chat and the turn (M11-13).
     asker: (turn) => ({ chatId: id, turn }),
     places,
-    scratchDir: join(stateDir(), "scratch", "chats"),
+    scratchDir: chatScratchDir(),
     notices: () => notices,
     onNotice,
     stderrLog: (pid) => (eventLog ? nextStderr(pid) : undefined),
