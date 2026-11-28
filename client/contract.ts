@@ -545,10 +545,10 @@ export interface ScratchCleanReply {
 
 /** `POST /rooms/:id/messages`, `POST /rooms/:id/agents/:agentId/messages`
  *  and `POST /chats/:id/messages`. `seq` is the log's size before the
- *  message. `queued` is how many of the
- *  participant's turns come first, the live one included: 0 means it
- *  started at once. Its turn is over at the `queued + 1`th
- *  `_client_turn_ended` of that participant with a `seq` above `seq`. */
+ *  message. `queued` is how many of the participant's turns come first, the
+ *  live one included: 0 means it started at once. Its turn is over at the
+ *  `queued + 1`th `_client_turn_ended` of that participant with a `seq`
+ *  above `seq`. */
 export interface MessageAccepted {
   seq: number;
   queued: number;

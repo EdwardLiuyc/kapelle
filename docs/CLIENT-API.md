@@ -293,7 +293,7 @@ request that is not valid HTTP gets `400`.
 | `participant_not_found` | `404` | The room has no participant with this id. It may have been removed. | Read `GET /rooms/:id/agents`. |
 | `invalid_sender` | `400` | A message's `from` is not the room's orchestrator, or the orchestrator sent a message to itself. Since 1.11. | Only the orchestrator sends with `from`. Send without it for the person. |
 | `permission_not_found` | `404` | The daemon never gave out this permission id, or it forgot a closed one at a restart. | |
-| `no_event_log` | `404` | The run, room or chat exists, but it has no event log to stream. | Read `GET /runs/:id` for a run, `GET /rooms/:id` for a room, or `GET /chats/archive` for a chat. |
+| `no_event_log` | `404` | The run, room or chat exists, but it has no event log to stream. | Read `GET /runs/:id` for a run, `GET /rooms/:id` for a room, `GET /chats/:id` for a live chat, or `GET /chats/archive` for an archived one. |
 | `run_ended` | `409` | You cancelled a run that already ended. | Stop. Read its status. |
 | `run_not_owned` | `409` | The id names a live run written by another process. The daemon does not list it and cannot cancel it. Since 1.30. | Stop it where it was started, then read its `run.json`. |
 | `already_decided` | `409` | The permission was already closed, for any of the reasons in [Why a question closed](#why-a-question-closed). | Stop. Your answer was not used. `GET /permissions/:id` gives the reason. |
@@ -2317,8 +2317,8 @@ The chat's [event stream](#the-event-stream). A line is `{seq, at, chatId, updat
 (`ChatEventLine`), and `seq` counts from 1 in each chat. `Last-Event-ID` is that `seq`.
 The stream ends when the chat is removed or the daemon stops.
 
-**Refusals:** `404` `chat_not_found`; `404` `no_event_log` when the chat has no log;
-`400` `invalid_request` for a bad `Last-Event-ID`.
+**Refusals:** `404` `chat_not_found`; `410` `chat_removed`; `404` `no_event_log` when
+the chat has no log; `400` `invalid_request` for a bad `Last-Event-ID`.
 
 ### `POST /chats/:id/turns/current/cancel`
 
