@@ -114,6 +114,9 @@ export function chatRoutes({
   const chats = new Map<string, Chat>();
   /** The folded names that adds still starting hold. */
   const held = new Set<string>();
+  /** The chats a `DELETE` took, from before it waits for the scratch lock:
+   *  a second `DELETE` meanwhile is `410`, as for a chat already removing. */
+  const removing = new Set<string>();
   /** Each add and remove still running, for the shutdown to wait on. */
   const changes = new Set<Promise<unknown>>();
   const scratch = createScratchLock();
@@ -173,7 +176,7 @@ export function chatRoutes({
       throw refusal(404, "chat_not_found", `no chat ${JSON.stringify(id)}`);
     }
     const chat = chats.get(id);
-    if (chat?.lifecycle() === "active") return chat;
+    if (chat?.lifecycle() === "active" && !removing.has(id)) return chat;
     if (chat || existsSync(archivedChatDir(id))) {
       throw refusal(410, "chat_removed", `chat ${id} is removed`);
     }
@@ -324,10 +327,13 @@ export function chatRoutes({
   async function deleteChat(id: string, res: ServerResponse) {
     const chat = chatOf(id);
     if (stopping()) throw shuttingDown();
+    removing.add(id);
     try {
       await scratch.change(() => chat.remove());
     } catch (err) {
       throw chatRefused(err, id);
+    } finally {
+      removing.delete(id);
     }
     chats.delete(id);
     const folder = archivedChatDir(id);

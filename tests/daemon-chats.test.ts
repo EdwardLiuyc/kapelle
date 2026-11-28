@@ -10,7 +10,14 @@
 
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import type {
@@ -345,6 +352,45 @@ test("a chat's cancel, model and level, and the chats' scratch folders", async (
   );
   assert.equal(cleaned.body.results[0]?.removed, true);
   assert.equal(existsSync(folder), false);
+});
+
+test("of two DELETEs that wait behind a scratch listing, one removes the chat and the other is 410", async (t) => {
+  const d = await bootDaemon(t);
+  const ann = await api<ChatReply>(d, "POST", "/chats", {
+    cmd: REMEMBER,
+    name: "ann",
+  });
+  assert.equal(ann.status, 201, JSON.stringify(ann.body));
+  // An add holds the scratch lock while its harness waits at the barrier.
+  const barrier = await tempDir(t);
+  const add = api<ChatReply>(d, "POST", "/chats", {
+    cmd: `node ${MOCK_AGENT} --barrier ${barrier} --barrier-count 2`,
+    name: "held",
+  });
+  await until(
+    "the held add's harness",
+    async () => (await readdir(barrier)).length === 1,
+  );
+  // A listing then waits for the add, and both DELETEs wait for the listing.
+  const listing = api(d, "GET", "/chats/scratch");
+  await new Promise((ok) => setTimeout(ok, 100));
+  const deletes = [0, 1].map(() =>
+    api<Refused>(d, "DELETE", `/chats/${ann.body.id}`),
+  );
+  await new Promise((ok) => setTimeout(ok, 100));
+  await writeFile(join(barrier, "release.ready"), "");
+  assert.equal((await add).status, 201);
+  assert.equal((await listing).status, 200);
+  const answers = await Promise.all(deletes);
+  assert.deepEqual(
+    answers.map((r) => r.status).sort(),
+    [200, 410],
+    JSON.stringify(answers.map((r) => r.body)),
+  );
+  assert.equal(
+    answers.find((r) => r.status === 410)?.body.error.code,
+    "chat_removed",
+  );
 });
 
 test("a chat's change moves updatedAt before its reply", async (t) => {
