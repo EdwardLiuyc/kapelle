@@ -519,8 +519,9 @@ kapelle — a minimal Agent Client Protocol client
 Options:
   --agent <id>     ${Object.keys(AGENTS).join(" | ")}   (default: ${DEFAULT_AGENT})
   --cmd "<cmd>"    custom agent command, e.g. --cmd "opencode acp"
-  --cwd <dir>      workspace root (default: current directory); for --detach
-                   with a remote daemon, a folder on that daemon's machine
+  --cwd <dir>      workspace root; default: current directory, or the
+                   daemon user's home with a client daemon address; relative
+                   paths start there, not in this folder
   --mode <mode>    ask | safe | auto      (default: the agent's own)
                      ask  = reads auto-approved, mutations prompt you
                      safe = reads only, all mutations refused

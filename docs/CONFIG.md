@@ -112,11 +112,13 @@ with a message that points to `--detach`; running it locally would put the
 harness on the wrong machine. A one-shot `kapelle "<prompt>"` still runs
 locally by design: only `run --file` has a daemon-backed `--detach` path.
 `--detach` is the supported remote run path. With a client setting active, a
-typed folder (`--cwd`, `kapelle daemon add`, a chat form) is sent as typed and
-resolved on the daemon machine: `~` and a relative path start from the daemon
-user's home, and no `--cwd` means that home (M11-5). Quote a `~` on the command
-line, as in `--cwd '~/app'`, or the local shell expands it to the local home.
-Folder completion in the chat asks the daemon too. The rule is in
+folder sent to the daemon (`--cwd` on `run --detach`, `chat new`, or a `loop`
+start; `kapelle daemon add`; or a chat form) is sent as typed and resolved on
+the daemon machine: `~` and a relative path start from the daemon user's home,
+and no `--cwd` means that home (M11-5). Quote a `~` on the command line, as in
+`--cwd '~/app'`, or the local shell expands it to the local home. Folder
+completion in the chat asks the daemon too. `kapelle loop list` and `kapelle
+room …` still read the local folder (M11-6 and M11 D7). The rule is in
 [`docs/CLIENT-API.md`](CLIENT-API.md#rules-for-every-request).
 
 | Case | Result |

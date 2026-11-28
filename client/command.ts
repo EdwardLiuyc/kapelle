@@ -71,7 +71,8 @@ interface AgentSpec {
   role?: string;
   mode?: string;
   base?: string;
-  /** Its own folder, absolute (M11-2). */
+  /** Its own folder on the daemon's disk; `folderToSend` chooses its form
+   *  (M11-2, M11-5). */
   cwd?: string;
   /** The harness checks the id (M9-5); the screen sends it as typed. */
   model?: string;

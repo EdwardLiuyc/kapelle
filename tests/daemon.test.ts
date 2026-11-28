@@ -930,6 +930,27 @@ test("a folder path starts from the daemon user's home, and GET /folders lists o
   assert.equal((await api(d, "GET", "/folders")).status, 400);
 });
 
+test("GET /folders refuses a folder it cannot read (M11-5)", {
+  skip: process.getuid?.() === 0 && "root reads any mode",
+}, async (t) => {
+  const home = await realpath(await tempDir(t));
+  const locked = join(home, "locked");
+  await mkdir(locked);
+  const d = await boot(t, undefined, [], undefined, { HOME: home });
+  await chmod(locked, 0o000);
+  try {
+    const denied = await api<ErrorReply>(
+      d,
+      "GET",
+      `/folders?path=${encodeURIComponent(locked)}`,
+    );
+    assert.equal(denied.status, 400);
+    assert.equal(denied.body.error.code, "invalid_request");
+  } finally {
+    await chmod(locked, 0o700);
+  }
+});
+
 test("POST /repos refuses an empty or missing path, and registers none", async (t) => {
   const d = await boot(t);
 
