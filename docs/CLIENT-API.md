@@ -27,7 +27,7 @@ invalid-file view and `PUT /config`; a stable `GET /config` now answers `200` wi
 which made `_client_permission`'s `allow` false for a yes with no matching option;
 and #537, which added `run_not_owned` for a live run another process owns; and
 M12-11, #545, which cut a closed decision's `title` in `GET /permissions/:id`; and
-M11-13, #558, which added [chats](#chats).
+M11-13, #558, which added [chats](#chats)).
 
 ## Contents
 
@@ -2260,8 +2260,8 @@ is shutting down answers `503 shutting_down`.
 ### `POST /chats`
 
 **Request:** what [`POST /rooms/:id/agents`](#post-roomsidagents) takes, but not
-`role`: `agent` or `cmd`, and `name`, `mode`, `model`, `thoughtLevel`, `base`, `settings` and
-`cwd`, each optional. With no `name`, the name is the harness's.
+`role`: `agent` or `cmd`, and `name`, `mode`, `model`, `thoughtLevel`, `base`,
+`settings` and `cwd`, each optional. With no `name`, the name is the harness's.
 
 **Reply `201`:** the `ChatDto`, once the harness has a session:
 
