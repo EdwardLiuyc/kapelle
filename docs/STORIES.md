@@ -3608,7 +3608,7 @@ cut turn, the room still `active`, and the command in both screens.
 
 **M8-7 · A cap on the orchestrator's worker turns · S · needs M8-2**
 A project config key, `orchestratorTurnCap`, 40 by default; spike 3 used 12. `POST
-/rooms` already reads the project config for the room's watchdog limits (`roomLimits`),
+/rooms` already reads the project config for the room's watchdog limits (`stallLimits`),
 so the key joins that read. Like every project key, it gets a `KAPELLE_*` twin and a row
 in `docs/CONFIG.md`, and the unknown-key message lists it. The daemon counts each message
 `from` the orchestrator. At the cap it refuses the next one with `429` `turn_cap` and
